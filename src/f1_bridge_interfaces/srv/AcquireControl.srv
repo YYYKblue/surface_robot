@@ -1,0 +1,10 @@
+# An application/task identifier. This is logical ownership, not authentication.
+string owner
+---
+bool success
+string token
+uint32 epoch
+# First command must arrive within this interval; later commands renew by deadline.
+uint32 first_command_timeout_ms
+uint32 max_command_ttl_ms
+string message

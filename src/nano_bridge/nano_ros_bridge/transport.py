@@ -1,0 +1,222 @@
+"""One serial owner and independent 50 Hz worker; no ROS calls in the worker."""
+from collections import deque
+import fcntl
+import os
+from pathlib import Path
+import termios
+import threading
+import time
+
+import serial
+
+from .protocol import Control, Lines, decode, forward
+from .session import Session
+
+
+def open_serial(port):
+    # pyserial's flock coordinates cooperating clients; inspect already-open
+    # descriptors too, and TIOCEXCL prevents later non-cooperating tty opens.
+    target = os.stat(port)
+    for process in Path("/proc").iterdir():
+        if not process.name.isdigit():
+            continue
+        try:
+            for fd in (process / "fd").iterdir():
+                try:
+                    st = fd.stat()
+                    if (st.st_dev, st.st_ino) == (target.st_dev, target.st_ino):
+                        raise RuntimeError(f"serial already open by PID {process.name}")
+                except (FileNotFoundError, PermissionError):
+                    pass
+        except (FileNotFoundError, PermissionError):
+            pass
+    handle = serial.Serial(port, 460800, timeout=0, write_timeout=0.010, exclusive=True)
+    try:
+        fcntl.ioctl(handle.fileno(), termios.TIOCEXCL)
+        handle.reset_input_buffer()
+    except BaseException:
+        handle.close()
+        raise
+    return handle
+
+
+class Worker:
+    PERIOD = .020
+
+    def __init__(self, port, enabled=False, motion_enabled=False, allow_fifth=False,
+                 wall_clock_ns=None):
+        self.port = port
+        self.enabled = enabled
+        self.core = Session(motion_enabled, allow_fifth)
+        self.lock = threading.RLock()
+        self.quit = threading.Event()
+        self.thread = None
+        self.handle = None
+        self.lines = Lines()
+        self.imu = deque(maxlen=128)
+        self.invalid_lines = 0
+        self.imu_at = None
+        self.imu_status = 0
+        self.imu_previous = None
+        # Clock injection is only for offline tests, never a ROS parameter.
+        self.wall_clock_ns = wall_clock_ns or time.time_ns
+        self.clock_offset = None
+        self._check_clock()
+
+    def _check_clock(self):
+        before = time.monotonic_ns()
+        unix_ns = self.wall_clock_ns()
+        after = time.monotonic_ns()
+        # A deschedule between clock reads is not evidence of a wall-clock step.
+        # The independent 80 ms send-gap guard still handles such stalls.
+        if after - before > 5_000_000:
+            return
+        offset = unix_ns - (before + after) // 2
+        if self.clock_offset is None:
+            self.clock_offset = offset
+        delta = offset - self.clock_offset
+        if abs(delta) > 50_000_000 and not self.core.fault:
+            self.core.latch_fault(f"system clock changed {delta / 1e6:.1f} ms; restart required")
+
+    def start(self):
+        if self.thread is not None:
+            raise RuntimeError("worker already started")
+        if self.enabled:
+            self.thread = threading.Thread(target=self._run, name="f103-serial", daemon=True)
+            self.thread.start()
+
+    def acquire(self, owner):
+        with self.lock:
+            return self.core.acquire(owner, time.monotonic())
+
+    def accept(self, command):
+        with self.lock:
+            self._check_clock()
+            return self.core.accept(command, time.monotonic(), self.wall_clock_ns())
+
+    def stop(self, reason="ROS stop requested"):
+        with self.lock:
+            self.core.stop(reason)
+
+    def release(self, token):
+        with self.lock:
+            return self.core.release(token)
+
+    def snapshot(self):
+        with self.lock:
+            now = time.monotonic()
+            result = self.core.snapshot(now)
+            result.update(invalid_lines=self.invalid_lines,
+                          imu_age_sec=-1. if self.imu_at is None else now - self.imu_at,
+                          imu_status=self.imu_status)
+            return result
+
+    def take_imu(self):
+        with self.lock:
+            samples = list(self.imu)
+            self.imu.clear()
+            return samples
+
+    def latch_fault(self, reason):
+        with self.lock:
+            self.core.latch_fault(reason)
+
+    def _write(self, frame):
+        if frame is not None:
+            if self.handle.write(frame) != len(frame):
+                raise OSError("short serial write")
+            # No flush(): waiting for hardware drains can block the safety loop.
+            self.core.sent(time.monotonic())
+
+    def _read(self):
+        if self.handle.in_waiting > 8192:
+            raise OSError("serial receive backlog")
+        data = self.handle.read(8192)
+        mono_ns, unix_ns = time.monotonic_ns(), self.wall_clock_ns()
+        previous_errors = self.lines.errors
+        for line in self.lines.feed(data):
+            try:
+                sample = decode(line)
+            except (ValueError, UnicodeError):
+                self.invalid_lines += 1
+                continue
+            if isinstance(sample, Control):
+                self.core.receive(sample, mono_ns / 1e9)
+            else:
+                self.imu_status = sample["status"]
+                seq, ms = sample["sequence"], sample["stm32_ms"]
+                fresh = self.imu_previous is None
+                if self.imu_previous is not None:
+                    old_seq, old_ms = self.imu_previous
+                    fresh = forward(seq, old_seq) and (ms == old_ms or forward(ms, old_ms))
+                    reboot = (seq < old_seq and ms < old_ms
+                              and not forward(seq, old_seq) and not forward(ms, old_ms))
+                    fresh = fresh or reboot
+                if fresh:
+                    self.imu_previous = (seq, ms)
+                if fresh and sample["status"] & 6 == 6:
+                    self.imu_at = mono_ns / 1e9
+                self.imu.append((self.core.connection_id, sample, unix_ns, mono_ns))
+        self.invalid_lines += self.lines.errors - previous_errors
+
+    def _close(self):
+        if self.handle is not None:
+            try:
+                # Also release the tty lock on PTYs whose master remains open.
+                fcntl.ioctl(self.handle.fileno(), termios.TIOCNXCL)
+            except (OSError, serial.SerialException):
+                pass
+            self.handle.close()
+            self.handle = None
+        self.imu.clear()
+        self.imu_at = None
+        self.imu_status = 0
+        self.imu_previous = None
+
+    def _run(self):
+        retry_at = 0.
+        next_tick = time.monotonic()
+        try:
+            while not self.quit.is_set():
+                now = time.monotonic()
+                if self.quit.wait(max(0., next_tick - now)):
+                    break
+                now = time.monotonic()
+                next_tick = now + self.PERIOD  # No catch-up bursts after a stall.
+                with self.lock:
+                    try:
+                        self._check_clock()
+                        if self.handle is None:
+                            if now < retry_at:
+                                continue
+                            self.handle = open_serial(self.port)
+                            self.lines = Lines()
+                            self.core.opened()
+                        self._read()
+                        self._write(self.core.frame(time.monotonic()))
+                    except (OSError, serial.SerialException, RuntimeError) as error:
+                        self.core.closed(f"serial failure: {error}")
+                        self._close()
+                        retry_at = time.monotonic() + 1.
+        except Exception as error:
+            with self.lock:
+                self.core.latch_fault(f"worker failed: {type(error).__name__}: {error}")
+        finally:
+            with self.lock:
+                self.core.stop("bridge shutdown")
+                if self.handle is not None:
+                    try:
+                        # Best effort neutral. Never claim it stopped RC outputs.
+                        self._write(self.core.frame(time.monotonic()))
+                    except (OSError, serial.SerialException):
+                        pass
+                self._close()
+                self.core.closed("bridge shutdown")
+
+    def close(self):
+        self.stop("bridge shutdown")
+        self.quit.set()
+        if self.thread is not None:
+            self.thread.join(timeout=2.)
+            if self.thread.is_alive():
+                raise RuntimeError("serial worker did not exit; firmware watchdog must stop Nano")

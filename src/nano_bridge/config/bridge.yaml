@@ -1,0 +1,11 @@
+nano_bridge:
+  ros__parameters:
+    # Default launch opens no serial port and cannot grant a motion lease.
+    serial_enabled: false
+    port: /dev/serial/by-id/usb-1a86_USB_Single_Serial_5761014804-if00
+    motion_enabled: false
+    firmware_profile: f1_direction_gear_v2
+    direction_confirmed: false
+    allow_fifth_thruster: false
+    imu_frame_id: imu_link
+    use_sim_time: false

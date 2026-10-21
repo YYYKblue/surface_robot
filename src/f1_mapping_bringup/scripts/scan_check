@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Read a bounded set of raw scans and print range/timestamp diagnostics."""
+import argparse
+import json
+import sys
+import time
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from rclpy.utilities import remove_ros_args
+from sensor_msgs.msg import LaserScan
+
+from f1_mapping_bringup.scan_quality import ScanQuality
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--topic", default="/pavo2_scan")
+    parser.add_argument("--expected-frame", default="pavo2s_frame")
+    parser.add_argument("--samples", type=int, default=100)
+    parser.add_argument("--timeout", type=float, default=10.0)
+    args = parser.parse_args(remove_ros_args(args=sys.argv)[1:])
+    if not 2 <= args.samples <= 10000 or not 0 < args.timeout <= 300:
+        parser.error("samples must be 2..10000 and timeout must be 0..300 seconds")
+    quality = ScanQuality(args.expected_frame)
+    rclpy.init()
+    node = Node("pavo2_scan_quality_check")
+    def receive(message):
+        quality.add(message, time.monotonic(), node.get_clock().now().nanoseconds)
+    node.create_subscription(LaserScan, args.topic, receive, qos_profile_sensor_data)
+    try:
+        deadline = time.monotonic() + args.timeout
+        while rclpy.ok() and quality.scans < args.samples and time.monotonic() < deadline:
+            rclpy.spin_once(node, timeout_sec=min(0.1, max(0, deadline - time.monotonic())))
+        report = quality.report()
+        if quality.scans < args.samples:
+            report["issues"].append("timeout before requested sample count")
+        print(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False))
+        return 1 if report["issues"] else 0
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
