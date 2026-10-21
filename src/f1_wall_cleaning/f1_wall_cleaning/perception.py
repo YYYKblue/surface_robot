@@ -53,6 +53,9 @@ class Perception:
         self.c = config.validate()
         self.previous = None
         self.last_stamp = 0
+        # Config is frozen and ROS declares its parameters read-only. Only the
+        # hull sweep is invariant; visibility and collisions use every new scan.
+        self._turn_sweep = self._turn_geometry()
 
     def reset(self):
         self.previous = None
@@ -158,17 +161,10 @@ class Perception:
         front = self._front(angles, valid, points, scan.range_max)
         selected = valid & (points[:, 1] > .02) & (points[:, 0] >= -1.5) & (points[:, 0] <= 3.)
         indices = np.flatnonzero(selected)
-        clusters, current = [], []
-        old = None
-        for index in indices:
-            if old is not None and (index - old > 2 or np.linalg.norm(points[index] - points[old]) > c.cluster_gap_m):
-                if len(current) >= c.min_inliers:
-                    clusters.append(points[current])
-                current = []
-            current.append(index)
-            old = index
-        if len(current) >= c.min_inliers:
-            clusters.append(points[current])
+        gaps = ((np.diff(indices) > 2)
+                | (np.linalg.norm(np.diff(points[indices], axis=0), axis=1) > c.cluster_gap_m))
+        clusters = [points[group] for group in np.split(indices, np.flatnonzero(gaps) + 1)
+                    if len(group) >= c.min_inliers]
         # Limit work even on highly fragmented scans; longest clusters first.
         candidates = [f for cluster in sorted(clusters, key=len, reverse=True)[:12]
                       if (f := self._fit(cluster)) is not None]
@@ -187,8 +183,8 @@ class Perception:
         self.previous = result
         return result
 
-    def _turn_clearance(self, angles, valid, ranges):
-        """Conservative bounded rigid-hull sweep, including blind-sector rejection.
+    def _turn_geometry(self):
+        """Precompute the conservative bounded rigid-hull sweep once.
 
         Ray/box intersections use the actual lidar offset and a margin-expanded
         hull. Analytic rotation extrema cover continuous rotation between poses;
@@ -197,11 +193,11 @@ class Perception:
         """
         c = self.c
         if c.geometry_error():
-            return False, False
+            return None
         hx, hy = c.hull_length_m / 2 + c.rigid_margin_m, c.hull_width_m / 2 + c.rigid_margin_m
         origin = np.array([c.lidar_x_m, c.lidar_y_m])
         if np.linalg.norm(origin) >= min(hx, hy):
-            return False, False
+            return None
         # Dense target angles also check gaps and missing sectors in the real scan.
         phi = np.linspace(-math.pi, math.pi, 1440, endpoint=False)
         rays = np.column_stack((np.cos(phi), np.sin(phi)))
@@ -244,6 +240,22 @@ class Perception:
             return np.max(candidates, axis=0)
 
         baseline = exit_ranges(0.)
+        sweeps = []
+        for sign in (1, -1):
+            extent = envelope(sign * c.turn_sweep_rad)
+            required = extent > baseline + 1e-6
+            # Include angular boundary neighbours instead of assuming a point ray
+            # observes an entire sweep sector. Gaps still veto the affected turn.
+            required = np.logical_or.reduce([np.roll(required, i) for i in range(-3, 4)])
+            sweeps.append((extent, required))
+        return phi, tuple(sweeps)
+
+    def _turn_clearance(self, angles, valid, ranges):
+        """Check current returns and blind sectors against the cached hull sweep."""
+        if self._turn_sweep is None:
+            return False, False
+        c = self.c
+        phi, sweeps = self._turn_sweep
         order = np.argsort(angles)
         ordered = angles[order]
         positions = np.searchsorted(ordered, phi)
@@ -252,12 +264,7 @@ class Perception:
         db = np.abs((angles[b] - phi + math.pi) % (2 * math.pi) - math.pi)
         nearest = np.where(da < db, a, b)
         answers = []
-        for sign in (1, -1):
-            extent = envelope(sign * c.turn_sweep_rad)
-            required = extent > baseline + 1e-6
-            # Include angular boundary neighbours instead of assuming a point ray
-            # observes an entire sweep sector. Gaps still veto the affected turn.
-            required = np.logical_or.reduce([np.roll(required, i) for i in range(-3, 4)])
+        for extent, required in sweeps:
             known = valid[nearest] & (np.minimum(da, db) <= min(c.front_max_gap_rad / 2, .01))
             free = ranges[nearest] > extent + c.fit_threshold_m
             # All finite returns must also lie outside the swept box union.

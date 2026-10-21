@@ -3,7 +3,7 @@ import time
 
 from rclpy.node import Node
 from rclpy.clock import Clock, ClockType
-from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from std_srvs.srv import Trigger
 from f1_wall_interfaces.msg import WallObservation, EffortPreview, CleaningStatus
@@ -45,8 +45,9 @@ class WallController(Node):
         self.clock_fault = False
         self.preview_pub = self.create_publisher(EffortPreview, "/wall_cleaning/effort_preview", 2)
         self.status_pub = self.create_publisher(CleaningStatus, "/wall_cleaning/status", 5)
+        latest_observation = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.observation_sub = self.create_subscription(
-            WallObservation, "/wall_cleaning/wall_observation", self._observation, qos_profile_sensor_data)
+            WallObservation, "/wall_cleaning/wall_observation", self._observation, latest_observation)
         # Preview mode has no actuator publisher and no bridge service clients.
         self.command_pub = self.acquire_client = self.release_client = None
         if self.live:
@@ -92,6 +93,12 @@ class WallController(Node):
         self.observation_received = time.monotonic()
         if not observation.valid and (self.follower.active or self.pending):
             self._halt("PAUSED_SAFETY", observation.reason)
+        elif self.live and self.follower.active:
+            # Use fresh observations immediately. Waiting for the 50 ms timer
+            # can consume a whole command period when scan arrival and timer
+            # callbacks coincide. The timer still watches for stopped streams;
+            # Follower.update never renews a command from a repeated scan.
+            self._tick()
 
     def _bridge(self, message):
         self.bridge, self.bridge_received = message, time.monotonic()

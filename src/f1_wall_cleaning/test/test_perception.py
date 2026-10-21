@@ -135,3 +135,19 @@ def test_intermediate_rotated_corner_cannot_be_declared_free(calibrated):
             ranges[index] = math.hypot(dx, dy)
             left, right = Perception(c)._turn_clearance(angles, np.ones(len(angles), dtype=bool), ranges)
             assert not (left if sign > 0 else right)
+
+
+def test_cached_sweep_rechecks_changed_returns_blind_sectors_and_ray_count(calibrated):
+    estimator = Perception(calibrated)
+    angles = np.linspace(-math.pi, math.pi, 1440, endpoint=False)
+    valid = np.ones(len(angles), dtype=bool)
+    ranges = np.full(len(angles), 5.)
+    assert estimator._turn_clearance(angles, valid, ranges) == (True, True)
+    blind = valid.copy()
+    blind[np.abs(angles + 2.8) < .08] = False
+    assert estimator._turn_clearance(angles, blind, ranges) == (True, False)
+    blocked = ranges.copy()
+    blocked[len(angles) // 2] = .1
+    assert estimator._turn_clearance(angles, valid, blocked) == (False, False)
+    estimator.reset()
+    assert estimator._turn_clearance(angles[::2], valid[::2], ranges[::2]) == (True, True)

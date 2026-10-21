@@ -1,8 +1,10 @@
 """Synthetic scan -> real ROS nodes -> actual bridge Session; never opens serial."""
 from dataclasses import fields
+from collections import deque
 import os
 import signal
 import subprocess
+import threading
 import time
 
 import pytest
@@ -35,13 +37,31 @@ def isolated_ros(monkeypatch, tmp_path):
         rclpy.shutdown()
 
 
+class RecordingSession(Session):
+    def __init__(self):
+        super().__init__(motion_enabled=True)
+        self.revocations = []
+        self.revocation_details = []
+
+    def stop(self, reason):
+        if self.token:
+            self.revocations.append(reason)
+            now = time.monotonic()
+            self.revocation_details.append(dict(
+                reason=reason, expired_by_ms=round((now - self.expires) * 1000, 2),
+                command_sequence=self.command_seq))
+        super().stop(reason)
+
+
 class SimBridge(Node):
     def __init__(self):
         super().__init__("wall_test_bridge")
-        self.core = Session(motion_enabled=True)
+        self.core = RecordingSession()
         self.core.opened()
         self.source, self.epoch = "NANO", 1
         self.commands, self.releases = [], []
+        self.command_timings = deque(maxlen=12)
+        self.last_command_at = None
         self.acquires = 0
         self.pub = self.create_publisher(ControlState, "/f1/control_state", 5)
         self.sub = self.create_subscription(ActuatorCommand, "/f1/actuator_command", self.command, qos_profile_sensor_data)
@@ -53,7 +73,14 @@ class SimBridge(Node):
         cmd = Command(m.token, m.sequence, stamp_ns(m.computed_at), stamp_ns(m.valid_until),
                       m.direction, m.speed_percent, m.mode,
                       m.brush_enabled, m.brush_percent, m.thrust_enabled, m.thrust_percent, stamp_ns(m.direction_until))
-        accepted = self.core.accept(cmd, time.monotonic(), self.get_clock().now().nanoseconds)
+        now, unix_ns = time.monotonic(), self.get_clock().now().nanoseconds
+        accepted = self.core.accept(cmd, now, unix_ns)
+        self.command_timings.append(dict(
+            sequence=m.sequence, accepted=accepted,
+            receive_gap_ms=None if self.last_command_at is None else round((now - self.last_command_at) * 1000, 2),
+            computed_age_ms=round((unix_ns - cmd.computed_ns) / 1e6, 2),
+            remaining_ms=round((cmd.deadline_ns - unix_ns) / 1e6, 2)))
+        self.last_command_at = now
         self.commands.append((m, accepted))
 
     def acquire(self, request, response):
@@ -90,9 +117,26 @@ class SimBridge(Node):
 
 
 class Harness:
-    def __init__(self, config, live):
+    def __init__(self, config, live, perception_delay=0.):
         parameters = [Parameter(f.name, value=getattr(config, f.name)) for f in fields(config)]
         self.perception = WallPerception(parameter_overrides=parameters)
+        self.perception_delay = perception_delay
+        self.perception_timings = deque(maxlen=12)
+        process = self.perception.estimator.process
+
+        def timed_process(scan, now_ns):
+            begin = time.monotonic()
+            observation = process(scan, now_ns)
+            if self.perception_delay:
+                time.sleep(self.perception_delay)
+            elapsed_ms = (time.monotonic() - begin) * 1000
+            queue_age_ms = (now_ns - scan.stamp_ns) / 1e6
+            self.perception_timings.append(dict(
+                queue_age_ms=round(queue_age_ms, 2), process_ms=round(elapsed_ms, 2),
+                result_age_ms=round(queue_age_ms + elapsed_ms, 2)))
+            return observation
+
+        self.perception.estimator.process = timed_process
         self.controller = WallController(parameter_overrides=parameters + [Parameter("output_enabled", value=live)])
         self.bridge = SimBridge()
         self.driver = Node("wall_test_scan_driver")
@@ -100,11 +144,21 @@ class Harness:
         self.scanning = True
         self.front_missing = False
         self.scan_template = pool_scan(1_000_000_000, config=config)
-        self.timer = self.driver.create_timer(.02, self.scan)
+        # 20 Hz leaves scan processing time within the 100/150 ms deadlines;
+        # a 50 Hz synthetic source can build an artificial backlog on the Nano.
+        self.timer = self.driver.create_timer(.05, self.scan)
         self.executor = SingleThreadedExecutor()
         self.nodes = [self.driver, self.perception, self.controller, self.bridge]
         for node in self.nodes:
-            self.executor.add_node(node)
+            if node is not self.perception:
+                self.executor.add_node(node)
+        # Production launches perception separately and the bridge has its own
+        # serial worker. A slow scan must not block this test's control/watchdog
+        # callbacks merely because the harness puts everything in one process.
+        self.perception_executor = SingleThreadedExecutor()
+        self.perception_executor.add_node(self.perception)
+        self.perception_thread = threading.Thread(target=self.perception_executor.spin)
+        self.perception_thread.start()
 
     def scan(self):
         if not self.scanning:
@@ -123,8 +177,12 @@ class Harness:
         end = time.monotonic() + timeout
         while not predicate() and time.monotonic() < end:
             self.executor.spin_once(timeout_sec=.005)
-        assert predicate(), (self.controller.follower.phase, self.controller.follower.reason,
-                             self.bridge.core.reason, self.bridge.core.rejected)
+        assert predicate(), dict(
+            phase=self.controller.follower.phase, controller_reason=self.controller.follower.reason,
+            bridge_reason=self.bridge.core.reason, rejected=self.bridge.core.rejected,
+            revocations=self.bridge.core.revocation_details,
+            max_tx_gap_ms=round(self.bridge.core.max_tx_gap * 1000, 2),
+            commands=list(self.bridge.command_timings), perception=list(self.perception_timings))
 
     def spin_for(self, seconds):
         end = time.monotonic() + seconds
@@ -149,6 +207,8 @@ class Harness:
         self.controller.destroy_node()
         self.executor.remove_node(self.controller)
         self.spin_for(.03)
+        self.perception_executor.shutdown()
+        self.perception_thread.join()
         self.executor.shutdown()
         for node in self.nodes:
             if node is not self.controller:
@@ -172,8 +232,9 @@ def test_default_unmeasured_geometry_and_preview_have_no_actuator_publisher(cali
             h.close()
 
 
-def test_ros_live_pipeline_rc_return_requires_explicit_resume(calibrated):
-    h = Harness(calibrated, live=True)
+@pytest.mark.parametrize("perception_delay", [0., .03])
+def test_ros_live_pipeline_rc_return_requires_explicit_resume(calibrated, perception_delay):
+    h = Harness(calibrated, live=True, perception_delay=perception_delay)
     try:
         h.ready()
         assert h.call("start").success
@@ -216,6 +277,27 @@ def test_late_acquire_after_pause_is_released_without_motion(calibrated):
         assert not h.bridge.commands and not h.controller.token
         assert h.controller.follower.phase == "PAUSED_USER"
         h.until(lambda: not h.bridge.core.token)
+    finally:
+        h.close()
+
+
+def test_perception_over_budget_stops_and_requires_explicit_resume(calibrated):
+    h = Harness(calibrated, live=True)
+    try:
+        h.ready()
+        assert h.call("start").success
+        h.until(lambda: any(accepted for _, accepted in h.bridge.commands))
+        h.perception_delay = .18
+        h.until(lambda: h.controller.follower.phase == "PAUSED_SAFETY")
+        h.until(lambda: not h.bridge.core.token)
+        assert not h.controller.token and h.bridge.core.command is None
+        h.perception_delay = 0.
+        h.until(lambda: h.controller.observation is not None
+                and h.controller.get_clock().now().nanoseconds - h.controller.observation.stamp_ns < 100_000_000)
+        count = len(h.bridge.commands)
+        h.spin_for(.2)
+        assert h.controller.follower.phase == "PAUSED_SAFETY"
+        assert len(h.bridge.commands) == count and h.bridge.acquires == 1
     finally:
         h.close()
 

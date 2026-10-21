@@ -2,7 +2,7 @@ import secrets
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker
@@ -22,7 +22,10 @@ class WallPerception(Node):
         self.sequence = 0
         self.pub = self.create_publisher(WallObservation, "/wall_cleaning/wall_observation", qos_profile_sensor_data)
         self.marker_pub = self.create_publisher(Marker, "/wall_cleaning/wall_marker", 2)
-        self.subscription = self.create_subscription(LaserScan, "/pavo2_scan", self._scan, qos_profile_sensor_data)
+        # Control needs the newest scan, not a queue of old scans when fitting
+        # takes longer than the sensor period. Absolute age checks still apply.
+        latest_scan = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
+        self.subscription = self.create_subscription(LaserScan, "/pavo2_scan", self._scan, latest_scan)
         self.reset_service = self.create_service(Trigger, "/wall_cleaning/reset_observation", self._reset)
         self.previous_clock = 0
 
