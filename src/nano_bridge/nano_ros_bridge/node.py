@@ -15,7 +15,7 @@ from std_srvs.srv import Trigger
 
 from f1_interfaces.msg import ActuatorCommand, ControlState
 from f1_interfaces.srv import AcquireControl, ReleaseControl
-from f1_imu_bridge.conversion import ClockDiscontinuity, Converter, to_ros_message
+from nano_ros_bridge.imu.conversion import ClockDiscontinuity, Converter, to_ros_message
 
 from .protocol import PROFILE
 from .session import Command, Session

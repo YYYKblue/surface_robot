@@ -1,6 +1,38 @@
-# F103 原生 ROS 2 bridge（back2 / v2）
+# F1 统一桥接包 nano_bridge
 
 修订：2026-10-21。只适配 `firmware`（back2，协议 v2） 的版本2协议，固件不修改。实现独占串口、独立50 Hz发送、控制租约、停止屏障、CTRL状态及同串口原生IMU。Python模块为 `nano_ros_bridge`，与根目录旧 `nano_bridge` 区分。
+
+2026-10-22：原 `f1_imu_bridge` 已并入本包，工作空间只保留一个桥接功能包 `nano_bridge`。本包负责设备通信、协议转换与 ROS 桥接；消息/服务定义统一在 `f1_interfaces`，清洁任务仍由对应业务包实现。
+
+| 模块或入口 | 职责 |
+| --- | --- |
+| `nano_ros_bridge.protocol/session/transport` | 串口协议、控制租约与传输 |
+| `nano_ros_bridge.node`、`bridge.launch.py` | 原生串口控制、CTRL 与 IMU 遥测 |
+| `nano_ros_bridge.imu.conversion` | 两条 IMU 接入链路共用的数据校验、单位与时间转换 |
+| `nano_ros_bridge.imu.node`、`imu.launch.py` | 旧网关 ZMQ → ROS IMU 接入，详见 [IMU 说明](IMU.md) |
+
+两个 launch 入口按实际链路选择。原生串口桥已包含 IMU 发布，无需额外启动 `imu.launch.py`。旧 ZMQ 节点的 ROS 名称仍为 `f1_imu_bridge`，保留原 YAML 参数匹配，但它已不是独立功能包。原生串口入口与 Python 模块的既有使用方式不变。
+
+## 从独立 IMU 包迁移
+
+先结束本工作空间的桥接节点与构建/测试，同步新源码。在未加载旧 `install` 的新终端进入工作空间根目录，移走遗留的旧包源码和生成目录，再重新构建整个工作空间：
+
+```bash
+bridge_backup="$(mktemp -d /tmp/f1_bridge_migration.XXXXXX)"
+for tree in src build install; do
+  if [ -e "$tree/f1_imu_bridge" ]; then
+    mkdir -p "$bridge_backup/$tree"
+    mv "$tree/f1_imu_bridge" "$bridge_backup/$tree/"
+  fi
+done
+echo "旧 IMU 包备份：$bridge_backup"
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
+```
+
+PC 和 Nano 均需检查；仅覆盖同步源码会留下旧包。依赖其他驱动工作空间时，仍需在构建前加载其环境。上述命令适用于本项目默认的隔离安装布局。
+
+旧入口 `ros2 launch f1_imu_bridge imu.launch.py` 改为 `ros2 launch nano_bridge imu.launch.py`，旧 `ros2 run f1_imu_bridge imu_bridge` 改为 `ros2 run nano_bridge imu_bridge`。Python 导入改用 `nano_ros_bridge.imu.conversion` 或 `nano_ros_bridge.imu.node`。外部包若仍声明依赖 `f1_imu_bridge`，需改为 `nano_bridge`。
 
 ## 与上一版的变化
 
@@ -115,6 +147,8 @@ colcon test-result --test-result-base build/f1_wall_cleaning --verbose
 ```
 
 需要cc、pytest、pyserial、ROS Humble及只读back2源码；`F1_FIRMWARE_DIR`可覆盖默认固件目录。测试库编译到临时目录。实际运行无需携带固件源码。
+
+合并后 `nano_bridge` 测试还包含 IMU 转换和旧 ZMQ→ROS 回环。旧 ZMQ 入口及回环测试需要 `python3-zmq`；缺少此依赖时回环测试会 skipped，原生串口桥与 IMU 转换模块可独立导入。
 
 本轮覆盖v2参考帧、方向/档位/轮组、非法输入、CTRL、实际固件C的45种组合、v1拒绝、冲突辅助语义、26项固件原有回归、绝对脉冲截止、期限/停止屏障/RC、PTY及ROS默认禁用。最终结果见本文件末尾验证记录。不构建目标板HEX，不替代船体方向、最低档动力学、跨机DDS或水上验收。
 

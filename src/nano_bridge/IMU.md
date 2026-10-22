@@ -1,7 +1,9 @@
-# F1 IMU ROS 发布
+# nano_bridge 的旧 ZMQ IMU 接入
+
+本功能已从 `f1_imu_bridge` 合并到 `nano_bridge`，实现位于 `nano_ros_bridge.imu`。本文描述旧网关接入链路；当前 back2 固件使用 [原生串口桥](README.md)，它已直接发布 IMU，不应同时启动本节点。
 
 链路：F1 串口 → 现有 nano-bridge → ZMQ `f1_imu` → 本节点 → `/f1/imu/data_raw`。
-串口始终由网关持有。本包只建立 SUB 连接，不发送控制、不打开串口。
+串口始终由旧网关持有。本节点只建立 SUB 连接，不发送控制、不打开串口。
 节点与网关应运行在同一台 Nano 上，采集使用系统时间；录包重放时不运行本节点。
 
 ## 数据和时间
@@ -42,8 +44,9 @@ sudo apt-get install python3-zmq
 ```bash
 source /opt/ros/humble/setup.bash
 cd ~/f1_mapping_ws
-colcon build --symlink-install --packages-select f1_imu_bridge f1_mapping_bringup
-colcon test --packages-select f1_imu_bridge f1_mapping_bringup --return-code-on-test-failure
+colcon build --symlink-install --packages-up-to nano_bridge f1_mapping_bringup
+source install/local_setup.bash
+colcon test --packages-select nano_bridge --return-code-on-test-failure --ctest-args -R '^imu'
 colcon test-result --verbose
 ```
 
@@ -59,7 +62,7 @@ source /opt/ros/humble/setup.bash
 source ~/f1_mapping_ws/install/local_setup.bash
 export ROS_DOMAIN_ID=33
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-ros2 launch f1_imu_bridge imu.launch.py
+ros2 launch nano_bridge imu.launch.py
 ```
 
 未连接 F1 或未升级网关时，节点等待数据，诊断报告 WARN，不会发布伪造 IMU。
@@ -79,7 +82,9 @@ ros2 topic echo /f1/imu/data_raw --once
 外部配置文件可通过 `parameters_file:=/absolute/path/imu.yaml` 指定。
 本节点只提供独立 IMU 遥测。建图包现仅保留 `lidar_mapping.launch.py` 纯雷达入口，不使用本话题。
 
-## 更新 Nano 网关
+## 历史参考：更新旧 Nano 网关
+
+以下依赖本仓库未包含的旧网关源码，仅记录历史步骤；不适用于当前 back2 固件部署。当前部署使用 [nano_bridge 说明](README.md)。
 
 Nano 已确认的服务工作目录为 `/home/nvidia/Desktop/wbcNewRos-19`。
 可用 `systemctl show nano-bridge.service -p WorkingDirectory -p ExecStart --no-pager` 核实。

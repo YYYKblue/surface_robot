@@ -3,7 +3,7 @@ import math
 
 import pytest
 
-from f1_imu_bridge.conversion import ClockDiscontinuity, Converter, UINT32, to_ros_message
+from nano_ros_bridge.imu.conversion import ClockDiscontinuity, Converter, UINT32, to_ros_message
 
 
 BASE = 1_800_000_000_000_000_000

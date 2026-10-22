@@ -26,8 +26,8 @@
 
 Nano 开机并接入同一网络；以下使用 `nvidia@192.168.1.188`，地址变化时替换。
 更新前结束旧的清洁节点和本工作空间的构建/测试，避免运行中加载新旧混合代码。
-此同步会更新六个包的源码，不会重启任何服务、启动 bridge、刷写固件或改变已运行 bridge 的参数。
-`f1_imu_bridge` 仍作为 bridge 共用转换库一同保留，不代表矩形任务使用 IMU。
+此同步会更新五个包的源码，不会重启任何服务、启动 bridge、刷写固件或改变已运行 bridge 的参数。
+IMU 转换库已并入 `nano_bridge` 的内部模块，不代表矩形任务使用 IMU。
 
 在 PC 执行：
 
@@ -60,6 +60,7 @@ rsync -av --ignore-existing \
 登录 Nano，在新的构建终端执行；不要先 source 本工作空间旧的 install：
 
 首次从旧接口包升级时，先在 Nano 工作空间根目录按[统一接口迁移说明](../f1_interfaces/README.md#从旧接口包迁移)备份并移走旧接口包源码、build 和 install，再构建。上面的 rsync 不会删除遗留旧包；所有使用自定义接口的 PC/Nano 节点均需同步升级。
+原独立 IMU 包也需按[桥接包迁移说明](../nano_bridge/README.md#从独立-imu-包迁移)移走，之后只构建统一的 `nano_bridge`。
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -71,7 +72,7 @@ colcon build --symlink-install --parallel-workers 1 \
   --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 ```
 
-应能识别 `f1_interfaces` 和 `f1_rectangle_cleaning`，共六个包。依赖工作空间沿用现有 `/home/nvidia/ros2_ws`；只有构建成功后才继续。
+应能识别 `f1_interfaces`、`nano_bridge` 和 `f1_rectangle_cleaning`，共五个包。依赖工作空间沿用现有 `/home/nvidia/ros2_ws`；只有构建成功后才继续。
 
 ```bash
 source /home/nvidia/f1_mapping_ws/install/local_setup.bash

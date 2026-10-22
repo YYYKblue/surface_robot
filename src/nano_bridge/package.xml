@@ -2,19 +2,20 @@
 <package format="3">
   <name>nano_bridge</name>
   <version>0.1.0</version>
-  <description>Native ROS 2 F103 serial bridge for F1_IMU_NEW _back2.</description>
+  <description>F1 serial control and IMU bridges, with shared IMU conversion and legacy ZMQ input.</description>
   <maintainer email="bboss@example.com">bboss</maintainer>
   <license>Proprietary</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   <exec_depend>f1_interfaces</exec_depend>
-  <exec_depend>f1_imu_bridge</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>diagnostic_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>python3-serial</exec_depend>
+  <exec_depend>python3-zmq</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>ament_index_python</exec_depend>

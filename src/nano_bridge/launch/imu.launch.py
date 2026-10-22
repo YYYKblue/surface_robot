@@ -6,9 +6,9 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    share = get_package_share_directory("f1_imu_bridge")
+    share = get_package_share_directory("nano_bridge")
     return LaunchDescription([
         DeclareLaunchArgument("parameters_file", default_value=f"{share}/config/imu.yaml"),
-        Node(package="f1_imu_bridge", executable="imu_bridge", name="f1_imu_bridge",
+        Node(package="nano_bridge", executable="imu_bridge", name="f1_imu_bridge",
              output="screen", parameters=[LaunchConfiguration("parameters_file")]),
     ])

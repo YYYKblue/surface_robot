@@ -44,4 +44,4 @@ ros2 interface show f1_interfaces/msg/ActuatorCommand
 ros2 interface show f1_interfaces/srv/AcquireControl
 ```
 
-`colcon list` 应只包含一个自定义接口包 `f1_interfaces`，共六个功能包。部署入口与测试命令见[工作空间说明](../../README.md)。
+`colcon list` 应只包含一个自定义接口包 `f1_interfaces`，共五个功能包。原独立 IMU 桥也已并入 `nano_bridge`，更新旧版本时同时参考[桥接包迁移说明](../nano_bridge/README.md#从独立-imu-包迁移)。部署入口与测试命令见[工作空间说明](../../README.md)。

@@ -27,8 +27,8 @@
 原联合入口、联合 Lua、联合外参及加载代码已删除。
 算法讲解见 [结合代码理解 Cartographer](src/f1_mapping_bringup/CARTOGRAPHER_PRINCIPLES.md)。
 使用步骤与当前验证边界见 [功能包说明](src/f1_mapping_bringup/README.md)。
-`src/f1_imu_bridge` 保留旧 ZMQ 接入节点和共用的纯 IMU 转换库；新桥复用转换库，直接从串口发布 IMU。
-旧链路历史说明见 [IMU 接入说明](src/f1_imu_bridge/README.md)，当前固件启动以新桥说明为准。
+`src/nano_bridge` 统一管理桥接功能，内部 `nano_ros_bridge.imu` 保留旧 ZMQ 接入节点和共用的纯 IMU 转换库；原生桥直接从串口发布 IMU。
+旧链路历史说明见 [IMU 接入说明](src/nano_bridge/IMU.md)，当前固件启动以原生串口桥说明为准。
 
 ## PC 路径
 
@@ -39,6 +39,7 @@
 在未加载本工作空间安装环境的终端中构建：
 
 从旧版本更新时，先按[接口迁移说明](src/f1_interfaces/README.md#从旧接口包迁移)移走旧接口包源码与生成目录，再重新构建；所有自定义接口统一由 `f1_interfaces` 提供。
+原独立 IMU 包也已合并，需按[桥接包迁移说明](src/nano_bridge/README.md#从独立-imu-包迁移)移走旧包；桥接功能统一由 `nano_bridge` 提供。
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -68,7 +69,7 @@ colcon build --symlink-install
 ```
 
 仅创建空目录时，构建显示 `0 packages finished`。
-同步 PC 的六个功能包后再次构建，应包含 `f1_mapping_bringup`、`f1_imu_bridge`、`f1_interfaces`、`nano_bridge`、`f1_wall_cleaning` 和 `f1_rectangle_cleaning`。
+同步 PC 的五个功能包后再次构建，应包含 `f1_mapping_bringup`、`f1_interfaces`、`nano_bridge`、`f1_wall_cleaning` 和 `f1_rectangle_cleaning`。
 
 构建完成后，在 Nano 的另一个终端中加载：
 
@@ -90,8 +91,7 @@ PC 与 Nano 分别构建，后续同步源码时排除 `build/`、`install/` 和
 rsync -av --delete --exclude='__pycache__/' --exclude='.pytest_cache/' \
   /home/bboss/new-nano/f1_mapping_ws/src/f1_mapping_bringup/ \
   nvidia@192.168.1.188:/home/nvidia/f1_mapping_ws/src/f1_mapping_bringup/
-scp -r /home/bboss/new-nano/f1_mapping_ws/src/f1_imu_bridge \
-  /home/bboss/new-nano/f1_mapping_ws/src/f1_interfaces \
+scp -r /home/bboss/new-nano/f1_mapping_ws/src/f1_interfaces \
   /home/bboss/new-nano/f1_mapping_ws/src/nano_bridge \
   /home/bboss/new-nano/f1_mapping_ws/src/f1_wall_cleaning \
   /home/bboss/new-nano/f1_mapping_ws/src/f1_rectangle_cleaning \
@@ -101,6 +101,7 @@ scp -r /home/bboss/new-nano/f1_mapping_ws/src/f1_imu_bridge \
 在 Nano 的构建终端中执行：
 
 首次升级统一接口包前，也要在 Nano 按[接口迁移说明](src/f1_interfaces/README.md#从旧接口包迁移)移走遗留旧包，再执行以下构建。同步源码不会自动删除旧接口包。
+独立 IMU 包同样按[桥接包迁移说明](src/nano_bridge/README.md#从独立-imu-包迁移)处理，避免遗留旧源码和安装环境。
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -111,7 +112,7 @@ cd /home/nvidia/f1_mapping_ws
 # 从旧版本更新时执行，仅清理建图包的生成目录：
 rm -rf build/f1_mapping_bringup install/f1_mapping_bringup
 colcon build --symlink-install --packages-up-to f1_mapping_bringup nano_bridge f1_rectangle_cleaning
-colcon test --packages-select f1_mapping_bringup f1_imu_bridge f1_wall_cleaning f1_rectangle_cleaning --return-code-on-test-failure
+colcon test --packages-select f1_mapping_bringup f1_wall_cleaning f1_rectangle_cleaning --return-code-on-test-failure
 colcon test-result --verbose
 ```
 

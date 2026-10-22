@@ -16,7 +16,7 @@ def test_waits_without_sensor_then_converts_gateway_packet(tmp_path, monkeypatch
     from rclpy.node import Node
     from rclpy.parameter import Parameter
     from sensor_msgs.msg import Imu
-    from f1_imu_bridge.node import ImuBridge
+    from nano_ros_bridge.imu.node import ImuBridge
 
     token = uuid.uuid4().hex
     topic = f"/f1_imu_bridge_test_{token}/imu"
