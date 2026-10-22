@@ -2,7 +2,7 @@
 <package format="3">
   <name>f1_mapping_bringup</name>
   <version>0.1.0</version>
-  <description>Cartographer 2D bringup for PAVO2 lidar and F1 IMU.</description>
+  <description>Lidar-only Cartographer 2D bringup for PAVO2.</description>
   <maintainer email="bboss@example.com">bboss</maintainer>
   <license>TODO</license>
   <buildtool_depend>ament_cmake</buildtool_depend>

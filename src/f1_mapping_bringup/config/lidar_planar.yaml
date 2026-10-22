@@ -1,7 +1,7 @@
 # Lidar-only 2D model: base_link is the vehicle centre projected onto the scan plane.
 # x forward, y left; metres and radians. Confirmed by the user on 2026-10-20.
 # Only planar extrinsics are modelled; z/roll/pitch=0 in TF are a 2D convention,
-# NOT measured mounting height/tilt. Full 3D measurements remain in sensors.yaml.
+# NOT measured mounting height/tilt. Keep the lidar level for this planar model.
 parent_frame: base_link
 child_frame: pavo2s_frame
 x_m: -0.2143195

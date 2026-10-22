@@ -29,6 +29,7 @@ options = {
   rangefinder_sampling_ratio = 0.4,
   odometry_sampling_ratio = 1.,
   fixed_frame_pose_sampling_ratio = 1.,
+  -- Required ROS configuration field; inactive while use_imu_data is false.
   imu_sampling_ratio = 1.,
   landmarks_sampling_ratio = 1.,
 }

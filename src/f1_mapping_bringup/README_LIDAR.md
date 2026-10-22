@@ -1,8 +1,7 @@
 # 纯雷达 Cartographer 2D
 
-当前优先使用此模式。仅订阅 `/pavo2_scan`，无需启动 `f1_imu_bridge` 或修改 F1 固件。
-已有 `mapping.launch.py` 仍是雷达与 IMU 联合模式，纯雷达请使用 `lidar_mapping.launch.py`。
-已有网关的 IMU 转发开关可保留，它不参与本模式。
+本包仅保留此模式，入口为 `lidar_mapping.launch.py`。仅订阅 `/pavo2_scan`，无需启动 IMU 发布节点。
+原雷达与 IMU 联合入口及配置已删除。建图原理见 [代码与原理说明](CARTOGRAPHER_PRINCIPLES.md)。
 
 ## 当前坐标和输入
 
@@ -14,13 +13,13 @@ map -> odom -> base_link -> pavo2s_frame
 启动入口默认根据 `config/lidar_planar.yaml` 发布 `base_link -> pavo2s_frame` 静态 TF：
 用户已确认 x=-0.2143195 m、y=0、yaw=π。该文件仅描述平面安装关系，不读取 IMU 外参。
 雷达实际高度仍未知；此模式将 `base_link` 定义为车体中心在扫描平面的投影，
-TF 的 z/roll/pitch=0 是二维建模约定，不代表实测高度或倾角。真实三维外参仍保留在 `sensors.yaml` 中待测。
+TF 的 z/roll/pitch=0 是二维建模约定，不代表实测高度或倾角。
 地图仍在固定的 `map` 坐标系中，修改输出参考点不会自动将地图原点设为车体初始位置。
 内部轨迹/子图依然基于雷达跟踪帧；车体中心位姿请查询 `map -> base_link`，不能直接将内部雷达轨迹当作车体轨迹。
 要求雷达基本水平、运动基本在平面内。只有固定的二维扫描面才能直接对应同一张平面地图。
 运行时只保留一套 Cartographer，避免两套节点同时发布相同 map/odom 关系。
 已有外部节点发布同一雷达安装 TF 时，启动加 `publish_lidar_tf:=false`，并确保其安装参数一致。
-不要同时启动联合模式的 `sensor_tf.launch.py`。外部平面参数文件可用
+外部平面参数文件可用
 `lidar_extrinsics_file:=/absolute/path/lidar_planar.yaml` 指定。
 
 实际输入已观测为约 50.1 Hz、3500 点、280°、0.08°/点。
@@ -34,8 +33,9 @@ TF 的 z/roll/pitch=0 是二维建模约定，不代表实测高度或倾角。�
 PC：
 
 ```bash
-scp -r /home/bboss/new-nano/f1_mapping_ws/src/f1_mapping_bringup \
-  nvidia@192.168.1.188:/home/nvidia/f1_mapping_ws/src/
+rsync -av --delete --exclude='__pycache__/' --exclude='.pytest_cache/' \
+  /home/bboss/new-nano/f1_mapping_ws/src/f1_mapping_bringup/ \
+  nvidia@192.168.1.188:/home/nvidia/f1_mapping_ws/src/f1_mapping_bringup/
 ```
 
 Nano 构建终端：
@@ -44,6 +44,8 @@ Nano 构建终端：
 source /opt/ros/humble/setup.bash
 source /home/nvidia/ros2_ws/install/setup.bash
 cd /home/nvidia/f1_mapping_ws
+# 从旧版本更新时执行，仅清理本包的生成目录：
+rm -rf build/f1_mapping_bringup install/f1_mapping_bringup
 colcon build --symlink-install --packages-select f1_mapping_bringup
 colcon test --packages-select f1_mapping_bringup --return-code-on-test-failure
 colcon test-result --verbose

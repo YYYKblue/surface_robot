@@ -16,10 +16,10 @@
 | 启动入口 | `lidar_mapping.launch.py` |
 | 栅格分辨率 | 默认 `0.05 m/格` |
 
-本模式不需要启动 `f1_imu_bridge`，不使用轮速里程计，也不需要填写 `sensors.yaml` 或启动 `sensor_tf.launch.py`。
+本包仅保留纯雷达建图，不需要启动 IMU 发布节点，不使用轮速里程计。
 入口自动根据 `config/lidar_planar.yaml` 发布雷达安装 TF，平面参数为 x=-0.2143195 m、y=0、yaw=π。
 实际高度未知，`base_link` 在此定义为车体中心在雷达扫描平面的投影；TF 的 z/roll/pitch=0 是二维约定，不是实测值。
-`mapping.launch.py` 是雷达与 IMU 联合入口，本次只使用 `lidar_mapping.launch.py`。
+原雷达与 IMU 联合入口及配置已删除，统一使用 `lidar_mapping.launch.py`。
 建图程序本身不发送运动指令；如需操纵设备，使用已有控制链路。
 
 ## 1. 首次部署或源码更新后：同步与构建
@@ -30,9 +30,12 @@
 
 ```bash
 ssh nvidia@192.168.1.188 'mkdir -p /home/nvidia/f1_mapping_ws/src'
-scp -r /home/bboss/new-nano/f1_mapping_ws/src/f1_mapping_bringup \
-  nvidia@192.168.1.188:/home/nvidia/f1_mapping_ws/src/
+rsync -av --delete --exclude='__pycache__/' --exclude='.pytest_cache/' \
+  /home/bboss/new-nano/f1_mapping_ws/src/f1_mapping_bringup/ \
+  nvidia@192.168.1.188:/home/nvidia/f1_mapping_ws/src/f1_mapping_bringup/
 ```
+
+`--delete` 仅作用于目标的 `src/f1_mapping_bringup/`，用于移除旧融合源码；不要扩大到整个工作空间。
 
 ### 1.2 Nano：检查依赖并构建
 
@@ -58,6 +61,8 @@ command -v colcon
 
 ```bash
 cd /home/nvidia/f1_mapping_ws
+# 从旧版本更新时执行，仅清理本包的生成目录：
+rm -rf build/f1_mapping_bringup install/f1_mapping_bringup
 colcon build --symlink-install --packages-select f1_mapping_bringup
 ```
 
@@ -248,7 +253,7 @@ ls -lh "${mapping_snapshot}.pbstream" "${mapping_snapshot}.pgm" "${mapping_snaps
 | 找不到 `f1_mapping_bringup` | 是否在 Nano 构建成功，是否加载了新工作空间的 `install/local_setup.bash` |
 | 找不到 Cartographer 或相关可执行文件 | 旧依赖工作空间是否正确加载，`ros2 pkg executables cartographer_ros` 是否有输出 |
 | `scan_check` 超时或话题没有发布者 | 雷达服务、域编号、DDS 环境；查看驱动日志 |
-| 提示缺少 IMU 或外参 | 是否误用了 `mapping.launch.py`；纯雷达使用 `lidar_mapping.launch.py` |
+| 提示等待 IMU | 是否加载了旧工作空间或自定义 Lua；确认使用本包 `pavo2_2d.lua` 且 `use_imu_data=false` |
 | 帧名不符或 TF 持续失败 | 消息实际帧是否为 `pavo2s_frame`，`base_to_lidar_planar` 是否运行，是否存在旧 SLAM 或其他 TF 发布者冲突 |
 | SSH 启动 RViz 提示显示错误 | 使用默认不带 RViz 的建图命令，在图形桌面单独运行 RViz |
 | 有扫描但地图扭曲、双层墙明显 | 安装是否水平、运动是否过快、环境结构是否足够、时间戳是否正常，以及 Nano 是否处理积压 |

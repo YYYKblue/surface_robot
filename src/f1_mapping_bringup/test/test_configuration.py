@@ -1,10 +1,9 @@
-import importlib.util
 from pathlib import Path
 
 import pytest
 import yaml
 
-from f1_mapping_bringup.configuration import load_lidar_planar_transform, load_transforms, static_tf_arguments
+from f1_mapping_bringup.configuration import load_lidar_planar_transform, static_tf_arguments
 
 
 PACKAGE = Path(__file__).resolve().parents[1]
@@ -50,59 +49,15 @@ def test_invalid_planar_mounting_is_rejected(tmp_path, key, bad):
         load_lidar_planar_transform(path)
 
 
-def measured_file(tmp_path):
-    document = yaml.safe_load((PACKAGE / "config/sensors.yaml").read_text())
-    document["transforms"]["pavo2s_frame"]["xyz_m"][2] = 0.12
-    document["transforms"]["imu_link"] = {"xyz_m": [0.02, -0.01, 0.03],
-                                           "rpy_rad": [0.1, 0.2, 0.3]}
-    path = tmp_path / "sensors.yaml"
-    path.write_text(yaml.safe_dump(document))
-    return path, document
-
-
-def test_unknown_mounting_cannot_silently_become_identity():
-    with pytest.raises(ValueError, match="fill measured"):
-        load_transforms(PACKAGE / "config/sensors.yaml")
-
-
-def test_measured_mounting_uses_named_euler_arguments(tmp_path):
-    path, _ = measured_file(tmp_path)
-    transforms = dict(load_transforms(path))
-    args = static_tf_arguments("imu_link", transforms["imu_link"])
+def test_planar_mounting_uses_named_euler_arguments():
+    values = load_lidar_planar_transform(PACKAGE / "config/lidar_planar.yaml")
+    args = static_tf_arguments("pavo2s_frame", values)
     options = dict(zip(args[::2], args[1::2]))
-    assert options["--x"] == "0.02"
-    assert options["--roll"] == "0.1"
-    assert options["--pitch"] == "0.2"
-    assert options["--yaw"] == "0.3"
+    assert float(options["--x"]) == pytest.approx(-0.2143195)
+    assert float(options["--y"]) == 0.0
+    assert float(options["--z"]) == 0.0
+    assert float(options["--roll"]) == 0.0
+    assert float(options["--pitch"]) == 0.0
+    assert float(options["--yaw"]) == pytest.approx(3.141592653589793)
     assert options["--frame-id"] == "base_link"
-    assert options["--child-frame-id"] == "imu_link"
-
-
-@pytest.mark.parametrize("bad", [None, True, "0.1", float("nan"), float("inf")])
-def test_invalid_mounting_is_rejected(tmp_path, bad):
-    path, document = measured_file(tmp_path)
-    document["transforms"]["imu_link"]["rpy_rad"][0] = bad
-    path.write_text(yaml.safe_dump(document))
-    with pytest.raises(ValueError, match="finite number"):
-        load_transforms(path)
-
-
-def test_frame_mismatch_is_rejected(tmp_path):
-    path, document = measured_file(tmp_path)
-    document["transforms"]["imu"] = document["transforms"].pop("imu_link")
-    path.write_text(yaml.safe_dump(document))
-    with pytest.raises(ValueError, match="imu_link"):
-        load_transforms(path)
-
-
-def test_tf_launch_constructs_both_sensor_nodes(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROS_LOG_DIR", str(tmp_path / "ros_logs"))
-    from launch import LaunchContext
-
-    path, _ = measured_file(tmp_path)
-    spec = importlib.util.spec_from_file_location("sensor_tf", PACKAGE / "launch/sensor_tf.launch.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    context = LaunchContext()
-    context.launch_configurations.update(sensors_file=str(path), use_sim_time="false")
-    assert len(module.sensor_nodes(context)) == 2
+    assert options["--child-frame-id"] == "pavo2s_frame"

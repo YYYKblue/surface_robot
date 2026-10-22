@@ -1,83 +1,56 @@
-# F1 雷达与 IMU 建图配置包
+# F1 纯雷达建图配置包
 
-**当前优先路线为纯雷达建图，使用 `lidar_mapping.launch.py`，见 [纯雷达说明](README_LIDAR.md)。**
-下文的 `mapping.launch.py` 保留为雷达与 IMU 联合模式。
-
-输入：`/pavo2_scan` (`sensor_msgs/msg/LaserScan`)、
-`/f1/imu/data_raw` (`sensor_msgs/msg/Imu`)。
-默认启动 Cartographer 2D 与栅格地图节点；RViz 可选。
-雷达驱动与 F1 串口网关由外部运行，本包不打开串口、不发送运动指令。
-
-当前 `firmware`（back2，协议 v2） 固件使用同一工作空间的 [ROS nano_bridge](../nano_bridge/README.md) 直接发布 F1 IMU。原 `f1_imu_bridge/imu.launch.py` 属于旧 ZMQ 网关链路，不应与新桥同时启动。两者输出均为 `/f1/imu/data_raw`、`imu_link`；IMU 安装外参仍需按下文实测配置。
-地图快照保存步骤见 [纯雷达说明](README_LIDAR.md)；录包工具尚未封装。
-启用 IMU 后必须持续提供有效 IMU 数据，只有雷达数据不足以运行本配置。
-`package.xml` 中维护者邮箱为占位值，许可证尚未指定；对外发布前应填写实际信息。
-
-## 外参与坐标
-
-`config/sensors.yaml` 的 `null` 必须替换为实际安装测量值。
-雷达 x/y/yaw 沿用现有工程；z 未知，roll/pitch 暂按水平安装，均需实测核对。
-IMU 位姿全部待测。不得为了启动成功将未知值直接设为零。
-
-本配置固定使用 `base_link`、`pavo2s_frame` 和 `imu_link`。
-传感器消息的 `header.frame_id` 应与对应传感器帧一致。
-IMU 的 tracking_frame 为 `imu_link`，输出机器人帧为 `base_link`。
-
-```text
-map -> odom -> base_link -> pavo2s_frame
-                       -> imu_link
-```
-
-前两段由 Cartographer 发布，安装关系由本包或现有 TF 发布者提供。
-已有相同安装 TF 时，使用 `publish_sensor_tf:=false`，避免重复发布。
-
-## 构建与检查
+本包仅提供 PAVO2 的 Cartographer 2D 纯雷达建图，输入为
+`/pavo2_scan`（`sensor_msgs/msg/LaserScan`），不融合 IMU 或轮速里程计。
+启动入口为 `lidar_mapping.launch.py`，算法配置为 `config/pavo2_2d.lua`。
 
 ```bash
-source /opt/ros/humble/setup.bash
-# 若 Cartographer 仅存在旧工作空间，先 source 对应 install/setup.bash。
-cd ~/f1_mapping_ws
-colcon build --symlink-install --packages-select f1_mapping_bringup
-colcon test --packages-select f1_mapping_bringup
-colcon test-result --verbose
+ros2 launch f1_mapping_bringup lidar_mapping.launch.py
+# 有图形桌面时可同时打开 RViz：
+ros2 launch f1_mapping_bringup lidar_mapping.launch.py use_rviz:=true
 ```
 
-另开终端，加载依赖环境及新工作空间后，可无设备查看启动参数：
+入口启动 Cartographer、栅格地图节点及雷达平面安装 TF；雷达驱动需要单独运行。
+默认输出 `map -> odom -> base_link -> pavo2s_frame`，栅格分辨率为 0.05 m。
+安装参数由 `config/lidar_planar.yaml` 提供；z/roll/pitch=0 是二维建模约定，
+实际雷达须基本水平，机器人运动须基本位于平面内。
+
+- [部署、输入检查、启动与保存地图](README_LIDAR.md)
+- [结合本包代码理解 Cartographer 建图原理](CARTOGRAPHER_PRINCIPLES.md)
+- [工作空间日常启动步骤](../../START_LIDAR.md)
+
+## 参数
+
+| 参数 | 默认值 / 作用 |
+| --- | --- |
+| `scan_topic` | `/pavo2_scan` |
+| `configuration_directory` | 本包的 `config/` |
+| `configuration_basename` | `pavo2_2d.lua` |
+| `lidar_extrinsics_file` | 本包的 `config/lidar_planar.yaml` |
+| `publish_lidar_tf` | `true`；已有安装 TF 时设为 `false` |
+| `resolution` | `0.05`，输出栅格的米/格 |
+| `use_sim_time` | `false`；重放录包且提供 `/clock` 时设为 `true` |
+| `use_rviz` | `false` |
+| `rviz_config` | 本包的 `rviz/mapping.rviz` |
 
 ```bash
-source /opt/ros/humble/setup.bash
-source ~/f1_mapping_ws/install/local_setup.bash
-ros2 launch f1_mapping_bringup mapping.launch.py --show-args
+ros2 launch f1_mapping_bringup lidar_mapping.launch.py --show-args
 ```
 
-填好外参且传感器持续发布后启动：
+## 更新旧安装
 
-```bash
-export ROS_DOMAIN_ID=33
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-ros2 launch f1_mapping_bringup mapping.launch.py
-```
+本次已删除雷达与 IMU 联合入口、联合 Lua、联合传感器外参和对应加载代码。
+从旧版本更新时，源码同步必须传播删除；仅用 `scp -r` 覆盖会留下旧文件。
+使用 [部署说明](README_LIDAR.md) 中限定在本包目录内的 `rsync --delete`，
+并在构建前清理本包的旧 `build/`、`install/` 子目录。
 
-启动 RViz 使用 `use_rviz:=true`。Nano 无显示器时保持默认 false。
-独立检查安装 TF：
+`nano_bridge` 仍依赖 `f1_imu_bridge` 的转换库发布硬件遥测，
+因此工作空间保留该库与独立发布功能；纯雷达建图不需要启动它们。
+Lua 中的 `imu_sampling_ratio` 是上游配置解析器必读字段，
+`TRAJECTORY_BUILDER_2D.use_imu_data = false` 才是禁用 IMU 输入的开关。
 
-```bash
-ros2 launch f1_mapping_bringup sensor_tf.launch.py
-```
+## 验证边界
 
-外部参数文件可用 `sensors_file:=/absolute/path/sensors.yaml` 指定。
-可覆盖 `scan_topic`、`imu_topic`、`resolution`。
-RViz 扫描话题仍需与修改后的 scan_topic 对应。
-录包重放时设置 `use_sim_time:=true`，并通过 `ros2 bag play ... --clock` 提供时钟；
-录包已含安装 TF 时关闭本包的安装 TF 发布。
-
-## 依赖和验证边界
-
-PC 开发环境可在缺少 Cartographer 时构建本配置包、运行配置测试和查看参数；
-执行完整 SLAM 仍须安装或加载 `cartographer_ros`。
-Nano 上先用 `ros2 pkg executables cartographer_ros` 确认存在
-`cartographer_node` 与 `cartographer_occupancy_grid_node`。
-
-Lua include 的配置与 Cartographer 算法默认值取自目标机安装版本。
-PC 尚无 Cartographer，不能据配置包编译成功认定 Lua 已被算法加载或地图已生成。
-IMU 发布必须核对单位、坐标轴、含重力的加速度和与雷达一致的时间基准。
+本机可进行配置包构建、启动参数检查和现有离线测试。
+完整 SLAM 需要目标机的 `cartographer_ros`、真实扫描和 TF；
+配置包构建成功不能代替 Lua 加载、闭环效果或实机精度验收。

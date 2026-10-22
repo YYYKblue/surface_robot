@@ -77,7 +77,7 @@ ros2 topic echo /f1/imu/data_raw --once
 ```
 
 外部配置文件可通过 `parameters_file:=/absolute/path/imu.yaml` 指定。
-测好外参、确认雷达持续发布后，另一个终端启动原有 `mapping.launch.py`。
+本节点只提供独立 IMU 遥测。建图包现仅保留 `lidar_mapping.launch.py` 纯雷达入口，不使用本话题。
 
 ## 更新 Nano 网关
 
