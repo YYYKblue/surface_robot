@@ -141,6 +141,7 @@ ros2 pkg executables cartographer_ros
 /usr/bin/python3 -c "import zmq; print('PyZMQ:', zmq.__version__); print('ZeroMQ:', zmq.zmq_version())"
 ros2 launch f1_nano_bridge bridge.launch.py --show-args
 ros2 launch f1_nano_bridge imu.launch.py --show-args
+ros2 launch f1_nano_bridge gateway.launch.py --show-args
 ros2 launch f1_mapping_bringup lidar_mapping.launch.py --show-args
 ```
 

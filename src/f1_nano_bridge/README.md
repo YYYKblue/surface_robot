@@ -10,10 +10,11 @@
 | --- | --- |
 | `nano_ros_bridge.protocol/session/transport` | 串口协议、控制租约与传输 |
 | `nano_ros_bridge.node`、`bridge.launch.py` | 原生串口控制、CTRL 与 IMU 遥测 |
+| `nano_ros_bridge.ui_protocol/ui_gateway`、`gateway.launch.py` | Windows UI 的 `f1-ui-v2` TCP 5556 网关；只调用 ROS，不打开串口 |
 | `nano_ros_bridge.imu.conversion` | 两条 IMU 接入链路共用的数据校验、单位与时间转换 |
 | `nano_ros_bridge.imu.node`、`imu.launch.py` | 旧网关 ZMQ → ROS IMU 接入，详见 [IMU 说明](IMU.md) |
 
-两个 launch 入口按实际链路选择。原生串口桥已包含 IMU 发布，无需额外启动 `imu.launch.py`。旧 ZMQ 节点的 ROS 名称仍为 `f1_imu_bridge`，保留原 YAML 参数匹配，但它已不是独立功能包。原生串口入口与 Python 模块的既有使用方式不变。
+Windows UI 使用 `bridge.launch.py` + `gateway.launch.py`，完整网络设置及启动命令见 [Windows UI 接入](WINDOWS_UI.md)。原生串口桥已包含 IMU 发布，无需额外启动 `imu.launch.py`。旧 ZMQ 节点的 ROS 名称仍为 `f1_imu_bridge`，保留原 YAML 参数匹配，但它已不是独立功能包。原生串口入口与 Python 模块的既有使用方式不变。
 
 ## 从独立 IMU 包迁移
 
@@ -45,7 +46,7 @@ colcon build --symlink-install --cmake-args -DPython3_EXECUTABLE=/usr/bin/python
 - `ActuatorCommand`移除四个电机字段，新增direction、speed_percent和可选direction_until。所有消息使用者必须重建并重启，不能混用旧install。
 - 固件配置固定 `f1_direction_gear_v2`；旧profile拒绝启动。会话、原始期限、RC接管后不恢复、默认禁用等机制保留。
 
-旧根目录桥和旧UI仍采用AMBT/ZMQ，不兼容back2。本包不接收旧UI控制，不迁移H7/相机。不能同时启动占用F103串口的旧 `nano-bridge.service`、`usv-motor.service` 或其他IMU串口节点，也不能将旧桥作为back2回退。
+旧 AMBT 或 PUB/SUB UI 不兼容 back2；当前 Windows F1 UI 通过本包的 `f1-ui-v2` DEALER/ROUTER 网关接入，不迁移 H7/相机。不能同时启动占用 F103 串口的旧 `nano-bridge.service`、`usv-motor.service` 或其他 IMU 串口节点，也不能将旧桥作为 back2 回退。
 
 ## 构建与默认运行
 
@@ -156,10 +157,17 @@ colcon test-result --test-result-base build/f1_wall_cleaning --verbose
 
 测试覆盖v2参考帧、方向/档位/轮组、非法输入、CTRL、实际固件C的45种组合、v1拒绝、冲突辅助语义、26项固件原有回归、绝对脉冲截止、期限/停止屏障/RC、PTY及ROS默认禁用。当前和历史结果分别记录如下。不构建目标板HEX，不替代船体方向、最低档动力学、跨机DDS或水上验收。
 
-### 2026-10-22 合并、改名与 ZMQ 补测记录
+### 2026-10-22 Windows UI 网关验证
+
+- 新写 `f1-ui-v2` 网关并完成本地构建；`ros2 pkg executables` 包含 `f1_ui_gateway`，`gateway.launch.py --show-args` 正常。
+- 本包完整回归 **121 项通过、0 失败、0 错误、0 跳过**，包含原有 72 项、纯 UI 协议 47 项及真实本机 TCP ↔ ROS 2 项。CTest 另统计 9 个包装用例，`colcon test-result` 汇总 130，不能当作 130 项独立测试。
+- 仓库同级现有 `UI/tests/test_stability.py` 的 10 项 Qt/UI 测试通过，包含真实 ZeroMQ 客户端往返；网关实际 launch、TCP hello/state 和进程组 SIGINT 干净退出另行检查通过。
+- 测试未连接实际设备、未向 Nano 部署，Windows ↔ Nano 网络仍待现场验证。运行步骤见 [Windows UI 接入](WINDOWS_UI.md)。
+
+### 2026-10-22 合并、改名与 ZMQ 补测记录（加入 UI 网关前）
 
 - `surface_ws` 五个包全新构建通过，`f1_nano_bridge` 的两个启动入口和安装路径检查通过。
-- 本包现有 pytest 结果为 **72 项通过、0 失败、0 错误、0 跳过**：协议23、会话15、固件互通6、PTY/时钟3、ROS5、IMU转换19、ZMQ回环1。
+- 当时本包 pytest 结果为 **72 项通过、0 失败、0 错误、0 跳过**：协议23、会话15、固件互通6、PTY/时钟3、ROS5、IMU转换19、ZMQ回环1。
 - 完整回归时 ZMQ 回环因缺少依赖跳过；安装 PyZMQ 22.3.0 / ZeroMQ 4.3.4 后已单独补跑通过，模拟数据正确转换为 ROS IMU，无输入时不发布伪造样本。
 - 结果来自本机测试，没有连接实际硬件或部署到 Nano。全工作空间结果见[工作空间验证记录](../../README.md#2026-10-22-本地验证记录)，复现命令见 [ZMQ 补测说明](IMU.md#补跑-zmq-回环测试)。
 

@@ -2,7 +2,7 @@
 
 工作空间原名 `f1_mapping_ws`，现为 `surface_ws`；桥接功能包原名 `nano_bridge`，现为 `f1_nano_bridge`。Nano 旧工作空间已全部删除，当前请按[Nano 从零部署指南](DEPLOY_NANO.md)创建、传输和编译；[改名迁移说明](WORKSPACE_MIGRATION.md)仅供仍保留旧目录的环境参考。
 
-> 本仓库根目录即 ROS 工作空间，包含 `src/`、构建说明和配置，不包含固件、旧网关或桌面 UI。克隆后直接在仓库根目录运行 colcon。`build/`、`install/`、`log/` 和缓存不纳入版本控制。
+> 本仓库根目录即 ROS 工作空间，包含 `src/`、构建说明和配置，不包含固件、旧网关或桌面 UI。现已在 `f1_nano_bridge` 内提供新版 Windows UI 网关 `f1_ui_gateway`，接入步骤见 [Windows UI 接入](src/f1_nano_bridge/WINDOWS_UI.md)。克隆后直接在仓库根目录运行 colcon。`build/`、`install/`、`log/` 和缓存不纳入版本控制。
 >
 > 固件互通测试另需 back2 源码，默认查找工作空间同级的 `firmware/`，也可通过 `F1_FIRMWARE_DIR=/absolute/path/to/firmware` 指定。实际运行节点不需要固件源码。旧 ZMQ IMU 链路文档仅供历史参考，其依赖的旧网关不包含在本仓库中。
 
@@ -11,7 +11,7 @@
 
 现已新增原生 ROS F103 硬件桥 [`f1_nano_bridge`](src/f1_nano_bridge/README.md) 和
 统一接口包 [`f1_interfaces`](src/f1_interfaces/README.md)，适配 `firmware`（back2，协议 v2），包含二进制控制、租约、CTRL 与 IMU。
-新桥默认不打开串口；与旧网关及旧 ZMQ IMU 发布节点不能同时使用。
+新桥默认不打开串口；与占用同一串口的旧网关及旧 ZMQ IMU 发布节点不能同时使用。新版 `f1_ui_gateway` 只调用 ROS 接口，应与原生桥同时运行。
 现已新增 [`f1_wall_cleaning`](src/f1_wall_cleaning/README.md)，共用 `f1_interfaces`，实现左侧单墙感知、back2 互斥方向脉冲控制和租约任务接口。默认仅观测/预览，未知几何参数阻止启动运动。固定地图定位、完整池边路线、自动过角和 UI→ROS 适配仍按清洁方案后续实施。
 建图包仅保留纯雷达模式；硬件桥的 IMU 遥测不参与建图。
 
@@ -33,6 +33,8 @@
 旧链路历史说明见 [IMU 接入说明](src/f1_nano_bridge/IMU.md)，当前固件启动以原生串口桥说明为准。
 
 ## 2026-10-22 本地验证记录
+
+随后补齐 Windows UI 网关，`f1_nano_bridge` 再次构建并完整回归，独立测试由 72 项增至 **121 项全部通过**；同级 Windows UI 的 10 项 Qt/ZMQ 测试也通过。新增网关启动、TCP 状态及退出检查通过，未向 Nano 部署。详情见 [网关验证记录](src/f1_nano_bridge/README.md#2026-10-22-windows-ui-网关验证)。下表保留加入网关前的全工作空间验证记录，本次未重跑其他三个包。
 
 接口合并、桥接包合并及改名完成后，已在 `/home/bboss/new-nano/surface_ws` 全新构建五个功能包，并验证新包索引、安装符号链接和两个桥接 launch 的参数入口。
 

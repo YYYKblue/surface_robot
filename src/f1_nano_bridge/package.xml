@@ -2,7 +2,7 @@
 <package format="3">
   <name>f1_nano_bridge</name>
   <version>0.1.0</version>
-  <description>F1 serial control and IMU bridges, with shared IMU conversion and legacy ZMQ input.</description>
+  <description>F1 serial control, IMU bridges and the f1-ui-v2 Windows UI gateway.</description>
   <maintainer email="bboss@example.com">bboss</maintainer>
   <license>Proprietary</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
