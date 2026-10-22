@@ -71,6 +71,8 @@ rsync -av --progress \
 
 源目录末尾的 `/` 表示传目录内容，目标应是 `surface_ws/src`，不会变成 `surface_ws/surface_ws/src`。本命令同时传输 README 和部署文档；没有使用 `--delete`。本轮新建目录无需删除远端文件。
 
+不要直接复制 PC 的整个工作空间生成目录到 Nano。PC 的 `build/` 包含本机绝对路径、CMake 缓存和生成索引，`install/` 也包含本机生成的文件与链接。这里的排除规则只阻止本次传输，不会清理 Nano 上已经存在的生成目录。若曾误传，或遇到缓存/JSON 索引错误，按[第 10 节](#10-同步后-cmake-缓存或-json-索引报错)备份并重新生成。
+
 ## 4. Nano：安装源码声明的依赖
 
 从 PC 登录 Nano，或使用 Nano 本机的新终端：
@@ -145,7 +147,7 @@ ros2 launch f1_nano_bridge gateway.launch.py --show-args
 ros2 launch f1_mapping_bringup lidar_mapping.launch.py --show-args
 ```
 
-`f1_nano_bridge` 前缀应为 `/home/nvidia/surface_ws/install/f1_nano_bridge`，可执行程序包括 `f1_bridge` 和 `imu_bridge`。Cartographer 应有 `cartographer_node` 及 `cartographer_occupancy_grid_node` 或 `occupancy_grid_node`。`--show-args` 只检查启动入口，不启动硬件。
+`f1_nano_bridge` 前缀应为 `/home/nvidia/surface_ws/install/f1_nano_bridge`，可执行程序包括 `f1_bridge`、`imu_bridge` 和 `f1_ui_gateway`。Cartographer 应有 `cartographer_node` 及 `cartographer_occupancy_grid_node` 或 `occupancy_grid_node`。`--show-args` 只检查启动入口，不启动硬件。
 
 以后运行节点时只加载 `/opt/ros/humble/setup.bash` 和 `/home/nvidia/surface_ws/install/local_setup.bash`。同机查看结果的终端使用相同 ROS 域；PC 参与实时通信时也设置域 33 和相同 RMW，并加载 PC 自己构建的 `surface_ws`。
 
@@ -250,3 +252,52 @@ export ROSDISTRO_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/rosdistro/index-
 ```
 
 确认没有 `ERROR`，并显示缓存更新成功与依赖检查通过，再继续第 5 节编译。该 `export` 只对当前终端有效；以后新终端执行 rosdep 更新前需重新设置，或手动在 `~/.bashrc` 中保留一行同样的设置。若镜像仍超时，先检查网络，不继续反复初始化或删除源码。
+
+## 10. 同步后 CMake 缓存或 JSON 索引报错
+
+2026-10-22 Nano 构建反馈：`f1_interfaces` 成功，`f1_nano_bridge` 随即提示缓存没有 `CMAKE_PROJECT_NAME`，并在 `_read_codemodel()` 的 `json.load()` 报 `JSONDecodeError: Expecting value: line 1 column 1`。
+
+这表明 colcon 读到的 CMake 缓存和生成索引无效；此处读取的是 `build/f1_nano_bridge/.cmake/api/v1/reply/index-*.json`，不是 UI 网络 JSON。可能来自误传 PC 生成目录、构建中断或文件写入异常，尚不能仅凭日志确定根因。仓库的桥接包 `CMakeLists.txt` 已包含 `project(f1_nano_bridge)`，不需要为这个错误再添加一次 `project()`。
+
+先停止本工作空间节点及其他构建进程。在 Nano 新终端只加载系统 ROS，不自动加载待重建的工作空间；若 `~/.bashrc` 自动 source 该工作空间，先注释该行再重新打开终端。
+
+在 **Nano** 执行以下命令。命令把三个生成目录移到工作空间外的备份目录，不改动 `src/`、地图或配置；如果之前是从 PC 复制整个工作空间，重新生成所有包可避免后续包继续使用异机缓存。
+
+```bash
+(
+  set -e
+  source /opt/ros/humble/setup.bash
+  cd /home/nvidia/surface_ws
+  test -s src/f1_nano_bridge/CMakeLists.txt
+  sed -n '1,12p' src/f1_nano_bridge/CMakeLists.txt
+  df -h .
+  df -i .
+
+  surface_cache_backup="$(mktemp -d /home/nvidia/surface_ws_build_backup.XXXXXX)"
+  for generated_dir in build install log; do
+    if [ -e "$generated_dir" ] || [ -L "$generated_dir" ]; then
+      mv -- "$generated_dir" "$surface_cache_backup/"
+    fi
+  done
+  printf '旧生成目录已备份到：%s\n' "$surface_cache_backup"
+
+  CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
+    colcon build --symlink-install --parallel-workers 1 \
+    --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
+)
+```
+
+开头应能看到 `project(f1_nano_bridge)`，磁盘空间和 inode 不应耗尽。若 `test -s` 失败或文件内容不完整，先按第 3 节重新同步源码；不要在不完整源码上继续构建。
+
+只有构建成功后，在运行终端加载并检查：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/nvidia/surface_ws/install/local_setup.bash
+ros2 pkg executables f1_nano_bridge
+ros2 launch f1_nano_bridge gateway.launch.py --show-args
+```
+
+[`--cmake-clean-cache`](https://colcon.readthedocs.io/en/main/reference/verb/build.html#cmake-specific-arguments) 只移除 `CMakeCache.txt`，不等于清空 `.cmake/api` 中的生成索引；本次两个位置都出现异常，因此采用备份整个生成目录的方法。
+
+如果重新生成后仍出现空 JSON，不要反复覆盖或清空缓存。保留新失败日志及上面的备份，检查 `df -h`、`df -i`，并查看 `log/latest_build/f1_nano_bridge/stderr.log` 和 `stdout_stderr.log`；必要时用 `journalctl -k -n 100 --no-pager` 检查 OOM 或文件系统 I/O 错误。Nano 重新构建的结果仍需实际执行确认，本说明未远程操作设备。
