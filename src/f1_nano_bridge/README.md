@@ -1,6 +1,6 @@
 # F1 统一桥接包 f1_nano_bridge
 
-原 ROS 包 `nano_bridge` 已更名为 `f1_nano_bridge`，工作空间更名为 `surface_ws`；已有安装先按[改名迁移说明](../../WORKSPACE_MIGRATION.md)重新构建。Python 模块仍为 `nano_ros_bridge`，原生桥节点 `/nano_bridge` 与 YAML 顶层键 `nano_bridge` 对应。
+原 ROS 包 `nano_bridge` 已更名为 `f1_nano_bridge`，工作空间更名为 `surface_ws`。当前 Nano 旧工作空间已删除，请按[从零部署指南](../../DEPLOY_NANO.md)传输源码、安装依赖并编译；[改名迁移说明](../../WORKSPACE_MIGRATION.md)只适用于仍保留旧目录的其他环境。Python 模块仍为 `nano_ros_bridge`，原生桥节点 `/nano_bridge` 与 YAML 顶层键 `nano_bridge` 对应。
 
 修订：2026-10-22。只适配 `firmware`（back2，协议 v2） 的版本2协议，固件不修改。实现独占串口、独立50 Hz发送、控制租约、停止屏障、CTRL状态及同串口原生IMU。Python模块为 `nano_ros_bridge`，与根目录旧 `nano_bridge` 区分。
 
@@ -17,6 +17,8 @@
 
 ## 从独立 IMU 包迁移
 
+此节只供旧包目录仍存在的环境使用。已清空的 Nano 直接执行从零部署流程。
+
 先结束本工作空间的桥接节点与构建/测试，同步新源码。在未加载旧 `install` 的新终端进入工作空间根目录，移走遗留的旧包源码和生成目录，再重新构建整个工作空间：
 
 ```bash
@@ -32,7 +34,7 @@ source /opt/ros/humble/setup.bash
 colcon build --symlink-install --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 ```
 
-PC 和 Nano 均需检查；仅覆盖同步源码会留下旧包。依赖其他驱动工作空间时，仍需在构建前加载其环境。上述命令适用于本项目默认的隔离安装布局。
+仅覆盖同步源码会留下旧包。上述命令适用于本项目默认的隔离安装布局；当前新部署使用系统 ROS 作为基础环境，项目包统一在 `surface_ws` 内构建。
 
 旧入口 `ros2 launch f1_imu_bridge imu.launch.py` 改为 `ros2 launch f1_nano_bridge imu.launch.py`，旧 `ros2 run f1_imu_bridge imu_bridge` 改为 `ros2 run f1_nano_bridge imu_bridge`。Python 导入改用 `nano_ros_bridge.imu.conversion` 或 `nano_ros_bridge.imu.node`。外部包若仍声明依赖 `f1_imu_bridge`，需改为 `f1_nano_bridge`。
 

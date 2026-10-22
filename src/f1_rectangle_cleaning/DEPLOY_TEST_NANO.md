@@ -1,8 +1,8 @@
 # Nano 同步与纯雷达验证步骤
 
-已有旧工作空间时，先完成[工作空间改名迁移](../../WORKSPACE_MIGRATION.md)，再按本文同步到 `surface_ws`。
+Nano 旧工作空间已全部删除，先按[Nano 从零部署指南](../../DEPLOY_NANO.md)完成环境、源码传输、编译和雷达驱动恢复。本文继续说明矩形任务的实景验证。
 
-更新：2026-10-21。按用户选择，本阶段使用纯雷达反馈，不引入 IMU 航向控制。
+更新：2026-10-22。按用户选择，本阶段使用纯雷达反馈，不引入 IMU 航向控制。
 本包当前没有 IMU 订阅，无需为此修改运行参数；保留其他包现有 IMU 功能。
 
 本轮目标：部署预览节点，验证真实墙距、墙面夹角和前方净空，并保存可回放数据。
@@ -26,31 +26,14 @@
 
 ## 1. PC：同步源码
 
-Nano 开机并接入同一网络；以下使用 `nvidia@192.168.1.188`，地址变化时替换。
-更新前结束旧的清洁节点和本工作空间的构建/测试，避免运行中加载新旧混合代码。
-此同步会更新五个包的源码，不会重启任何服务、启动 bridge、刷写固件或改变已运行 bridge 的参数。
-IMU 转换库已并入 `f1_nano_bridge` 的内部模块，不代表矩形任务使用 IMU。
+首次传输和后续更新都使用[从零部署指南第 3 节](../../DEPLOY_NANO.md#3-pc把源码和文档传到-nano)的同步命令，目标统一为 `/home/nvidia/surface_ws`。传输源码与文档，排除 PC 的构建产物。传输失败时先处理错误，不继续构建。
 
-在 PC 执行：
-
-```bash
-cd /home/bboss/new-nano/surface_ws
-ssh nvidia@192.168.1.188 'mkdir -p /home/nvidia/surface_ws/src'
-rsync -av --itemize-changes --backup \
-  --backup-dir="/home/nvidia/surface_ws/deploy_backups/$(date +%Y%m%d_%H%M%S)" \
-  --exclude='__pycache__/' --exclude='.pytest_cache/' --exclude='*.pyc' \
-  src/ nvidia@192.168.1.188:/home/nvidia/surface_ws/src/
-```
-
-仅传 `src/`，不传 PC 的 `build/ install/ log/`。没有使用 `--delete`；被覆盖的远端源码会放入带时间的备份目录。
-PC 和 Nano 都需要 `rsync`。遇到连接、同步失败先处理错误，不继续构建旧源码。
-
-本轮感知测试不用地图，不必重新建图或覆盖 Nano 原地图。后续定位使用已保存的 pbstream；如需在 Nano 留一份明确路径的副本，可在 PC 执行：
+本轮感知测试不用地图，不必先恢复地图。后续定位使用已保存的 pbstream；如需在 Nano 留一份明确路径的副本，可在 PC 执行：
 
 ```bash
 ssh nvidia@192.168.1.188 'mkdir -p /home/nvidia/surface_ws/maps/20261021_145054'
 rsync -av --ignore-existing \
-  ../backups/nano_maps/20261021_145054/ \
+  /home/bboss/new-nano/backups/nano_maps/20261021_145054/ \
   nvidia@192.168.1.188:/home/nvidia/surface_ws/maps/20261021_145054/
 ```
 
@@ -59,25 +42,16 @@ rsync -av --ignore-existing \
 
 ## 2. Nano：构建与离线测试
 
-登录 Nano，在新的构建终端执行；不要先 source 本工作空间旧的 install：
+先按[从零部署指南](../../DEPLOY_NANO.md)完成 rosdep 依赖安装和五包编译；只有构建成功后才继续。无需旧目录迁移，也不加载其他用户工作空间。
 
-首次从旧接口包升级时，先在 Nano 工作空间根目录按[统一接口迁移说明](../f1_interfaces/README.md#从旧接口包迁移)备份并移走旧接口包源码、build 和 install，再构建。上面的 rsync 不会删除遗留旧包；所有使用自定义接口的 PC/Nano 节点均需同步升级。
-原独立 IMU 包也需按[桥接包迁移说明](../f1_nano_bridge/README.md#从独立-imu-包迁移)移走，之后只构建统一的 `f1_nano_bridge`。
+在 Nano 新终端执行：
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /home/nvidia/ros2_ws/install/setup.bash
-cd /home/nvidia/surface_ws
-colcon list --names-only
-colcon build --symlink-install --parallel-workers 1 \
-  --packages-up-to f1_mapping_bringup f1_nano_bridge f1_rectangle_cleaning \
-  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
-```
-
-应能识别 `f1_interfaces`、`f1_nano_bridge` 和 `f1_rectangle_cleaning`，共五个包。依赖工作空间沿用现有 `/home/nvidia/ros2_ws`；只有构建成功后才继续。
-
-```bash
 source /home/nvidia/surface_ws/install/local_setup.bash
+export ROS_LOCALHOST_ONLY=1
+export ROS_DOMAIN_ID=173
+cd /home/nvidia/surface_ws
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ros2 run f1_rectangle_cleaning rectangle_demo
 colcon test --packages-select f1_rectangle_cleaning --return-code-on-test-failure
@@ -87,6 +61,7 @@ colcon test-result --test-result-base build/f1_rectangle_cleaning --verbose
 demo 应打印 A 接近、前进、停车、等待人工换边、B 接近、前进、停车、结束的序列。
 它只是合成反馈的状态机演示，不代表船体动力学仿真。当前测试包含 31 项纯逻辑、5 项 ROS 测试；colcon 汇总会加上两项 CTest 包装，显示 38 项。以零失败/零错误为准。
 ROS 测试使用独立 localhost 域和合成输入，不连接执行器。
+测试后关闭该测试终端，实景步骤另开终端，使用下面的域 33；不要沿用测试的 localhost 限制。
 
 ## 3. Nano：每个实景测试终端加载环境
 
@@ -94,13 +69,12 @@ ROS 测试使用独立 localhost 域和合成输入，不连接执行器。
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /home/nvidia/ros2_ws/install/setup.bash
 source /home/nvidia/surface_ws/install/local_setup.bash
 export ROS_DOMAIN_ID=33
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ```
 
-终端 A 检查既有雷达服务：
+先确认雷达驱动已按[部署指南](../../DEPLOY_NANO.md#8-实机雷达单独恢复驱动)恢复；终端 A 再检查服务：
 
 ```bash
 systemctl status pavo2-scan.service --no-pager

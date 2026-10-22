@@ -2,7 +2,7 @@
 
 本文对应 `surface_ws` 当前的 PAVO2 + Cartographer 2D 配置，默认在 Nano 上运行建图，在 PC 上按需查看地图。
 
-从旧 `f1_mapping_ws` 更新时，先完成[工作空间改名迁移](WORKSPACE_MIGRATION.md)，再执行下方的新路径命令。
+Nano 旧工作空间已删除，先按[Nano 从零部署指南](DEPLOY_NANO.md)重新传输、安装依赖和编译。
 首次部署先完成第 1 节；已部署并构建过的设备，每次从第 2 节开始。
 
 | 项目 | 当前使用值 |
@@ -26,49 +26,21 @@
 
 ## 1. 首次部署或源码更新后：同步与构建
 
-### 1.1 PC：同步建图包
+首次部署统一按 [DEPLOY_NANO.md](DEPLOY_NANO.md) 完成五个项目包的传输、依赖安装和编译。只加载系统 ROS `/opt/ros/humble`，Cartographer 由系统软件包提供。
 
-在 **PC 终端**执行。只同步纯雷达所需的配置包，不复制 PC 的 `build/`、`install/`、`log/`：
-
-```bash
-ssh nvidia@192.168.1.188 'mkdir -p /home/nvidia/surface_ws/src'
-rsync -av --delete --exclude='__pycache__/' --exclude='.pytest_cache/' \
-  /home/bboss/new-nano/surface_ws/src/f1_mapping_bringup/ \
-  nvidia@192.168.1.188:/home/nvidia/surface_ws/src/f1_mapping_bringup/
-```
-
-`--delete` 仅作用于目标的 `src/f1_mapping_bringup/`，用于移除旧融合源码；不要扩大到整个工作空间。
-
-### 1.2 Nano：检查依赖并构建
-
-登录 Nano：
-
-```bash
-ssh nvidia@192.168.1.188
-```
-
-在 **Nano 的新终端**中构建，避免先加载本工作空间旧的安装环境：
+完成后，在 Nano 检查：
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /home/nvidia/ros2_ws/install/setup.bash
+source /home/nvidia/surface_ws/install/local_setup.bash
 ros2 pkg executables cartographer_ros
 ros2 pkg prefix rmw_cyclonedds_cpp
-command -v colcon
+ros2 launch f1_mapping_bringup lidar_mapping.launch.py --show-args
 ```
 
-依赖检查应找到 `cartographer_node`，以及 `cartographer_occupancy_grid_node` 或 `occupancy_grid_node`。
-`/home/nvidia/ros2_ws` 是项目现有依赖工作空间；若目标机路径不同，替换为实际安装 Cartographer 的环境。
-任一步提示文件、包或命令不存在，先解决依赖或路径问题再继续。
+应找到 `cartographer_node` 及 `cartographer_occupancy_grid_node` 或 `occupancy_grid_node`。部署指南也说明了雷达驱动恢复：当前仓库不含 PAVO2 驱动，删除旧目录后不能假定原驱动服务仍可用。
 
-```bash
-cd /home/nvidia/surface_ws
-# 从旧版本更新时执行，仅清理本包的生成目录：
-rm -rf build/f1_mapping_bringup install/f1_mapping_bringup
-colcon build --symlink-install --packages-select f1_mapping_bringup
-```
-
-确认 `f1_mapping_bringup` 构建成功。日常启动不必重复同步和构建。
+后续修改源码时，重新执行部署指南中的同步、rosdep 与构建步骤；日常启动无需重复编译。
 
 ## 2. 每次启动：加载 Nano 环境
 
@@ -76,7 +48,6 @@ colcon build --symlink-install --packages-select f1_mapping_bringup
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /home/nvidia/ros2_ws/install/setup.bash
 source /home/nvidia/surface_ws/install/local_setup.bash
 export ROS_DOMAIN_ID=33
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
@@ -86,7 +57,7 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 ### 3.1 检查雷达服务
 
-雷达驱动由已有系统服务 `pavo2-scan.service` 提供，建图入口不会启动驱动。
+历史上雷达驱动由 `pavo2-scan.service` 提供。当前须先按[驱动恢复说明](DEPLOY_NANO.md#8-实机雷达单独恢复驱动)确认驱动已恢复、服务不再引用被删除路径；建图入口不会启动驱动。
 
 ```bash
 systemctl status pavo2-scan.service --no-pager
@@ -253,7 +224,7 @@ ls -lh "${mapping_snapshot}.pbstream" "${mapping_snapshot}.pgm" "${mapping_snaps
 | 现象 | 优先检查 |
 | --- | --- |
 | 找不到 `f1_mapping_bringup` | 是否在 Nano 构建成功，是否加载了新工作空间的 `install/local_setup.bash` |
-| 找不到 Cartographer 或相关可执行文件 | 旧依赖工作空间是否正确加载，`ros2 pkg executables cartographer_ros` 是否有输出 |
+| 找不到 Cartographer 或相关可执行文件 | 是否已安装 `ros-humble-cartographer-ros` 并加载 `/opt/ros/humble/setup.bash`，`ros2 pkg executables cartographer_ros` 是否有输出 |
 | `scan_check` 超时或话题没有发布者 | 雷达服务、域编号、DDS 环境；查看驱动日志 |
 | 提示等待 IMU | 是否加载了旧工作空间或自定义 Lua；确认使用本包 `pavo2_2d.lua` 且 `use_imu_data=false` |
 | 帧名不符或 TF 持续失败 | 消息实际帧是否为 `pavo2s_frame`，`base_to_lidar_planar` 是否运行，是否存在旧 SLAM 或其他 TF 发布者冲突 |

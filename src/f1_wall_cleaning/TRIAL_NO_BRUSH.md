@@ -16,6 +16,8 @@
 
 ## 同步和构建
 
+Nano 已删除旧工作空间，首次部署必须先按[从零部署指南](../../DEPLOY_NANO.md)传输并构建全部五个项目包、恢复雷达驱动。下面仅同步本包的命令用于完成首次部署后的增量更新。
+
 PC 上同步源码（Nano 地址变化时替换）：
 
 ```bash
@@ -27,7 +29,6 @@ Nano 的新终端构建：
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /home/nvidia/ros2_ws/install/setup.bash
 cd /home/nvidia/surface_ws
 colcon build --symlink-install --packages-up-to f1_wall_cleaning \
   --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
@@ -39,7 +40,6 @@ colcon build --symlink-install --packages-up-to f1_wall_cleaning \
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /home/nvidia/ros2_ws/install/setup.bash
 source /home/nvidia/surface_ws/install/local_setup.bash
 export ROS_DOMAIN_ID=33
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp

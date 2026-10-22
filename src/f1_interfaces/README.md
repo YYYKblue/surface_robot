@@ -16,6 +16,8 @@ Python 使用 `from f1_interfaces.msg import ActuatorCommand` 或 `from f1_inter
 
 ## 从旧接口包迁移
 
+Nano 已清空旧工作空间时不执行本节，按[从零部署指南](../../DEPLOY_NANO.md)直接创建并编译 `surface_ws`。以下仅供其他保留旧接口包的环境参考。
+
 原 `f1_bridge_interfaces` 和 `f1_wall_interfaces` 已合并到本包。消息字段、服务定义、话题名称和服务名称不变，但 ROS 类型名称变为 `f1_interfaces/msg/...` 和 `f1_interfaces/srv/...`。PC、Nano 及其他使用这些自定义接口的节点必须同步更新并重新构建，旧类型不能与新类型直接通信。历史 rosbag 中的旧类型也不会自动转换。
 
 首次更新旧工作空间时，先结束本工作空间的节点和构建/测试。在没有加载本工作空间旧 `install` 的新终端中，进入工作空间根目录，执行以下命令备份遗留源码与旧生成目录（适用于本项目默认的隔离安装布局）：

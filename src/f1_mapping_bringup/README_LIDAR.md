@@ -30,36 +30,18 @@ TF 的 z/roll/pitch=0 是二维建模约定，不代表实测高度或倾角。
 
 ## 同步与构建
 
-PC：
+Nano 旧工作空间已删除，首次部署请完整执行[从零部署指南](../../DEPLOY_NANO.md)，统一创建 `/home/nvidia/surface_ws`。Cartographer 通过系统软件包安装，五个项目包在该工作空间内构建。
 
-```bash
-rsync -av --delete --exclude='__pycache__/' --exclude='.pytest_cache/' \
-  /home/bboss/new-nano/surface_ws/src/f1_mapping_bringup/ \
-  nvidia@192.168.1.188:/home/nvidia/surface_ws/src/f1_mapping_bringup/
-```
-
-Nano 构建终端：
+部署完成后，另开 Nano 运行终端：
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /home/nvidia/ros2_ws/install/setup.bash
-cd /home/nvidia/surface_ws
-# 从旧版本更新时执行，仅清理本包的生成目录：
-rm -rf build/f1_mapping_bringup install/f1_mapping_bringup
-colcon build --symlink-install --packages-select f1_mapping_bringup
-colcon test --packages-select f1_mapping_bringup --return-code-on-test-failure
-colcon test-result --verbose
-```
-
-另开 Nano 终端，加载运行环境：
-
-```bash
-source /opt/ros/humble/setup.bash
-source /home/nvidia/ros2_ws/install/setup.bash
 source /home/nvidia/surface_ws/install/local_setup.bash
 export ROS_DOMAIN_ID=33
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ```
+
+后续更新源码仍使用部署指南中的同步和编译步骤。实机验证前先恢复 PAVO2 驱动，当前仓库没有附带驱动源码。
 
 ## 先检查实际回波
 
@@ -80,7 +62,7 @@ ros2 run f1_mapping_bringup scan_check --samples 100
 
 ## 启动纯雷达建图
 
-雷达服务保持现有 `pavo2-scan.service`；本入口只启动 SLAM，不重复启动雷达驱动。
+先确认 PAVO2 驱动与 `pavo2-scan.service` 已恢复、真实扫描可用；本入口只启动 SLAM，不启动雷达驱动。
 
 ```bash
 ros2 launch f1_mapping_bringup lidar_mapping.launch.py

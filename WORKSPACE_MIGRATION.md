@@ -1,5 +1,7 @@
 # 工作空间与桥接包改名
 
+**当前 Nano 已删除全部旧工作空间，不适用下面的目录迁移命令。请直接使用[Nano 从零部署指南](DEPLOY_NANO.md)。** 本文仅保留给其他仍有旧目录的环境作为历史迁移参考。新部署统一只使用 `surface_ws`。
+
 | 项目 | 原名称 | 新名称 |
 | --- | --- | --- |
 | PC 工作空间 | `/home/bboss/new-nano/f1_mapping_ws` | `/home/bboss/new-nano/surface_ws` |
@@ -8,7 +10,7 @@
 
 Python 模块仍为 `nano_ros_bridge`，原生桥节点仍为 `/nano_bridge`，配置文件顶层键仍为 `nano_bridge`。话题、服务、参数与执行器协议保持原样。
 
-PC 源码目录已改名。Nano 需要单独迁移和同步，下面命令供在对应设备上执行。
+PC 源码目录已改名。下面步骤仅适用于仍保留旧目录、已按[从零部署指南](DEPLOY_NANO.md)准备好系统 ROS 和工具的 Nano；不依赖其他已删除的用户工作空间。
 
 ## 1. Nano：移动旧工作空间
 
@@ -59,9 +61,6 @@ rsync -av --exclude='__pycache__/' --exclude='.pytest_cache/' --exclude='*.pyc' 
 
 ```bash
 source /opt/ros/humble/setup.bash
-if [ -f /home/nvidia/ros2_ws/install/setup.bash ]; then
-  source /home/nvidia/ros2_ws/install/setup.bash
-fi
 cd /home/nvidia/surface_ws
 colcon list --names-only
 colcon build --symlink-install --parallel-workers 1 \
