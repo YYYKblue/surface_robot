@@ -26,7 +26,7 @@ ros2 launch nano_bridge bridge.launch.py
 
 ```bash
 ros2 topic echo /f1/control_state
-ros2 interface show f1_bridge_interfaces/msg/ActuatorCommand
+ros2 interface show f1_interfaces/msg/ActuatorCommand
 ros2 service call /f1/stop std_srvs/srv/Trigger '{}'
 ```
 
@@ -43,7 +43,7 @@ ros2 launch nano_bridge bridge.launch.py \
 
 | 接口 | 类型与用途 |
 | --- | --- |
-| `/f1/actuator_command` | `f1_bridge_interfaces/ActuatorCommand`，方向、档位、轮组、辅助目标及期限 |
+| `/f1/actuator_command` | `f1_interfaces/ActuatorCommand`，方向、档位、轮组、辅助目标及期限 |
 | `/f1/acquire_control` | `AcquireControl`，READY后授予唯一令牌 |
 | `/f1/release_control` | `ReleaseControl`，仅持有者令牌可撤销自己的控制 |
 | `/f1/stop` | `std_srvs/Trigger`，撤销Nano授权并请求STOP，不能覆盖RC |

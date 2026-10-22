@@ -12,8 +12,8 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from std_srvs.srv import Trigger
 from sensor_msgs.msg import Imu
-from f1_bridge_interfaces.msg import ActuatorCommand, ControlState
-from f1_bridge_interfaces.srv import AcquireControl
+from f1_interfaces.msg import ActuatorCommand, ControlState
+from f1_interfaces.srv import AcquireControl
 from nano_ros_bridge.node import Bridge
 
 

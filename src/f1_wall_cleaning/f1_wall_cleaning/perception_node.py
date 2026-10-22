@@ -7,7 +7,7 @@ from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker
 from std_srvs.srv import Trigger
-from f1_wall_interfaces.msg import WallObservation
+from f1_interfaces.msg import WallObservation
 
 from .perception import Perception, Scan
 from .ros_support import configuration, stamp_ns, to_observation_message

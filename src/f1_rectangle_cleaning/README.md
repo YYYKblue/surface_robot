@@ -93,7 +93,7 @@ ros2 service call /rectangle_cleaning/cancel std_srvs/srv/Trigger '{}'
 ros2 service call /rectangle_cleaning/confirm_second_wall std_srvs/srv/Trigger '{}'
 ```
 
-`command_preview` 使用 `f1_bridge_interfaces/ActuatorCommand`，token 始终为空，绝不发布到 `/f1/actuator_command`，也不申请 bridge 租约。
+`command_preview` 使用 `f1_interfaces/ActuatorCommand`，token 始终为空，绝不发布到 `/f1/actuator_command`，也不申请 bridge 租约。
 不要通过 remap 把预览接到执行器。状态为 JSON，包含 phase/reason、反馈错误、逻辑侧推、完成段及硬件关闭标记。
 主轮脉冲使用固定 `direction_until`；脉冲结束后如仍需侧推，必须用新鲜反馈生成新的主轮 STOP + 第五路组合指令。
 

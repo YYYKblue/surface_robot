@@ -12,8 +12,7 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
-from f1_wall_interfaces.msg import WallObservation
-from f1_bridge_interfaces.msg import ActuatorCommand
+from f1_interfaces.msg import ActuatorCommand, WallObservation
 from f1_wall_cleaning.ros_support import stamp, stamp_ns, from_observation_message
 
 from .config import Config

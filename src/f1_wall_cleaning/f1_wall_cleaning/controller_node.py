@@ -6,9 +6,8 @@ from rclpy.clock import Clock, ClockType
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from std_srvs.srv import Trigger
-from f1_wall_interfaces.msg import WallObservation, EffortPreview, CleaningStatus
-from f1_bridge_interfaces.msg import ActuatorCommand, ControlState
-from f1_bridge_interfaces.srv import AcquireControl, ReleaseControl
+from f1_interfaces.msg import ActuatorCommand, ControlState, WallObservation, EffortPreview, CleaningStatus
+from f1_interfaces.srv import AcquireControl, ReleaseControl
 
 from .control import Follower
 from .ros_support import configuration, from_observation_message, stamp, stamp_ns

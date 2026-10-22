@@ -2,7 +2,7 @@ from dataclasses import fields
 
 from builtin_interfaces.msg import Time
 from rcl_interfaces.msg import ParameterDescriptor
-from f1_wall_interfaces.msg import WallObservation
+from f1_interfaces.msg import WallObservation
 
 from .config import Config
 from .perception import Observation

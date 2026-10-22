@@ -15,8 +15,8 @@ from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from std_srvs.srv import Trigger
-from f1_bridge_interfaces.msg import ActuatorCommand, ControlState
-from f1_bridge_interfaces.srv import AcquireControl, ReleaseControl
+from f1_interfaces.msg import ActuatorCommand, ControlState
+from f1_interfaces.srv import AcquireControl, ReleaseControl
 from nano_ros_bridge.session import Session, Command
 from nano_ros_bridge.protocol import Control
 from f1_wall_cleaning.config import Config

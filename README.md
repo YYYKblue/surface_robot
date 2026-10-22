@@ -8,9 +8,9 @@
 用于 PAVO2 纯雷达建图的 ROS 2 Humble 工作空间，另含硬件桥与清洁任务功能包。
 
 现已新增原生 ROS F103 硬件桥 [`nano_bridge`](src/nano_bridge/README.md) 和
-`f1_bridge_interfaces`，适配 `firmware`（back2，协议 v2），包含二进制控制、租约、CTRL 与 IMU。
+统一接口包 [`f1_interfaces`](src/f1_interfaces/README.md)，适配 `firmware`（back2，协议 v2），包含二进制控制、租约、CTRL 与 IMU。
 新桥默认不打开串口；与旧网关及旧 ZMQ IMU 发布节点不能同时使用。
-现已新增 [`f1_wall_cleaning`](src/f1_wall_cleaning/README.md) 和 `f1_wall_interfaces`，实现左侧单墙感知、back2 互斥方向脉冲控制和租约任务接口。默认仅观测/预览，未知几何参数阻止启动运动。固定地图定位、完整池边路线、自动过角和 UI→ROS 适配仍按清洁方案后续实施。
+现已新增 [`f1_wall_cleaning`](src/f1_wall_cleaning/README.md)，共用 `f1_interfaces`，实现左侧单墙感知、back2 互斥方向脉冲控制和租约任务接口。默认仅观测/预览，未知几何参数阻止启动运动。固定地图定位、完整池边路线、自动过角和 UI→ROS 适配仍按清洁方案后续实施。
 建图包仅保留纯雷达模式；硬件桥的 IMU 遥测不参与建图。
 
 基于已保存地图和第五路横向侧推的新思路，新增独立功能包 [f1_rectangle_cleaning](src/f1_rectangle_cleaning/README.md)，负责矩形水池两条长边任务。当前提供无输出状态机、侧推组合指令预览、停车反馈检查及人工换边入口；固定地图定位输入链路、实机输出与自动换边尚未实现。设计与地图示意见 [两条长边刷洗设计](docs/long_wall_plan/DESIGN.md)。
@@ -37,6 +37,8 @@
 ```
 
 在未加载本工作空间安装环境的终端中构建：
+
+从旧版本更新时，先按[接口迁移说明](src/f1_interfaces/README.md#从旧接口包迁移)移走旧接口包源码与生成目录，再重新构建；所有自定义接口统一由 `f1_interfaces` 提供。
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -66,7 +68,7 @@ colcon build --symlink-install
 ```
 
 仅创建空目录时，构建显示 `0 packages finished`。
-同步 PC 的七个功能包后再次构建，应包含 `f1_mapping_bringup`、`f1_imu_bridge`、`f1_bridge_interfaces`、`nano_bridge`、`f1_wall_interfaces`、`f1_wall_cleaning` 和 `f1_rectangle_cleaning`。
+同步 PC 的六个功能包后再次构建，应包含 `f1_mapping_bringup`、`f1_imu_bridge`、`f1_interfaces`、`nano_bridge`、`f1_wall_cleaning` 和 `f1_rectangle_cleaning`。
 
 构建完成后，在 Nano 的另一个终端中加载：
 
@@ -89,15 +91,16 @@ rsync -av --delete --exclude='__pycache__/' --exclude='.pytest_cache/' \
   /home/bboss/new-nano/f1_mapping_ws/src/f1_mapping_bringup/ \
   nvidia@192.168.1.188:/home/nvidia/f1_mapping_ws/src/f1_mapping_bringup/
 scp -r /home/bboss/new-nano/f1_mapping_ws/src/f1_imu_bridge \
-  /home/bboss/new-nano/f1_mapping_ws/src/f1_bridge_interfaces \
+  /home/bboss/new-nano/f1_mapping_ws/src/f1_interfaces \
   /home/bboss/new-nano/f1_mapping_ws/src/nano_bridge \
-  /home/bboss/new-nano/f1_mapping_ws/src/f1_wall_interfaces \
   /home/bboss/new-nano/f1_mapping_ws/src/f1_wall_cleaning \
   /home/bboss/new-nano/f1_mapping_ws/src/f1_rectangle_cleaning \
   nvidia@192.168.1.188:/home/nvidia/f1_mapping_ws/src/
 ```
 
 在 Nano 的构建终端中执行：
+
+首次升级统一接口包前，也要在 Nano 按[接口迁移说明](src/f1_interfaces/README.md#从旧接口包迁移)移走遗留旧包，再执行以下构建。同步源码不会自动删除旧接口包。
 
 ```bash
 source /opt/ros/humble/setup.bash
