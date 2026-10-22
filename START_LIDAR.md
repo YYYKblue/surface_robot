@@ -1,13 +1,15 @@
 # 纯雷达建图启动步骤
 
-本文对应 `f1_mapping_ws` 当前的 PAVO2 + Cartographer 2D 配置，默认在 Nano 上运行建图，在 PC 上按需查看地图。
+本文对应 `surface_ws` 当前的 PAVO2 + Cartographer 2D 配置，默认在 Nano 上运行建图，在 PC 上按需查看地图。
+
+从旧 `f1_mapping_ws` 更新时，先完成[工作空间改名迁移](WORKSPACE_MIGRATION.md)，再执行下方的新路径命令。
 首次部署先完成第 1 节；已部署并构建过的设备，每次从第 2 节开始。
 
 | 项目 | 当前使用值 |
 | --- | --- |
 | Nano 登录地址 | `nvidia@192.168.1.188`，若地址已变更请替换 |
-| Nano 工作空间 | `/home/nvidia/f1_mapping_ws` |
-| PC 工作空间 | `/home/bboss/new-nano/f1_mapping_ws` |
+| Nano 工作空间 | `/home/nvidia/surface_ws` |
+| PC 工作空间 | `/home/bboss/new-nano/surface_ws` |
 | ROS | ROS 2 Humble |
 | ROS 通信环境 | `ROS_DOMAIN_ID=33`、`RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` |
 | 雷达输入 | `/pavo2_scan`，类型 `sensor_msgs/msg/LaserScan` |
@@ -29,10 +31,10 @@
 在 **PC 终端**执行。只同步纯雷达所需的配置包，不复制 PC 的 `build/`、`install/`、`log/`：
 
 ```bash
-ssh nvidia@192.168.1.188 'mkdir -p /home/nvidia/f1_mapping_ws/src'
+ssh nvidia@192.168.1.188 'mkdir -p /home/nvidia/surface_ws/src'
 rsync -av --delete --exclude='__pycache__/' --exclude='.pytest_cache/' \
-  /home/bboss/new-nano/f1_mapping_ws/src/f1_mapping_bringup/ \
-  nvidia@192.168.1.188:/home/nvidia/f1_mapping_ws/src/f1_mapping_bringup/
+  /home/bboss/new-nano/surface_ws/src/f1_mapping_bringup/ \
+  nvidia@192.168.1.188:/home/nvidia/surface_ws/src/f1_mapping_bringup/
 ```
 
 `--delete` 仅作用于目标的 `src/f1_mapping_bringup/`，用于移除旧融合源码；不要扩大到整个工作空间。
@@ -60,7 +62,7 @@ command -v colcon
 任一步提示文件、包或命令不存在，先解决依赖或路径问题再继续。
 
 ```bash
-cd /home/nvidia/f1_mapping_ws
+cd /home/nvidia/surface_ws
 # 从旧版本更新时执行，仅清理本包的生成目录：
 rm -rf build/f1_mapping_bringup install/f1_mapping_bringup
 colcon build --symlink-install --packages-select f1_mapping_bringup
@@ -75,7 +77,7 @@ colcon build --symlink-install --packages-select f1_mapping_bringup
 ```bash
 source /opt/ros/humble/setup.bash
 source /home/nvidia/ros2_ws/install/setup.bash
-source /home/nvidia/f1_mapping_ws/install/local_setup.bash
+source /home/nvidia/surface_ws/install/local_setup.bash
 export ROS_DOMAIN_ID=33
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ```
@@ -131,7 +133,7 @@ ros2 node list
 
 首次启动前若已出现 `/cartographer_node` 或 `/cartographer_occupancy_grid_node`，
 先确认是否已经有一套建图在运行。需要重开时，先退出原启动终端中的建图。
-若是旧服务自动启动的实例，先确认对应服务再停止；旧链路切换见[项目说明](../README.md#旧链路切换与回滚)。
+若是旧服务自动启动的实例，先确认对应服务再停止。旧硬件桥的兼容性与串口占用限制见[桥接包说明](src/f1_nano_bridge/README.md#与上一版的变化)。
 避免多套节点同时发布相同地图和 TF。
 
 ## 4. Nano 终端 A：启动纯雷达建图
@@ -189,7 +191,7 @@ PC 与 Nano 应处于能够进行 ROS 2 DDS 通信的网络中。PC 已构建安
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /home/bboss/new-nano/f1_mapping_ws/install/local_setup.bash
+source /home/bboss/new-nano/surface_ws/install/local_setup.bash
 export ROS_DOMAIN_ID=33
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 rviz2 -d "$(ros2 pkg prefix --share f1_mapping_bringup)/rviz/mapping.rviz"
@@ -207,8 +209,8 @@ PC 只运行 RViz，建图仍由 Nano 上的终端 A 运行。PC 环境也需要
 ### 6.1 保存 Cartographer 状态
 
 ```bash
-mkdir -p /home/nvidia/f1_mapping_ws/maps
-mapping_snapshot="/home/nvidia/f1_mapping_ws/maps/lidar_$(date +%Y%m%d_%H%M%S)"
+mkdir -p /home/nvidia/surface_ws/maps
+mapping_snapshot="/home/nvidia/surface_ws/maps/lidar_$(date +%Y%m%d_%H%M%S)"
 ros2 service call /write_state cartographer_ros_msgs/srv/WriteState \
   "{filename: '${mapping_snapshot}.pbstream', include_unfinished_submaps: true}"
 ls -lh "${mapping_snapshot}.pbstream"

@@ -20,6 +20,6 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <test_depend>ament_cmake_pytest</test_depend>
-  <test_depend>nano_bridge</test_depend>
+  <test_depend>f1_nano_bridge</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

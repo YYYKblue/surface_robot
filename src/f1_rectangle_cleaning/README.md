@@ -49,7 +49,7 @@ SHA256：`1d29a0090f852fba211221162a5a080f37aa20989995ef8e598233a123d19f3a`。
 ## 构建和离线运行
 
 ```bash
-cd /home/bboss/new-nano/f1_mapping_ws
+cd /home/bboss/new-nano/surface_ws
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-up-to f1_rectangle_cleaning
 source install/local_setup.bash
@@ -101,7 +101,7 @@ ros2 service call /rectangle_cleaning/confirm_second_wall std_srvs/srv/Trigger '
 
 1. 接入保存的 pbstream 固定地图定位与连续局部速度估计，核对 A/B 身份、时间戳和不确定度；先跑无输出实景/回放。
 2. 记录第五路 ROS 正负号、向左/向右效果，以及主轮前进 + 侧推组合的实际偏航和停车数据。
-3. 在本包增加硬件输出适配层，沿用 `nano_bridge` 的唯一租约、时间有效期、RC 接管和失联停止合同；先验证 A 单段，不开刷。不要并行启动旧 `wall_controller`。
+3. 在本包增加硬件输出适配层，沿用 `f1_nano_bridge` 的唯一租约、时间有效期、RC 接管和失联停止合同；先验证 A 单段，不开刷。不要并行启动旧 `wall_controller`。
 4. 增加 `MOVE_INWARD / TURN_180 / APPROACH_B` 自动换边实现，必须有完整扫掠空间与连续运动反馈；不能把旧感知的小角度转向标志当作掉头许可。
 5. 最后接入压缩窗口、刷盘负载下的控制和清洁效果验收。
 

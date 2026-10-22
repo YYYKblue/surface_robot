@@ -1,6 +1,6 @@
 # 左侧单墙清洁：back2 分步控制
 
-修订：2026-10-21。适配 `firmware`（back2，协议 v2） 和v2 ROS `nano_bridge`，固件保持只读。左刷、纵向推进器、贴墙池壁可见为用户已确认条件；船体/支架/刷头几何及25%最低档动力学仍需实测。
+修订：2026-10-21。适配 `firmware`（back2，协议 v2） 和v2 ROS `f1_nano_bridge`，固件保持只读。左刷、纵向推进器、贴墙池壁可见为用户已确认条件；船体/支架/刷头几何及25%最低档动力学仍需实测。
 
 ## 当前实现
 
@@ -41,7 +41,7 @@
 
 ```bash
 source /opt/ros/humble/setup.bash
-cd /home/bboss/new-nano/f1_mapping_ws
+cd /home/bboss/new-nano/surface_ws
 colcon build --symlink-install --packages-up-to f1_wall_cleaning \
   --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 source install/local_setup.bash
@@ -95,7 +95,7 @@ ros2 launch f1_wall_cleaning wall_cleaning.launch.py \
 
 旧low_thrust_calibrated不复用。需在低风险开阔环境先做标定，不能为了开始任务直接勾选。初始脉冲、增益和0.08 rad角度上界未验收。转向检查不构成完整三维扫掠规划；最低档或盲区不满足时保留暂停，不声称稳定贴墙。
 
-实机启用需按 [bridge说明](../nano_bridge/README.md) 确认板上back2、方向与串口，单独启动桥；随后：
+实机启用需按 [bridge说明](../f1_nano_bridge/README.md) 确认板上back2、方向与串口，单独启动桥；随后：
 
 ```bash
 ros2 launch f1_wall_cleaning wall_cleaning.launch.py \
@@ -108,9 +108,9 @@ ros2 launch f1_wall_cleaning wall_cleaning.launch.py \
 
 ```bash
 source /opt/ros/humble/setup.bash
-cd /home/bboss/new-nano/f1_mapping_ws
+cd /home/bboss/new-nano/surface_ws
 source install/local_setup.bash
-colcon test --packages-select nano_bridge f1_wall_cleaning --return-code-on-test-failure
+colcon test --packages-select f1_nano_bridge f1_wall_cleaning --return-code-on-test-failure
 colcon test-result --test-result-base build/f1_wall_cleaning --verbose
 ```
 

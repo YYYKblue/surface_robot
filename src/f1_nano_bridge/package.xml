@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>nano_bridge</name>
+  <name>f1_nano_bridge</name>
   <version>0.1.0</version>
   <description>F1 serial control and IMU bridges, with shared IMU conversion and legacy ZMQ input.</description>
   <maintainer email="bboss@example.com">bboss</maintainer>

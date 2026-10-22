@@ -27,7 +27,7 @@
 复现（PC 离线，无 ROS/串口输出；需要 Pillow、NumPy、OpenCV、PyYAML 和 Matplotlib）：
 
 ```bash
-cd /home/bboss/new-nano/f1_mapping_ws
+cd /home/bboss/new-nano/surface_ws
 MPLCONFIGDIR=/tmp/f1-map-matplotlib /usr/bin/python3 tools/preview_long_wall_route.py \
   ../backups/nano_maps/20261021_145054/lidar_20261021_145054.yaml \
   --output-dir docs/long_wall_plan

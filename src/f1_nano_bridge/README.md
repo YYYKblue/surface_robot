@@ -1,8 +1,10 @@
-# F1 统一桥接包 nano_bridge
+# F1 统一桥接包 f1_nano_bridge
 
-修订：2026-10-21。只适配 `firmware`（back2，协议 v2） 的版本2协议，固件不修改。实现独占串口、独立50 Hz发送、控制租约、停止屏障、CTRL状态及同串口原生IMU。Python模块为 `nano_ros_bridge`，与根目录旧 `nano_bridge` 区分。
+原 ROS 包 `nano_bridge` 已更名为 `f1_nano_bridge`，工作空间更名为 `surface_ws`；已有安装先按[改名迁移说明](../../WORKSPACE_MIGRATION.md)重新构建。Python 模块仍为 `nano_ros_bridge`，原生桥节点 `/nano_bridge` 与 YAML 顶层键 `nano_bridge` 对应。
 
-2026-10-22：原 `f1_imu_bridge` 已并入本包，工作空间只保留一个桥接功能包 `nano_bridge`。本包负责设备通信、协议转换与 ROS 桥接；消息/服务定义统一在 `f1_interfaces`，清洁任务仍由对应业务包实现。
+修订：2026-10-22。只适配 `firmware`（back2，协议 v2） 的版本2协议，固件不修改。实现独占串口、独立50 Hz发送、控制租约、停止屏障、CTRL状态及同串口原生IMU。Python模块为 `nano_ros_bridge`，与根目录旧 `nano_bridge` 区分。
+
+2026-10-22：原 `f1_imu_bridge` 已并入本包，工作空间只保留一个桥接功能包 `f1_nano_bridge`。本包负责设备通信、协议转换与 ROS 桥接；消息/服务定义统一在 `f1_interfaces`，清洁任务仍由对应业务包实现。
 
 | 模块或入口 | 职责 |
 | --- | --- |
@@ -32,7 +34,7 @@ colcon build --symlink-install --cmake-args -DPython3_EXECUTABLE=/usr/bin/python
 
 PC 和 Nano 均需检查；仅覆盖同步源码会留下旧包。依赖其他驱动工作空间时，仍需在构建前加载其环境。上述命令适用于本项目默认的隔离安装布局。
 
-旧入口 `ros2 launch f1_imu_bridge imu.launch.py` 改为 `ros2 launch nano_bridge imu.launch.py`，旧 `ros2 run f1_imu_bridge imu_bridge` 改为 `ros2 run nano_bridge imu_bridge`。Python 导入改用 `nano_ros_bridge.imu.conversion` 或 `nano_ros_bridge.imu.node`。外部包若仍声明依赖 `f1_imu_bridge`，需改为 `nano_bridge`。
+旧入口 `ros2 launch f1_imu_bridge imu.launch.py` 改为 `ros2 launch f1_nano_bridge imu.launch.py`，旧 `ros2 run f1_imu_bridge imu_bridge` 改为 `ros2 run f1_nano_bridge imu_bridge`。Python 导入改用 `nano_ros_bridge.imu.conversion` 或 `nano_ros_bridge.imu.node`。外部包若仍声明依赖 `f1_imu_bridge`，需改为 `f1_nano_bridge`。
 
 ## 与上一版的变化
 
@@ -47,11 +49,11 @@ PC 和 Nano 均需检查；仅覆盖同步源码会留下旧包。依赖其他�
 
 ```bash
 source /opt/ros/humble/setup.bash
-cd /home/bboss/new-nano/f1_mapping_ws
+cd /home/bboss/new-nano/surface_ws
 colcon build --symlink-install --packages-up-to f1_wall_cleaning \
   --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 source install/local_setup.bash
-ros2 launch nano_bridge bridge.launch.py
+ros2 launch f1_nano_bridge bridge.launch.py
 ```
 
 默认serial_enabled=false、motion_enabled=false，不开串口，不发硬件字节。参数只读且拒绝仿真时间。默认配置在 `config/bridge.yaml`，通过 `config:=/absolute/path/bridge.yaml` 使用运行副本。
@@ -65,7 +67,7 @@ ros2 service call /f1/stop std_srvs/srv/Trigger '{}'
 确认板上back2且其他串口消费者已停用后，`serial_enabled:=true` 可建立会话。此模式会发送STOP/辅助关闭并完成300 ms握手，仍不能申请运动租约；它不是被动监听。实机方向确认后才显式使用：
 
 ```bash
-ros2 launch nano_bridge bridge.launch.py \
+ros2 launch f1_nano_bridge bridge.launch.py \
   serial_enabled:=true motion_enabled:=true direction_confirmed:=true
 ```
 
@@ -139,18 +141,25 @@ IMU格式未改，要求mask=6，orientation仍标记不可用；时间为主机
 
 ```bash
 source /opt/ros/humble/setup.bash
-cd /home/bboss/new-nano/f1_mapping_ws
+cd /home/bboss/new-nano/surface_ws
 source install/local_setup.bash
-colcon test --packages-select nano_bridge f1_wall_cleaning --return-code-on-test-failure
-colcon test-result --test-result-base build/nano_bridge --verbose
+colcon test --packages-select f1_nano_bridge f1_wall_cleaning --return-code-on-test-failure
+colcon test-result --test-result-base build/f1_nano_bridge --verbose
 colcon test-result --test-result-base build/f1_wall_cleaning --verbose
 ```
 
 需要cc、pytest、pyserial、ROS Humble及只读back2源码；`F1_FIRMWARE_DIR`可覆盖默认固件目录。测试库编译到临时目录。实际运行无需携带固件源码。
 
-合并后 `nano_bridge` 测试还包含 IMU 转换和旧 ZMQ→ROS 回环。旧 ZMQ 入口及回环测试需要 `python3-zmq`；缺少此依赖时回环测试会 skipped，原生串口桥与 IMU 转换模块可独立导入。
+合并后 `f1_nano_bridge` 测试还包含 IMU 转换和旧 ZMQ→ROS 回环。旧 ZMQ 入口及回环测试需要 `python3-zmq`；缺少此依赖时回环测试会 skipped，原生串口桥与 IMU 转换模块可独立导入。
 
-本轮覆盖v2参考帧、方向/档位/轮组、非法输入、CTRL、实际固件C的45种组合、v1拒绝、冲突辅助语义、26项固件原有回归、绝对脉冲截止、期限/停止屏障/RC、PTY及ROS默认禁用。最终结果见本文件末尾验证记录。不构建目标板HEX，不替代船体方向、最低档动力学、跨机DDS或水上验收。
+测试覆盖v2参考帧、方向/档位/轮组、非法输入、CTRL、实际固件C的45种组合、v1拒绝、冲突辅助语义、26项固件原有回归、绝对脉冲截止、期限/停止屏障/RC、PTY及ROS默认禁用。当前和历史结果分别记录如下。不构建目标板HEX，不替代船体方向、最低档动力学、跨机DDS或水上验收。
+
+### 2026-10-22 合并、改名与 ZMQ 补测记录
+
+- `surface_ws` 五个包全新构建通过，`f1_nano_bridge` 的两个启动入口和安装路径检查通过。
+- 本包现有 pytest 结果为 **72 项通过、0 失败、0 错误、0 跳过**：协议23、会话15、固件互通6、PTY/时钟3、ROS5、IMU转换19、ZMQ回环1。
+- 完整回归时 ZMQ 回环因缺少依赖跳过；安装 PyZMQ 22.3.0 / ZeroMQ 4.3.4 后已单独补跑通过，模拟数据正确转换为 ROS IMU，无输入时不发布伪造样本。
+- 结果来自本机测试，没有连接实际硬件或部署到 Nano。全工作空间结果见[工作空间验证记录](../../README.md#2026-10-22-本地验证记录)，复现命令见 [ZMQ 补测说明](IMU.md#补跑-zmq-回环测试)。
 
 ### 2026-10-21 back2 验证记录
 

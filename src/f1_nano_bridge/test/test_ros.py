@@ -84,7 +84,7 @@ def test_ros_state_stop_and_unauthorized_commands():
 
 def test_default_launch_and_group_sigint():
     process = subprocess.Popen(
-        ["ros2", "launch", "nano_bridge", "bridge.launch.py"],
+        ["ros2", "launch", "f1_nano_bridge", "bridge.launch.py"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
     try:
         time.sleep(1.5)
@@ -106,7 +106,7 @@ def test_default_launch_and_group_sigint():
     (["firmware_profile:=old"], "unsupported firmware profile"),
 ])
 def test_bad_startup_configuration_rejected_before_serial(parameters, reason):
-    command = ["ros2", "run", "nano_bridge", "f1_bridge", "--ros-args"]
+    command = ["ros2", "run", "f1_nano_bridge", "f1_bridge", "--ros-args"]
     for parameter in parameters:
         command += ["-p", parameter]
     result = subprocess.run(command, capture_output=True, text=True, timeout=5)

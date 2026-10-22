@@ -1,4 +1,6 @@
-# F1 Cartographer 2D 工作空间
+# surface_ws ROS 2 工作空间
+
+工作空间原名 `f1_mapping_ws`，现为 `surface_ws`；桥接功能包原名 `nano_bridge`，现为 `f1_nano_bridge`。已有 PC/Nano 安装请先阅读[改名迁移说明](WORKSPACE_MIGRATION.md)，再执行本文的新路径命令。
 
 > 本仓库根目录即 ROS 工作空间，包含 `src/`、构建说明和配置，不包含固件、旧网关或桌面 UI。克隆后直接在仓库根目录运行 colcon。`build/`、`install/`、`log/` 和缓存不纳入版本控制。
 >
@@ -7,7 +9,7 @@
 
 用于 PAVO2 纯雷达建图的 ROS 2 Humble 工作空间，另含硬件桥与清洁任务功能包。
 
-现已新增原生 ROS F103 硬件桥 [`nano_bridge`](src/nano_bridge/README.md) 和
+现已新增原生 ROS F103 硬件桥 [`f1_nano_bridge`](src/f1_nano_bridge/README.md) 和
 统一接口包 [`f1_interfaces`](src/f1_interfaces/README.md)，适配 `firmware`（back2，协议 v2），包含二进制控制、租约、CTRL 与 IMU。
 新桥默认不打开串口；与旧网关及旧 ZMQ IMU 发布节点不能同时使用。
 现已新增 [`f1_wall_cleaning`](src/f1_wall_cleaning/README.md)，共用 `f1_interfaces`，实现左侧单墙感知、back2 互斥方向脉冲控制和租约任务接口。默认仅观测/预览，未知几何参数阻止启动运动。固定地图定位、完整池边路线、自动过角和 UI→ROS 适配仍按清洁方案后续实施。
@@ -27,23 +29,41 @@
 原联合入口、联合 Lua、联合外参及加载代码已删除。
 算法讲解见 [结合代码理解 Cartographer](src/f1_mapping_bringup/CARTOGRAPHER_PRINCIPLES.md)。
 使用步骤与当前验证边界见 [功能包说明](src/f1_mapping_bringup/README.md)。
-`src/nano_bridge` 统一管理桥接功能，内部 `nano_ros_bridge.imu` 保留旧 ZMQ 接入节点和共用的纯 IMU 转换库；原生桥直接从串口发布 IMU。
-旧链路历史说明见 [IMU 接入说明](src/nano_bridge/IMU.md)，当前固件启动以原生串口桥说明为准。
+`src/f1_nano_bridge` 统一管理桥接功能，内部 `nano_ros_bridge.imu` 保留旧 ZMQ 接入节点和共用的纯 IMU 转换库；原生桥直接从串口发布 IMU。
+旧链路历史说明见 [IMU 接入说明](src/f1_nano_bridge/IMU.md)，当前固件启动以原生串口桥说明为准。
+
+## 2026-10-22 本地验证记录
+
+接口合并、桥接包合并及改名完成后，已在 `/home/bboss/new-nano/surface_ws` 全新构建五个功能包，并验证新包索引、安装符号链接和两个桥接 launch 的参数入口。
+
+全工作空间回归后，安装 `python3-zmq` 并补跑此前跳过的 `imu_transport`，结果通过。按各包 pytest XML 汇总，当前保留的测试结果如下（不计 CTest 包装用例）：
+
+| 功能包 | 通过 | 失败/错误 | 跳过 |
+| --- | ---: | ---: | ---: |
+| `f1_mapping_bringup` | 22 | 0 | 0 |
+| `f1_nano_bridge` | 72 | 0 | 0 |
+| `f1_wall_cleaning` | 70 | 0 | 0 |
+| `f1_rectangle_cleaning` | 36 | 0 | 0 |
+| 合计 | 200 | 0 | 0 |
+
+`f1_interfaces` 已构建通过，无独立 pytest 用例。以上结果由完整回归与随后单项 ZMQ 补测组成；`colcon test-result` 还统计 CTest 包装记录，其汇总数会随单项重跑变化，不等同于独立测试数。
+
+本地 ZMQ 环境为 PyZMQ 22.3.0、ZeroMQ 4.3.4。回环测试使用 localhost、随机端口及模拟 IMU 数据，没有连接硬件；本次没有向 Nano 同步或部署。补测命令见 [IMU 说明](src/f1_nano_bridge/IMU.md#补跑-zmq-回环测试)。
 
 ## PC 路径
 
 ```text
-/home/bboss/new-nano/f1_mapping_ws
+/home/bboss/new-nano/surface_ws
 ```
 
 在未加载本工作空间安装环境的终端中构建：
 
 从旧版本更新时，先按[接口迁移说明](src/f1_interfaces/README.md#从旧接口包迁移)移走旧接口包源码与生成目录，再重新构建；所有自定义接口统一由 `f1_interfaces` 提供。
-原独立 IMU 包也已合并，需按[桥接包迁移说明](src/nano_bridge/README.md#从独立-imu-包迁移)移走旧包；桥接功能统一由 `nano_bridge` 提供。
+原独立 IMU 包也已合并，需按[桥接包迁移说明](src/f1_nano_bridge/README.md#从独立-imu-包迁移)移走旧包；桥接功能统一由 `f1_nano_bridge` 提供。
 
 ```bash
 source /opt/ros/humble/setup.bash
-cd /home/bboss/new-nano/f1_mapping_ws
+cd /home/bboss/new-nano/surface_ws
 colcon build --symlink-install
 ```
 
@@ -51,7 +71,7 @@ colcon build --symlink-install
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /home/bboss/new-nano/f1_mapping_ws/install/local_setup.bash
+source /home/bboss/new-nano/surface_ws/install/local_setup.bash
 ```
 
 ## 在 Nano 创建相同结构
@@ -61,21 +81,21 @@ source /home/bboss/new-nano/f1_mapping_ws/install/local_setup.bash
 ```bash
 source /opt/ros/humble/setup.bash
 command -v colcon
-mkdir -p /home/nvidia/f1_mapping_ws/src
-cd /home/nvidia/f1_mapping_ws
+mkdir -p /home/nvidia/surface_ws/src
+cd /home/nvidia/surface_ws
 touch src/.gitkeep
 printf '/build/\n/install/\n/log/\n' > .gitignore
 colcon build --symlink-install
 ```
 
 仅创建空目录时，构建显示 `0 packages finished`。
-同步 PC 的五个功能包后再次构建，应包含 `f1_mapping_bringup`、`f1_interfaces`、`nano_bridge`、`f1_wall_cleaning` 和 `f1_rectangle_cleaning`。
+同步 PC 的五个功能包后再次构建，应包含 `f1_mapping_bringup`、`f1_interfaces`、`f1_nano_bridge`、`f1_wall_cleaning` 和 `f1_rectangle_cleaning`。
 
 构建完成后，在 Nano 的另一个终端中加载：
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /home/nvidia/f1_mapping_ws/install/local_setup.bash
+source /home/nvidia/surface_ws/install/local_setup.bash
 export ROS_DOMAIN_ID=33
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ```
@@ -85,40 +105,40 @@ PC 与 Nano 分别构建，后续同步源码时排除 `build/`、`install/` 和
 
 ## 将功能包同步到 Nano
 
-确认 Nano 已创建 `/home/nvidia/f1_mapping_ws/src` 后，在 PC 终端执行：
+确认 Nano 已创建 `/home/nvidia/surface_ws/src` 后，在 PC 终端执行：
 
 ```bash
 rsync -av --delete --exclude='__pycache__/' --exclude='.pytest_cache/' \
-  /home/bboss/new-nano/f1_mapping_ws/src/f1_mapping_bringup/ \
-  nvidia@192.168.1.188:/home/nvidia/f1_mapping_ws/src/f1_mapping_bringup/
-scp -r /home/bboss/new-nano/f1_mapping_ws/src/f1_interfaces \
-  /home/bboss/new-nano/f1_mapping_ws/src/nano_bridge \
-  /home/bboss/new-nano/f1_mapping_ws/src/f1_wall_cleaning \
-  /home/bboss/new-nano/f1_mapping_ws/src/f1_rectangle_cleaning \
-  nvidia@192.168.1.188:/home/nvidia/f1_mapping_ws/src/
+  /home/bboss/new-nano/surface_ws/src/f1_mapping_bringup/ \
+  nvidia@192.168.1.188:/home/nvidia/surface_ws/src/f1_mapping_bringup/
+scp -r /home/bboss/new-nano/surface_ws/src/f1_interfaces \
+  /home/bboss/new-nano/surface_ws/src/f1_nano_bridge \
+  /home/bboss/new-nano/surface_ws/src/f1_wall_cleaning \
+  /home/bboss/new-nano/surface_ws/src/f1_rectangle_cleaning \
+  nvidia@192.168.1.188:/home/nvidia/surface_ws/src/
 ```
 
 在 Nano 的构建终端中执行：
 
 首次升级统一接口包前，也要在 Nano 按[接口迁移说明](src/f1_interfaces/README.md#从旧接口包迁移)移走遗留旧包，再执行以下构建。同步源码不会自动删除旧接口包。
-独立 IMU 包同样按[桥接包迁移说明](src/nano_bridge/README.md#从独立-imu-包迁移)处理，避免遗留旧源码和安装环境。
+独立 IMU 包同样按[桥接包迁移说明](src/f1_nano_bridge/README.md#从独立-imu-包迁移)处理，避免遗留旧源码和安装环境。
 
 ```bash
 source /opt/ros/humble/setup.bash
 if [ -f /home/nvidia/ros2_ws/install/setup.bash ]; then
   source /home/nvidia/ros2_ws/install/setup.bash
 fi
-cd /home/nvidia/f1_mapping_ws
+cd /home/nvidia/surface_ws
 # 从旧版本更新时执行，仅清理建图包的生成目录：
 rm -rf build/f1_mapping_bringup install/f1_mapping_bringup
-colcon build --symlink-install --packages-up-to f1_mapping_bringup nano_bridge f1_rectangle_cleaning
+colcon build --symlink-install --packages-up-to f1_mapping_bringup f1_nano_bridge f1_rectangle_cleaning
 colcon test --packages-select f1_mapping_bringup f1_wall_cleaning f1_rectangle_cleaning --return-code-on-test-failure
 colcon test-result --verbose
 ```
 
-新桥的完整离线测试额外执行 `colcon test --packages-select nano_bridge --return-code-on-test-failure`，
+新桥的完整离线测试额外执行 `colcon test --packages-select f1_nano_bridge --return-code-on-test-failure`，
 其中真实 C 互通测试需要 `firmware`（back2，协议 v2） 的只读源码；Nano 仅同步功能包时，按
-[新桥测试说明](src/nano_bridge/README.md) 提供 `F1_FIRMWARE_DIR` 后再运行该测试。
+[新桥测试说明](src/f1_nano_bridge/README.md) 提供 `F1_FIRMWARE_DIR` 后再运行该测试。
 
 在 Nano 的另一个终端中查看参数（不启动传感器或建图进程）：
 
@@ -127,6 +147,6 @@ source /opt/ros/humble/setup.bash
 if [ -f /home/nvidia/ros2_ws/install/setup.bash ]; then
   source /home/nvidia/ros2_ws/install/setup.bash
 fi
-source /home/nvidia/f1_mapping_ws/install/local_setup.bash
+source /home/nvidia/surface_ws/install/local_setup.bash
 ros2 launch f1_mapping_bringup lidar_mapping.launch.py --show-args
 ```

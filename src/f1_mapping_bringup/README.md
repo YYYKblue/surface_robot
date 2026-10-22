@@ -44,7 +44,7 @@ ros2 launch f1_mapping_bringup lidar_mapping.launch.py --show-args
 使用 [部署说明](README_LIDAR.md) 中限定在本包目录内的 `rsync --delete`，
 并在构建前清理本包的旧 `build/`、`install/` 子目录。
 
-`nano_bridge` 内部的 `nano_ros_bridge.imu` 提供 IMU 转换库与旧 ZMQ 独立接入节点，
+`f1_nano_bridge` 内部的 `nano_ros_bridge.imu` 提供 IMU 转换库与旧 ZMQ 独立接入节点，
 硬件桥直接复用包内转换库发布遥测；纯雷达建图不需要启动这些桥接节点。
 Lua 中的 `imu_sampling_ratio` 是上游配置解析器必读字段，
 `TRAJECTORY_BUILDER_2D.use_imu_data = false` 才是禁用 IMU 输入的开关。

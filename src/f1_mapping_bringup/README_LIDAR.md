@@ -34,8 +34,8 @@ PC：
 
 ```bash
 rsync -av --delete --exclude='__pycache__/' --exclude='.pytest_cache/' \
-  /home/bboss/new-nano/f1_mapping_ws/src/f1_mapping_bringup/ \
-  nvidia@192.168.1.188:/home/nvidia/f1_mapping_ws/src/f1_mapping_bringup/
+  /home/bboss/new-nano/surface_ws/src/f1_mapping_bringup/ \
+  nvidia@192.168.1.188:/home/nvidia/surface_ws/src/f1_mapping_bringup/
 ```
 
 Nano 构建终端：
@@ -43,7 +43,7 @@ Nano 构建终端：
 ```bash
 source /opt/ros/humble/setup.bash
 source /home/nvidia/ros2_ws/install/setup.bash
-cd /home/nvidia/f1_mapping_ws
+cd /home/nvidia/surface_ws
 # 从旧版本更新时执行，仅清理本包的生成目录：
 rm -rf build/f1_mapping_bringup install/f1_mapping_bringup
 colcon build --symlink-install --packages-select f1_mapping_bringup
@@ -56,7 +56,7 @@ colcon test-result --verbose
 ```bash
 source /opt/ros/humble/setup.bash
 source /home/nvidia/ros2_ws/install/setup.bash
-source /home/nvidia/f1_mapping_ws/install/local_setup.bash
+source /home/nvidia/surface_ws/install/local_setup.bash
 export ROS_DOMAIN_ID=33
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ```
@@ -115,8 +115,8 @@ PC 当前没有 Cartographer，本地已验证包构建、消息检查逻辑和�
 保持建图节点运行，在已加载同样 ROS 环境的 Nano 终端执行：
 
 ```bash
-mkdir -p /home/nvidia/f1_mapping_ws/maps
-mapping_snapshot="/home/nvidia/f1_mapping_ws/maps/lidar_$(date +%Y%m%d_%H%M%S)"
+mkdir -p /home/nvidia/surface_ws/maps
+mapping_snapshot="/home/nvidia/surface_ws/maps/lidar_$(date +%Y%m%d_%H%M%S)"
 ros2 service call /write_state cartographer_ros_msgs/srv/WriteState \
   "{filename: '${mapping_snapshot}.pbstream', include_unfinished_submaps: true}"
 ```

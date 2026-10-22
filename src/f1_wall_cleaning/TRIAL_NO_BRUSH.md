@@ -19,8 +19,8 @@
 PC 上同步源码（Nano 地址变化时替换）：
 
 ```bash
-scp -r /home/bboss/new-nano/f1_mapping_ws/src/f1_wall_cleaning \
-  nvidia@192.168.1.188:/home/nvidia/f1_mapping_ws/src/
+scp -r /home/bboss/new-nano/surface_ws/src/f1_wall_cleaning \
+  nvidia@192.168.1.188:/home/nvidia/surface_ws/src/
 ```
 
 Nano 的新终端构建：
@@ -28,7 +28,7 @@ Nano 的新终端构建：
 ```bash
 source /opt/ros/humble/setup.bash
 source /home/nvidia/ros2_ws/install/setup.bash
-cd /home/nvidia/f1_mapping_ws
+cd /home/nvidia/surface_ws
 colcon build --symlink-install --packages-up-to f1_wall_cleaning \
   --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 ```
@@ -40,7 +40,7 @@ colcon build --symlink-install --packages-up-to f1_wall_cleaning \
 ```bash
 source /opt/ros/humble/setup.bash
 source /home/nvidia/ros2_ws/install/setup.bash
-source /home/nvidia/f1_mapping_ws/install/local_setup.bash
+source /home/nvidia/surface_ws/install/local_setup.bash
 export ROS_DOMAIN_ID=33
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ```
@@ -51,7 +51,7 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 终端 A：
 
 ```bash
-ros2 launch nano_bridge bridge.launch.py \
+ros2 launch f1_nano_bridge bridge.launch.py \
   serial_enabled:=true motion_enabled:=true direction_confirmed:=true
 ```
 
@@ -59,7 +59,7 @@ ros2 launch nano_bridge bridge.launch.py \
 
 ```bash
 ros2 launch f1_wall_cleaning wall_cleaning.launch.py \
-  config:=/home/nvidia/f1_mapping_ws/src/f1_wall_cleaning/config/supervised_no_brush_trial.yaml \
+  config:=/home/nvidia/surface_ws/src/f1_wall_cleaning/config/supervised_no_brush_trial.yaml \
   output_enabled:=true
 ```
 

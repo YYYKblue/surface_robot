@@ -1,6 +1,6 @@
-# nano_bridge 的旧 ZMQ IMU 接入
+# f1_nano_bridge 的旧 ZMQ IMU 接入
 
-本功能已从 `f1_imu_bridge` 合并到 `nano_bridge`，实现位于 `nano_ros_bridge.imu`。本文描述旧网关接入链路；当前 back2 固件使用 [原生串口桥](README.md)，它已直接发布 IMU，不应同时启动本节点。
+本功能已从 `f1_imu_bridge` 合并到 `f1_nano_bridge`，实现位于 `nano_ros_bridge.imu`。本文描述旧网关接入链路；当前 back2 固件使用 [原生串口桥](README.md)，它已直接发布 IMU，不应同时启动本节点。
 
 链路：F1 串口 → 现有 nano-bridge → ZMQ `f1_imu` → 本节点 → `/f1/imu/data_raw`。
 串口始终由旧网关持有。本节点只建立 SUB 连接，不发送控制、不打开串口。
@@ -35,18 +35,20 @@
 ## 构建与无外设检查
 
 依赖 `python3-zmq`、ROS Humble 的 rclpy/sensor_msgs/diagnostic_msgs。
-若缺少 ZMQ，可在 Nano 安装：
+若缺少 ZMQ，在需要运行旧节点或回环测试的 PC/Nano 安装：
 
 ```bash
+sudo apt-get update
 sudo apt-get install python3-zmq
+/usr/bin/python3 -c "import zmq; print('PyZMQ:', zmq.__version__); print('ZeroMQ:', zmq.zmq_version())"
 ```
 
 ```bash
 source /opt/ros/humble/setup.bash
-cd ~/f1_mapping_ws
-colcon build --symlink-install --packages-up-to nano_bridge f1_mapping_bringup
+cd ~/surface_ws
+colcon build --symlink-install --packages-up-to f1_nano_bridge f1_mapping_bringup
 source install/local_setup.bash
-colcon test --packages-select nano_bridge --return-code-on-test-failure --ctest-args -R '^imu'
+colcon test --packages-select f1_nano_bridge --return-code-on-test-failure --ctest-args -R '^imu'
 colcon test-result --verbose
 ```
 
@@ -55,14 +57,34 @@ colcon test-result --verbose
 先验证无输入时只报告等待，再验证模拟报文转换。
 PC 若缺少 `python3-zmq`，此项显示 skipped；Nano 安装依赖后应实际执行通过。
 
+### 补跑 ZMQ 回环测试
+
+2026-10-22：本地 PC 已安装 PyZMQ 22.3.0、ZeroMQ 4.3.4，之前跳过的 `imu_transport` 已补跑，结果 **1 项通过、0 失败、0 跳过**。这验证了本机模拟 ZMQ→ROS 数据链路；Nano 需在其自身环境验证。
+
+在 PC 已构建的工作空间执行：
+
+```bash
+source /opt/ros/humble/setup.bash
+cd /home/bboss/new-nano/surface_ws
+source install/local_setup.bash
+export ROS_LOCALHOST_ONLY=1
+export ROS_DOMAIN_ID=173
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+colcon test --packages-select f1_nano_bridge --return-code-on-test-failure \
+  --ctest-args -R '^imu_transport$'
+colcon test-result --test-result-base build/f1_nano_bridge --verbose
+```
+
+### 运行旧网关接入节点
+
 另开终端：
 
 ```bash
 source /opt/ros/humble/setup.bash
-source ~/f1_mapping_ws/install/local_setup.bash
+source ~/surface_ws/install/local_setup.bash
 export ROS_DOMAIN_ID=33
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-ros2 launch nano_bridge imu.launch.py
+ros2 launch f1_nano_bridge imu.launch.py
 ```
 
 未连接 F1 或未升级网关时，节点等待数据，诊断报告 WARN，不会发布伪造 IMU。
@@ -84,7 +106,7 @@ ros2 topic echo /f1/imu/data_raw --once
 
 ## 历史参考：更新旧 Nano 网关
 
-以下依赖本仓库未包含的旧网关源码，仅记录历史步骤；不适用于当前 back2 固件部署。当前部署使用 [nano_bridge 说明](README.md)。
+以下依赖本仓库未包含的旧网关源码，仅记录历史步骤；不适用于当前 back2 固件部署。当前部署使用 [f1_nano_bridge 说明](README.md)。
 
 Nano 已确认的服务工作目录为 `/home/nvidia/Desktop/wbcNewRos-19`。
 可用 `systemctl show nano-bridge.service -p WorkingDirectory -p ExecStart --no-pager` 核实。

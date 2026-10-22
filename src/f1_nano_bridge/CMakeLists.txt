@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(nano_bridge)
+project(f1_nano_bridge)
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 # Different Python name prevents collision with the legacy top-level nano_bridge.
