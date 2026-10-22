@@ -1,0 +1,54 @@
+{
+  "execution_ready": false,
+  "purpose": "offline candidate illustration, not executable waypoints",
+  "map_sha256": "1d29a0090f852fba211221162a5a080f37aa20989995ef8e598233a123d19f3a",
+  "resolution_m": 0.05,
+  "canvas_size_m": [
+    3.8000000000000003,
+    2.7
+  ],
+  "largest_free_area_m2": 3.8700000000000006,
+  "free_cell_centres_min_rectangle_m": [
+    2.7554316395371257,
+    1.4218421377463664
+  ],
+  "approx_wall_centre_spacing_m": [
+    2.8829072052510294,
+    1.5199000413306079
+  ],
+  "long_axis_yaw_rad": -0.19739548348805863,
+  "wall_offset_m": 0.32,
+  "illustrative_centre_end_inset_m": 0.8,
+  "rigid_turn_radius_with_margin_m": 0.4384062043356595,
+  "illustrative_pose_reserve_m": 0.1,
+  "turn_disk_in_known_free_cells": true,
+  "candidate_map_xy_m": {
+    "A_start": [
+      0.039502532707601415,
+      0.8354633366009405
+    ],
+    "A_stop": [
+      1.297496566093945,
+      0.5838646298288955
+    ],
+    "centre_turn_180": [
+      1.2112153013300873,
+      0.15245813470608172
+    ],
+    "B_start": [
+      1.1249340365662295,
+      -0.2789483604167322
+    ],
+    "B_stop": [
+      -0.1330599968201142,
+      -0.02734965364468723
+    ]
+  },
+  "unresolved": [
+    "live localization and starting-wall identity",
+    "fifth-thruster wire polarity and outward-motion confirmation",
+    "swept brush geometry and dynamic stopping/turn drift",
+    "live obstacle coverage during 180-degree turn",
+    "actual contact/cleaning performance"
+  ]
+}

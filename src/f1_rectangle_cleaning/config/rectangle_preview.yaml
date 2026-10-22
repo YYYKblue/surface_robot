@@ -1,0 +1,22 @@
+rectangle_controller:
+  ros__parameters:
+    # v0.1 refuses true: preview has no hardware publisher or lease clients.
+    output_enabled: false
+    map_frame: map
+    base_frame: base_link
+    odom_frame: odom
+    # Estimated wall-band rectangle; not surveyed geometry or approved route.
+    origin_x_m: -0.9802816886364385
+    origin_y_m: -0.18424262645062695
+    axis_yaw_rad: -0.19739548348805863
+    length_m: 2.8829072052510294
+    width_m: 1.5199000413306079
+    end_inset_m: 0.80
+    wall_target_m: 0.45
+    min_wall_distance_m: 0.36
+    front_stop_m: 0.50
+    # Reverse -> left was reported; ROS command sign remains unverified.
+    fifth_left_sign: 0
+    side_max_percent: 15.0
+    forward_pulse_sec: 0.10
+    neutral_dwell_sec: 1.0

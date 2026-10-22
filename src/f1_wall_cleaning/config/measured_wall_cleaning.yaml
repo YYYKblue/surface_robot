@@ -1,0 +1,35 @@
+/**:
+  ros__parameters:
+    # User measurements, 2026-10-21; see ../MEASUREMENTS.md.
+    # Static dimensions entered; stopping response and brush limits need review.
+    scan_frame: pavo2s_frame
+    base_frame: base_link
+    lidar_x_m: -0.2143195
+    lidar_y_m: 0.0
+    lidar_yaw_rad: 3.141592653589793
+    geometry_confirmed: false
+    hull_length_m: 0.56
+    # Left rigid brush holder: +0.28 m; right edge: -0.22 m.
+    # Current model requires a symmetric enclosing rectangle: 2 * max(0.28, 0.22).
+    hull_width_m: 0.56
+    brush_x_m: 0.10
+    # User remeasured the uncompressed outermost tip at y=0.33 m.
+    brush_tip_y_m: 0.33
+    brush_compression_m: 0.01
+    # UNVERIFIED reported maximum, equal to bristle length; not a validated limit.
+    # Confirm allowable compression and rigid holder clearance before live use.
+    brush_max_compression_m: 0.03
+    stopping_distance_m: 0.0
+    front_slow_distance_m: 0.0
+    pulse_response_calibrated: false
+    speed_percent: 25
+    # Uncalibrated initial values, not measured motion response.
+    forward_pulse_sec: 0.20
+    turn_pulse_sec: 0.10
+    neutral_dwell_sec: 0.30
+    turn_sweep_rad: 0.08
+    brush_percent: 20.0
+    max_run_sec: 60.0
+    max_approach_sec: 20.0
+    command_ttl_sec: 0.10
+    scan_max_age_sec: 0.15

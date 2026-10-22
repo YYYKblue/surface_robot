@@ -13,6 +13,10 @@
 现已新增 [`f1_wall_cleaning`](src/f1_wall_cleaning/README.md) 和 `f1_wall_interfaces`，实现左侧单墙感知、back2 互斥方向脉冲控制和租约任务接口。默认仅观测/预览，未知几何参数阻止启动运动。固定地图定位、完整池边路线、自动过角和 UI→ROS 适配仍按清洁方案后续实施。
 下文原有建图/旧 IMU 链路步骤保留，新桥构建及同步范围以新包说明为准。
 
+基于已保存地图和第五路横向侧推的新思路，新增独立功能包 [f1_rectangle_cleaning](src/f1_rectangle_cleaning/README.md)，负责矩形水池两条长边任务。当前提供无输出状态机、侧推组合指令预览、停车反馈检查及人工换边入口；固定地图定位输入链路、实机输出与自动换边尚未实现。设计与地图示意见 [两条长边刷洗设计](docs/long_wall_plan/DESIGN.md)。
+
+矩形任务后续采用纯雷达反馈，不引入 IMU 航向控制。部署和第一轮实景验证见 [Nano 同步与纯雷达测试](src/f1_rectangle_cleaning/DEPLOY_TEST_NANO.md)。
+
 现有建图流程优先使用 **纯雷达模式**：
 `ros2 launch f1_mapping_bringup lidar_mapping.launch.py`。
 默认输出车体中心 `base_link` 的二维位姿，入口自动发布已确认的雷达平面安装 TF；雷达实际高度仍待测量。
@@ -60,7 +64,7 @@ colcon build --symlink-install
 ```
 
 仅创建空目录时，构建显示 `0 packages finished`。
-同步 PC 的六个功能包后再次构建，应包含 `f1_mapping_bringup`、`f1_imu_bridge`、`f1_bridge_interfaces`、`nano_bridge`、`f1_wall_interfaces` 和 `f1_wall_cleaning`。
+同步 PC 的七个功能包后再次构建，应包含 `f1_mapping_bringup`、`f1_imu_bridge`、`f1_bridge_interfaces`、`nano_bridge`、`f1_wall_interfaces`、`f1_wall_cleaning` 和 `f1_rectangle_cleaning`。
 
 构建完成后，在 Nano 的另一个终端中加载：
 
@@ -85,6 +89,7 @@ scp -r /home/bboss/new-nano/f1_mapping_ws/src/f1_mapping_bringup \
   /home/bboss/new-nano/f1_mapping_ws/src/nano_bridge \
   /home/bboss/new-nano/f1_mapping_ws/src/f1_wall_interfaces \
   /home/bboss/new-nano/f1_mapping_ws/src/f1_wall_cleaning \
+  /home/bboss/new-nano/f1_mapping_ws/src/f1_rectangle_cleaning \
   nvidia@192.168.1.188:/home/nvidia/f1_mapping_ws/src/
 ```
 
@@ -96,8 +101,8 @@ if [ -f /home/nvidia/ros2_ws/install/setup.bash ]; then
   source /home/nvidia/ros2_ws/install/setup.bash
 fi
 cd /home/nvidia/f1_mapping_ws
-colcon build --symlink-install --packages-up-to f1_mapping_bringup nano_bridge f1_wall_cleaning
-colcon test --packages-select f1_mapping_bringup f1_imu_bridge f1_wall_cleaning --return-code-on-test-failure
+colcon build --symlink-install --packages-up-to f1_mapping_bringup nano_bridge f1_rectangle_cleaning
+colcon test --packages-select f1_mapping_bringup f1_imu_bridge f1_wall_cleaning f1_rectangle_cleaning --return-code-on-test-failure
 colcon test-result --verbose
 ```
 

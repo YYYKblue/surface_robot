@@ -4,6 +4,8 @@
 
 ## 当前实现
 
+用户指定跳过完整标定、先关闭刷盘看大致效果时，使用独立的 [关闭刷盘试跑说明](TRIAL_NO_BRUSH.md) 和 `config/supervised_no_brush_trial.yaml`。该模式强制关刷、以中心距墙 45 cm 为目标、最长 10 s；状态标记未标定，不修改正常模式的标定要求。
+
 原始扫描校验、稳健左墙拟合、连续关联、前方检查、有限转向扫掠检查、互斥方向脉冲、刷洗窗口、开始/暂停/恢复/取消和bridge租约管理。人工将机器人放到近似平行的起始墙段后运行：`ALIGN_WALL → APPROACH_WALL → CLEAN_WALL`。
 
 本次移除连续 `surge±yaw` 混控及6%～12%低推力参数。back2一次只能选择前进/后退/左转/右转，主轮最低档是125 μs偏移；上位机不能编码更低档位或同时前进与转向。
@@ -75,6 +77,8 @@ ros2 launch f1_wall_cleaning wall_cleaning.launch.py \
 
 ## 实机测量与门控
 
+2026-10-21 用户提供的静态尺寸、约束核算及待测项目见 [实机测量记录](MEASUREMENTS.md)。已录入 [实测配置副本](config/measured_wall_cleaning.yaml)，停车距离与脉冲响应尚未标定，两个确认开关仍为 false，不能直接启用实机输出。
+
 运行配置复制自 `config/wall_cleaning.yaml`。未知尺寸保持零值，测量后才geometry_confirmed=true：
 
 | 参数 | 含义 |
@@ -98,7 +102,7 @@ ros2 launch f1_wall_cleaning wall_cleaning.launch.py \
   config:=/absolute/path/measured_wall_cleaning.yaml output_enabled:=true
 ```
 
-真实输出拒绝仿真时间、未知几何和未标定脉冲；启动不自动acquire，仍需显式start。默认单墙最长60 s、对齐/靠墙20 s。暂停释放自己的令牌；服务不可达时不再发指令，等待原始期限到期，不覆盖其他任务。
+真实输出拒绝仿真时间和未知几何；正常模式还拒绝未标定脉冲，独立的 supervised_trial 模式按上述约束允许现场试跑。启动不自动acquire，仍需显式start。默认单墙最长60 s、对齐/靠墙20 s。暂停释放自己的令牌；服务不可达时不再发指令，等待原始期限到期，不覆盖其他任务。
 
 ## 验证
 

@@ -33,6 +33,10 @@ class Config:
     stopping_distance_m: float = 0.
     front_slow_distance_m: float = 0.
     pulse_response_calibrated: bool = False
+    brush_allowed: bool = True
+    # Explicit operator-supervised experiment; never labels response as calibrated.
+    supervised_trial: bool = False
+    trial_wall_distance_m: float = .45
     # Wire v2 minimum is 25% of 500 us, not 25% measured thrust.
     speed_percent: int = 25
     forward_pulse_sec: float = .20
@@ -84,6 +88,14 @@ class Config:
             raise ValueError("clearance/compression cannot be negative")
         if self.max_approach_sec > self.max_run_sec:
             raise ValueError("approach timeout cannot exceed run timeout")
+        if self.supervised_trial:
+            if (self.brush_allowed or self.max_run_sec > 10 or self.forward_pulse_sec > .10
+                    or self.turn_pulse_sec > .05 or self.neutral_dwell_sec < .5
+                    or self.stopping_distance_m < .5 or self.front_slow_distance_m < .8
+                    or self.turn_sweep_rad < .2
+                    or self.trial_wall_distance_m < self.brush_tip_y_m + .10):
+                raise ValueError("supervised trial requires brush off, <=10 s run, short pulses, "
+                                 "neutral dwell and non-contact wall/front/sweep margins")
         if self.geometry_confirmed:
             error = self.geometry_error()
             if error:
@@ -107,4 +119,5 @@ class Config:
 
     def control_error(self, live=False):
         return self.geometry_error() or ("v2 25% pulse, swept angle and stopping response are not calibrated"
-                                        if live and not self.pulse_response_calibrated else "")
+                                        if live and not self.pulse_response_calibrated
+                                        and not self.supervised_trial else "")

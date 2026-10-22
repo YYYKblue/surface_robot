@@ -24,6 +24,9 @@ class WallController(Node):
             raise ValueError("hardware output rejects use_sim_time")
         if self.live and self.config.control_error(True):
             raise ValueError(self.config.control_error(True))
+        if self.config.supervised_trial:
+            self.get_logger().warning("SUPERVISED TRIAL: brush disabled, non-contact wall following; "
+                                      "motion response and stopping/sweep margins are uncalibrated")
         self.add_on_set_parameters_callback(self._validate_parameters)
         self.follower = Follower(self.config)
         self.observation = None
@@ -93,10 +96,10 @@ class WallController(Node):
         self.observation_received = time.monotonic()
         if not observation.valid and (self.follower.active or self.pending):
             self._halt("PAUSED_SAFETY", observation.reason)
-        elif self.live and self.follower.active:
+        elif self.follower.active:
             # Use fresh observations immediately. Waiting for the 50 ms timer
             # can consume a whole command period when scan arrival and timer
-            # callbacks coincide. The timer still watches for stopped streams;
+            # callbacks coincide, including preview mode. The timer still watches for stopped streams;
             # Follower.update never renews a command from a repeated scan.
             self._tick()
 
@@ -278,6 +281,8 @@ class WallController(Node):
         message.header.stamp, message.header.frame_id = stamp(now), self.config.base_frame
         message.task_id, message.phase = self.task_id, self.follower.phase
         message.reason = self.config.control_error(self.live) or self.follower.reason
+        if self.config.supervised_trial:
+            message.reason = "supervised trial; uncalibrated response; brush off: " + message.reason
         message.output_enabled = self.live
         message.configuration_ready = not self.config.control_error(self.live)
         message.lease_held, message.cleaning_side = bool(self.token), "left"

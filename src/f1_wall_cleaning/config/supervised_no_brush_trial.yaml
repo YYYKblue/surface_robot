@@ -1,0 +1,36 @@
+/**:
+  ros__parameters:
+    # Operator-requested first trial, 2026-10-21. Provisional motion margins,
+    # NOT measured dynamics. Stops after 10 s; start/resume remain explicit.
+    scan_frame: pavo2s_frame
+    base_frame: base_link
+    lidar_x_m: -0.2143195
+    lidar_y_m: 0.0
+    lidar_yaw_rad: 3.141592653589793
+    geometry_confirmed: true
+    hull_length_m: 0.56
+    hull_width_m: 0.56
+    brush_x_m: 0.10
+    brush_tip_y_m: 0.33
+    brush_compression_m: 0.01
+    # Provisional geometric cap; <=0.015 m, not the unverified original 3 cm.
+    brush_max_compression_m: 0.015
+    brush_allowed: false
+    brush_percent: 0.0
+    supervised_trial: true
+    # Distance from base_link centre to wall, not hull clearance.
+    trial_wall_distance_m: 0.45
+    pulse_response_calibrated: false
+    speed_percent: 25
+    forward_pulse_sec: 0.10
+    turn_pulse_sec: 0.05
+    neutral_dwell_sec: 1.0
+    # Provisional limits; unknown/blocked sectors still stop the experiment.
+    stopping_distance_m: 0.50
+    front_slow_distance_m: 1.0
+    turn_sweep_rad: 0.20
+    max_start_angle_rad: 0.20
+    max_run_sec: 10.0
+    max_approach_sec: 10.0
+    command_ttl_sec: 0.10
+    scan_max_age_sec: 0.15

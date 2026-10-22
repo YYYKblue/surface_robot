@@ -132,3 +132,60 @@ def test_direction_reversal_requires_stop_and_dwell(calibrated):
 def test_wall_control_cannot_raise_or_invent_a_gear(calibrated, gear):
     with pytest.raises(ValueError):
         replace(calibrated, speed_percent=gear).validate()
+
+
+def trial_config(calibrated):
+    return replace(calibrated, supervised_trial=True, brush_allowed=False,
+                   pulse_response_calibrated=False, trial_wall_distance_m=.65,
+                   max_run_sec=10., max_approach_sec=10., forward_pulse_sec=.10,
+                   turn_pulse_sec=.05, neutral_dwell_sec=1., stopping_distance_m=.5,
+                   front_slow_distance_m=1., turn_sweep_rad=.2).validate()
+
+
+def test_supervised_trial_tracks_standoff_without_brush_and_expires(calibrated):
+    c = trial_config(calibrated)
+    f = Follower(c)
+    assert not c.pulse_response_calibrated and not c.control_error(live=True)
+    assert f.start(wall(distance=.65), 1_000_000_000, live=True)
+    phases, directions = set(), set()
+    for i in range(200):
+        now = 1_000_000_000 + i * 50_000_000
+        effort = f.update(wall(now, distance=.65), now)
+        assert effort is not None
+        assert not effort.brush_enabled and effort.brush_percent == 0.
+        phases.add(f.phase)
+        directions.add(effort.direction)
+    assert 'FOLLOW_WALL' in phases and 'CLEAN_WALL' not in phases
+    assert directions == {0, 1}
+    assert f.update(wall(11_000_000_000, distance=.65), 11_000_000_000) is None
+    assert f.phase == 'PAUSED_SAFETY'
+    assert f.update(wall(11_050_000_000, distance=.65), 11_050_000_000) is None
+
+
+@pytest.mark.parametrize('change', [dict(brush_allowed=True), dict(max_run_sec=11.),
+    dict(forward_pulse_sec=.2), dict(turn_pulse_sec=.1), dict(neutral_dwell_sec=.3),
+    dict(stopping_distance_m=.1), dict(front_slow_distance_m=.7),
+    dict(turn_sweep_rad=.08), dict(trial_wall_distance_m=.55)])
+def test_supervised_trial_rejects_relaxed_limits(calibrated, change):
+    with pytest.raises(ValueError):
+        replace(trial_config(calibrated), **change).validate()
+
+
+def test_brush_disable_applies_even_in_normal_cleaning_window(calibrated):
+    f = Follower(replace(calibrated, brush_allowed=False))
+    assert f.start(wall(), 1_000_000_000)
+    for i in range(40):
+        now = 1_000_000_000 + i * 50_000_000
+        effort = f.update(wall(now), now)
+        assert not effort.brush_enabled and effort.brush_percent == 0.
+    assert f.phase == 'CLEAN_WALL' and f.brush_active_sec == 0.
+
+
+@pytest.mark.parametrize('change', [dict(left_turn_clear=False, distance=.8),
+    dict(front_clearance=.4), dict(front_observed=False)])
+def test_trial_keeps_sweep_and_front_guards(calibrated, change):
+    f = Follower(trial_config(calibrated))
+    o = wall(distance=.65)
+    assert f.start(o, o.stamp_ns, live=True)
+    assert f.update(wall(1_050_000_000, **(dict(distance=.65) | change)), 1_050_000_000) is None
+    assert f.phase == 'PAUSED_SAFETY'

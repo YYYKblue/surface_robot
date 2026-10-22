@@ -316,6 +316,36 @@ def test_unknown_front_revokes_running_lease(calibrated):
         h.close()
 
 
+def test_supervised_no_brush_trial_ros_pipeline():
+    config = Config(geometry_confirmed=True, hull_length_m=.56, hull_width_m=.56,
+                    brush_x_m=.10, brush_tip_y_m=.33, brush_compression_m=.01,
+                    brush_max_compression_m=.015, brush_allowed=False,
+                    supervised_trial=True, pulse_response_calibrated=False,
+                    stopping_distance_m=.5, front_slow_distance_m=1.,
+                    forward_pulse_sec=.10, turn_pulse_sec=.05, neutral_dwell_sec=1.,
+                    turn_sweep_rad=.2, max_run_sec=10., max_approach_sec=10.).validate()
+    h = Harness(config, live=True)
+    h.scan_template = pool_scan(1_000_000_000, wall_distance=.45, config=config)
+    try:
+        h.ready()
+        assert not h.bridge.commands and h.bridge.acquires == 0
+        assert h.call('start').success
+        h.until(lambda: h.controller.follower.phase == 'FOLLOW_WALL')
+        h.until(lambda: any(m.direction == ActuatorCommand.FORWARD and accepted
+                            for m, accepted in h.bridge.commands))
+        assert all(accepted and not m.brush_enabled and m.brush_percent == 0.
+                   and not m.thrust_enabled and m.thrust_percent == 0.
+                   for m, accepted in h.bridge.commands)
+        assert h.controller.follower.brush_active_sec == 0.
+        assert h.call('pause').success
+        h.until(lambda: not h.bridge.core.token)
+        count = len(h.bridge.commands)
+        h.spin_for(.2)
+        assert len(h.bridge.commands) == count
+    finally:
+        h.close()
+
+
 def test_default_launch_exits_cleanly_without_bridge():
     process = subprocess.Popen(["ros2", "launch", "f1_wall_cleaning", "wall_cleaning.launch.py"],
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

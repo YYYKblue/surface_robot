@@ -111,25 +111,29 @@ class Perception:
         if c.geometry_error():
             return False, 0., 0., False
         half_x, half_y = c.hull_length_m / 2, c.hull_width_m / 2 + c.rigid_margin_m
+        # A blind bow does not remove evidence of obstacles in visible side or
+        # stern sectors. Compute this before the front-coverage early return.
+        # False only means no observed point in the envelope, not that unseen
+        # parts of the envelope have been checked.
+        finite_points = points[valid]
+        rigid = bool(np.any((np.abs(finite_points[:, 0]) <= half_x + c.rigid_margin_m)
+                            & (np.abs(finite_points[:, 1]) <= half_y)))
         horizon = half_x + c.front_slow_distance_m
         low = math.atan2(-half_y - c.lidar_y_m, horizon - c.lidar_x_m)
         high = math.atan2(half_y - c.lidar_y_m, horizon - c.lidar_x_m)
         sector = (angles >= low) & (angles <= high)
         indices = np.flatnonzero(sector)
         if len(indices) < 3:
-            return False, 0., 0., False
+            return False, 0., 0., rigid
         coverage = float(valid[indices].mean())
         visible_angles = np.sort(angles[indices][valid[indices]])
         gaps = np.diff(np.r_[low, visible_angles, high])
         observed = coverage >= c.front_valid_fraction and max(gaps) <= c.front_max_gap_rad
         # NaN/inf are never interpreted as free space.
-        finite_points = points[valid]
         corridor = finite_points[(finite_points[:, 0] > 0) & (np.abs(finite_points[:, 1]) <= half_y)]
         clearance = min(c.front_slow_distance_m, range_max - half_x)
         if len(corridor):
             clearance = min(clearance, float(corridor[:, 0].min()) - half_x)
-        rigid = bool(np.any((np.abs(finite_points[:, 0]) <= half_x + c.rigid_margin_m)
-                            & (np.abs(finite_points[:, 1]) <= half_y)))
         return bool(observed), max(0., clearance), coverage, rigid
 
     def process(self, scan, now_ns):

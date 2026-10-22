@@ -1,0 +1,19 @@
+rectangle_perception:
+  ros__parameters:
+    scan_frame: pavo2s_frame
+    base_frame: base_link
+    lidar_x_m: -0.2143195
+    lidar_y_m: 0.0
+    lidar_yaw_rad: 3.141592653589793
+    geometry_confirmed: true
+    hull_length_m: 0.56
+    hull_width_m: 0.56
+    brush_x_m: 0.10
+    brush_tip_y_m: 0.33
+    brush_compression_m: 0.01
+    brush_max_compression_m: 0.015
+    brush_allowed: false
+    stopping_distance_m: 0.50
+    front_slow_distance_m: 1.0
+    # Limited-angle flags are not used for a 180-degree turn in this package.
+    turn_sweep_rad: 0.20

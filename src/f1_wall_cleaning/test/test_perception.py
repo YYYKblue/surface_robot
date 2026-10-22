@@ -85,6 +85,24 @@ def test_280_degree_view_does_not_imply_front_visibility(calibrated):
     assert o.valid and o.front_observed
 
 
+@pytest.mark.parametrize("body_angle", [-math.pi / 2, math.pi / 2, math.pi])
+def test_blind_front_does_not_hide_visible_rigid_obstacle(calibrated, body_angle):
+    full = pool_scan(1_000_000_000, config=calibrated)
+    partial = replace(full, angle_min=math.radians(-140), ranges=full.ranges[160:-160])
+    angles = (partial.angle_min + np.arange(len(partial.ranges)) * partial.angle_increment
+              + calibrated.lidar_yaw_rad)
+    delta = (angles - body_angle + math.pi) % (2 * math.pi) - math.pi
+    ranges = list(partial.ranges)
+    # Valid side/stern return inside the enclosing box; remaining wall points
+    # still suffice for fitting. Bow rays are structurally absent, not inf.
+    ranges[int(np.argmin(np.abs(delta)))] = .12
+    observation = Perception(calibrated).process(replace(partial, ranges=tuple(ranges)), full.stamp_ns)
+    assert observation.valid
+    assert not observation.front_observed
+    assert observation.front_clearance == 0. and observation.front_fraction == 0.
+    assert observation.rigid_collision
+
+
 def test_future_last_ray_and_impossible_angular_span_rejected(calibrated):
     full = pool_scan(1_000_000_000, config=calibrated)
     assert not Perception(calibrated).process(replace(full, time_increment=.00002), 1_000_000_000).valid

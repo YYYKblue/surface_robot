@@ -5,7 +5,7 @@ import math
 from .config import Config
 from .perception import fresh
 
-MOVING = {"ALIGN_WALL", "APPROACH_WALL", "CLEAN_WALL"}
+MOVING = {"ALIGN_WALL", "APPROACH_WALL", "CLEAN_WALL", "FOLLOW_WALL"}
 
 
 def clip(value, low, high):
@@ -105,7 +105,7 @@ class Follower:
             error = "ROS clock moved backward"
         if now_ns - self.started_ns >= self.c.max_run_sec * 1e9:
             error = "bounded single-wall run time reached; no pool completion claimed"
-        if not error and self.phase != "CLEAN_WALL" and now_ns - self.approach_since >= self.c.max_approach_sec * 1e9:
+        if not error and self.phase not in ("CLEAN_WALL", "FOLLOW_WALL") and now_ns - self.approach_since >= self.c.max_approach_sec * 1e9:
             error = "alignment/approach timed out"
         if error:
             self.halt("PAUSED_SAFETY", error)
@@ -121,21 +121,23 @@ class Follower:
         c = self.c
         normal_x, normal_y = -math.sin(o.angle), math.cos(o.angle)
         tip = normal_x * c.brush_x_m + normal_y * c.brush_tip_y_m
-        target = tip - c.brush_compression_m
+        target = c.trial_wall_distance_m if c.supervised_trial else tip - c.brush_compression_m
         error_d = o.distance - target
         contact = (0 <= tip - o.distance <= c.brush_max_compression_m
                    and abs(error_d) <= c.clean_distance_tolerance_m
                    and abs(o.angle) <= c.clean_angle_tolerance_rad)
+        tracking = (abs(error_d) <= c.clean_distance_tolerance_m
+                    and abs(o.angle) <= c.clean_angle_tolerance_rad) if c.supervised_trial else contact
         if self.phase == "ALIGN_WALL" and abs(o.angle) <= c.clean_angle_tolerance_rad:
             self.phase = "APPROACH_WALL"
-        if contact and self.phase != "ALIGN_WALL":
+        if tracking and self.phase != "ALIGN_WALL":
             if self.stable_since is None:
                 self.stable_since = now_ns
             if now_ns - self.stable_since >= c.stable_duration_sec * 1e9:
-                self.phase = "CLEAN_WALL"
+                self.phase = "FOLLOW_WALL" if c.supervised_trial else "CLEAN_WALL"
         else:
             self.stable_since = None
-            if self.phase == "CLEAN_WALL":
+            if self.phase in ("CLEAN_WALL", "FOLLOW_WALL"):
                 self.phase = "APPROACH_WALL"
                 self.approach_since = now_ns
         bias = 0. if self.phase == "ALIGN_WALL" else clip(
@@ -171,7 +173,7 @@ class Follower:
             direction = self.pulse_direction
         deadline = min(now_ns + int(c.command_ttl_sec * 1e9),
                        o.stamp_ns + int(c.scan_max_age_sec * 1e9))
-        brush = self.phase == "CLEAN_WALL" and contact and direction == 1
+        brush = c.brush_allowed and not c.supervised_trial and self.phase == "CLEAN_WALL" and contact and direction == 1
         self.last_effort = Effort(now_ns, o.stamp_ns, deadline, direction, c.speed_percent,
                                   brush, c.brush_percent if brush else 0., self.pulse_until if direction else 0)
         self.reason = "v2 exclusive direction pulses with neutral dwell; speed/force feedback unavailable"
