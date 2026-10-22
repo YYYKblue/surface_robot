@@ -17,6 +17,8 @@ if(BUILD_TESTING)
   ament_add_pytest_test(firmware test/test_firmware.py TIMEOUT 60)
   ament_add_pytest_test(transport test/test_transport.py TIMEOUT 30)
   ament_add_pytest_test(ros test/test_ros.py TIMEOUT 30)
+  # Both integration suites may bind the gateway's fixed localhost port 5556.
+  set_tests_properties(ui_gateway ros PROPERTIES RUN_SERIAL TRUE)
   ament_add_pytest_test(imu test/test_imu.py)
   ament_add_pytest_test(imu_transport test/test_imu_transport.py TIMEOUT 30)
 endif()

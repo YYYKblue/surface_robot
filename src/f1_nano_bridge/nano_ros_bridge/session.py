@@ -51,6 +51,7 @@ class Session:
         self.expires = 0.
         self.command_seq = -1
         self.reason = "serial disabled"
+        self.last_stop_reason = ""
         self.fault = ""
         self.rejected = 0
         self.tx_frames = 0
@@ -58,6 +59,8 @@ class Session:
         self.reconnects = 0
 
     def stop(self, reason):
+        if self.token:
+            self.last_stop_reason = reason
         self.token = self.owner = ""
         self.command = None
         self.command_seq = -1
@@ -147,6 +150,7 @@ class Session:
             return "", self.fault or self.reason or "control unavailable"
         self.token = secrets.token_hex(24)
         self.owner = owner
+        self.last_stop_reason = ""
         self.expires = now + self.TTL
         self.command_seq = -1
         self.reason = "lease acquired; waiting for first command"
@@ -167,8 +171,6 @@ class Session:
             cmd.channels()
             if cmd.thrust_enabled and not self.allow_fifth:
                 raise ValueError("fifth thruster is disabled by configuration")
-            if self.command is not None and cmd.mode != self.command.mode:
-                raise ValueError("mode change requires stop and a new lease")
             lifetime = cmd.deadline_ns - cmd.computed_ns
             if not (0 < lifetime <= round(self.TTL * 1e9)
                     and cmd.computed_ns <= unix_ns + 5_000_000
@@ -224,6 +226,8 @@ class Session:
         if not self.motion_enabled and state == "READY":
             state = "MONITOR"
         return dict(state=state, reason=self.fault or self.reason,
+                    last_stop_reason=self.last_stop_reason,
+                    allow_fifth_thruster=self.allow_fifth,
                     connected=self.connected, connection_id=self.connection_id,
                     motion_authorized=bool(self.token), owner=self.owner, ctrl=self.ctrl,
                     ctrl_age_sec=-1. if self.ctrl_at is None else now - self.ctrl_at,

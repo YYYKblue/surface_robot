@@ -2,8 +2,11 @@ builtin_interfaces/Time stamp
 string connection_id
 string state
 string reason
+# Most recent lease revocation reason, retained across the neutral handshake.
+string last_stop_reason
 bool connected
 bool motion_authorized
+bool allow_fifth_thruster
 string owner
 # Observed firmware values, only current while ctrl_age_sec is within the limit.
 string source

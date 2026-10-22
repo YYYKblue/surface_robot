@@ -77,8 +77,9 @@ def test_native_disabled_bridge_visible_over_tcp_and_acquire_rejected():
         rclpy.shutdown()
 
 
-def test_tcp_acquire_command_and_token_scoped_stop_through_ros():
-    rclpy.init()
+@pytest.mark.parametrize("allow_fifth", [False, True])
+def test_tcp_acquire_command_and_token_scoped_stop_through_ros(allow_fifth):
+    rclpy.init(args=["--ros-args", "-p", "allow_fifth_thruster:=" + str(allow_fifth).lower()])
     backend, gateway = Node("fake_bridge"), UIGateway()
     executor = SingleThreadedExecutor()
     executor.add_node(backend)
@@ -101,7 +102,8 @@ def test_tcp_acquire_command_and_token_scoped_stop_through_ros():
     backend.create_service(AcquireControl, "/f1/acquire_control", acquire)
     backend.create_service(ReleaseControl, "/f1/release_control", release)
     state = ControlState(state="READY", connected=True, source="NANO", armed=True,
-                         result="OK", epoch=7, connection_id="fake", ctrl_age_sec=.01, ack_age_sec=.01)
+                         result="OK", epoch=7, connection_id="fake", ctrl_age_sec=.01, ack_age_sec=.01,
+                         allow_fifth_thruster=allow_fifth)
     backend.create_timer(.04, lambda: publisher.publish(state))
     client = Connection(executor)
     try:
@@ -115,11 +117,13 @@ def test_tcp_acquire_command_and_token_scoped_stop_through_ros():
         ticket = next(p["ticket"] for p in reversed(client.packets) if p.get("type") == "state")
         client.send("command", token="ros-lease", ticket=ticket, sequence=1, direction=4,
                     speed_percent=25, mode=1, brush_enabled=True, brush_percent=-35,
-                    thrust_enabled=False, thrust_percent=0)
+                    thrust_enabled=allow_fifth, thrust_percent=40 if allow_fifth else 0)
         client.until(lambda: bool(commands))
         command = commands[-1]
         assert command.token == "ros-lease" and command.direction == 4
         assert command.brush_enabled and command.brush_percent == -35.
+        assert command.thrust_enabled is allow_fifth
+        assert command.thrust_percent == (40. if allow_fifth else 0.)
         ns = lambda stamp: stamp.sec * 1_000_000_000 + stamp.nanosec
         assert ns(command.valid_until) - ns(command.computed_at) == 100_000_000
         assert ns(command.direction_until) == 0

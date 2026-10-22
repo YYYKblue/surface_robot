@@ -19,7 +19,6 @@ class Client:
     token: str = ""
     pending: str = ""
     sequence: int = -1
-    mode: object = None
     seen_active: bool = False
     tickets: dict = field(default_factory=dict)
 
@@ -42,7 +41,28 @@ class GatewayCore:
         self.bridge_key = None
         self.closed = False
         self.clock_fault = False
-        self.clock_sample = (clock(), unix_ns())
+        self.clock_offset = None
+        self._check_clock()
+
+    def _check_clock(self):
+        before = self.clock()
+        unix = self.unix_ns()
+        after = self.clock()
+        # A scheduling pause between reads is not a system-clock adjustment.
+        if after - before > .005:
+            return
+        offset = unix - round((before + after) * .5 * 1e9)
+        if self.clock_offset is None:
+            self.clock_offset = offset
+        elif abs(offset - self.clock_offset) > 50_000_000:
+            self.clock_fault = True
+
+    def fifth_capability(self):
+        if not self.allow_fifth:
+            return False, "网关 allow_fifth_thruster=false"
+        if self.state.get("allow_fifth_thruster") is not True:
+            return False, "bridge 未启用第五路或尚未报告能力"
+        return True, "网关和 bridge 已启用"
 
     def _reply(self, ident, packet, success, message="", **fields):
         self.send(ident, dict(protocol=PROTOCOL, type="reply", op=packet["op"],
@@ -52,7 +72,7 @@ class GatewayCore:
     def _revoke(self, client):
         token = client.token
         client.token = client.pending = ""
-        client.sequence, client.mode, client.seen_active = -1, None, False
+        client.sequence, client.seen_active = -1, False
         client.tickets.clear()
         if token:
             self.backend.release(token, lambda result: None)
@@ -77,11 +97,8 @@ class GatewayCore:
         self._expire()
 
     def _expire(self):
-        now, unix = self.clock(), self.unix_ns()
-        previous_mono, previous_unix = self.clock_sample
-        if abs((unix - previous_unix) - (now - previous_mono) * 1e9) > 50_000_000:
-            self.clock_fault = True  # Restart required, as with the serial bridge.
-        self.clock_sample = now, unix
+        self._check_clock()
+        now = self.clock()
         for ident, client in list(self.clients.items()):
             for ticket, (created, _) in list(client.tickets.items()):
                 if (now - created) * 1e9 >= self.TICKET_TTL_NS:
@@ -182,7 +199,7 @@ class GatewayCore:
                     self._reply(ident, packet, False, "bridge TTL is too short")
                     return
                 client.token, client.last_input = token, self.clock()
-                client.sequence, client.mode = -1, None
+                client.sequence = -1
                 self._reply(ident, packet, True, result.get("message", "control acquired"),
                             token=token, epoch=result.get("epoch", 0))
             else:
@@ -229,15 +246,14 @@ class GatewayCore:
                               **{key: packet[key] for key in COMMAND_FIELDS
                                  - {"token", "ticket", "sequence"}})
             command.channels()  # Reuse strict direction/gear/boolean/effort validation.
-            if command.thrust_enabled and not self.allow_fifth:
-                raise ValueError("fifth thruster is disabled")
-            if client.mode is not None and command.mode != client.mode:
-                raise ValueError("mode change requires a new lease")
+            allow_fifth, reason = self.fifth_capability()
+            if command.thrust_enabled and not allow_fifth:
+                raise ValueError("fifth thruster is disabled: " + reason)
         except (ValueError, TypeError, OverflowError) as error:
             self._revoke(client)
             self._reply(ident, packet, False, str(error))
             return
-        client.sequence, client.mode, client.last_input = sequence, command.mode, self.clock()
+        client.sequence, client.last_input = sequence, self.clock()
         self.backend.publish(command)
         self._reply(ident, packet, True, "forwarded to bridge; execution is not confirmed")
 
@@ -254,11 +270,15 @@ class GatewayCore:
                 client.tickets[ticket] = (now, self.unix_ns())
                 while len(client.tickets) > 8:
                     del client.tickets[next(iter(client.tickets))]
+            allow_fifth, fifth_reason = self.fifth_capability()
             self.send(ident, dict(protocol=PROTOCOL, type="state", gateway_id=self.gateway_id,
                                   state=self.state,
                                   bridge_age_sec=-1. if self.state_at is None else now - self.state_at,
+                                  gateway_fault="system clock changed; restart gateway required"
+                                  if self.clock_fault else "",
                                   ticket=ticket,
-                                  capabilities={"allow_fifth_thruster": self.allow_fifth}))
+                                  capabilities={"allow_fifth_thruster": allow_fifth,
+                                                "fifth_thruster_reason": fifth_reason}))
 
     def close(self):
         self.closed = True

@@ -139,18 +139,28 @@ def test_unclaimed_lease_expires_and_other_owner_cannot_release():
     assert not core.release(token) and not core.token
 
 
-def test_mode_change_requires_new_lease_and_non_neutral_report_cannot_enable_ready():
+def test_mode_change_preserves_lease_and_auxiliaries():
+    core = ready()
+    token, _ = core.acquire("wall", .02)
+    for sequence, mode in enumerate((1, 0, 2, 1)):
+        assert core.accept(command(token, sequence, mode=mode, brush_enabled=True, brush_percent=-25),
+                           .02 + sequence * .01, 1_000_000_000 + sequence * 10_000_000)
+        assert core.token == token and core.command.mode == mode
+        assert core.command.brush_enabled and core.command.brush_percent == -25
+
+
+def test_non_neutral_report_cannot_enable_ready_and_loss_reason_survives_handshake():
     core = ready()
     token, _ = core.acquire("wall", .02)
     assert core.accept(command(token), .02, 1_000_000_000)
-    assert not core.accept(command(token, 1, mode=0), .03, 1_010_000_000)
-    assert not core.token and "mode change" in core.reason
+    core.stop("command deadline expired")
     core.frame(.04)
     core.sent(.04)
     core.receive(report(40, ack=1, pwm=(1580, 1500, 1500, 1500)), .04)
     assert not core.ready
     core.receive(report(60, ack=1), .06)
     assert core.ready
+    assert core.snapshot(.06)["last_stop_reason"] == "command deadline expired"
     core.receive(report(80, ack=1, armed=False, result="WAIT_NEUTRAL"), .08)
     assert not core.ready
 

@@ -54,7 +54,17 @@ ros2 launch f1_nano_bridge gateway.launch.py bind_address:=0.0.0.0
 
 默认 `127.0.0.1` 只允许 Nano 本机连接。`0.0.0.0` 监听所有 IPv4 接口；Windows 应填写 Nano 的实际局域网 IP，不能填写 `0.0.0.0`。
 
-第五路默认禁用。如果需要，在桥的运行配置副本中设置 `allow_fifth_thruster: true`，通过 `config:=/absolute/path/bridge.yaml` 加载；网关同时增加 `allow_fifth_thruster:=true`。
+第五路默认禁用。独立启动时，bridge 和网关两条命令均增加 `allow_fifth_thruster:=true`。bridge 省略该参数时保留 YAML 值，网关会同时核对 bridge 发布的能力，避免界面显示可用而 bridge 拒绝。
+
+也可使用统一入口代替上述两个进程，同时开启第五路：
+
+```bash
+ros2 launch f1_nano_bridge ui_control.launch.py \
+  serial_enabled:=true motion_enabled:=true direction_confirmed:=true \
+  allow_fifth_thruster:=true bind_address:=0.0.0.0
+```
+
+统一入口所有使能参数默认仍为 false。更新后应重新构建 `f1_interfaces` 与 `f1_nano_bridge` 并重启使用 `ControlState` 的节点；该消息新增 `allow_fifth_thruster` 和 `last_stop_reason`。
 
 ## 3. Windows 连接和网络检查
 
@@ -90,9 +100,9 @@ TCP 5556 没有用户身份认证，应只在受信任局域网使用，不暴�
 
 沿用现有 Windows UI 的 `f1-ui-v2` 字段。网关每 20 ms 发送状态和一次性票据，票据在 Nano 创建后 100 ms 失效；ROS 指令时间沿用票据原始时间，不因转发或重试刷新。Windows 与 Nano 无需同步时钟。
 
-命令须完整包含方向、档位、轮组、辅助开关及比例；拒绝非法类型、重复序号、重复/过期票据和未启用的第五路。换轮组需重新申请控制。客户端 250 ms 无有效输入、桥状态过期、RC 接管或连接/epoch 变化后撤销本连接控制；迟到的申请结果也会释放。桥仍独立执行其 150 ms 最大 TTL 和串口故障规则。
+命令须完整包含方向、档位、轮组、辅助开关及比例；拒绝非法类型、重复序号、重复/过期票据和未启用的第五路。同一租约允许换轮组；Qt 切换时仅清除主轮方向，辅助保持。鼠标移出、下拉菜单和失焦不触发停止或释放。客户端 250 ms 无有效输入、桥状态过期、RC 接管或连接/epoch 变化后仍撤销本连接控制；迟到的申请结果也会释放。桥仍独立执行其 150 ms 最大 TTL 和串口故障规则。
 
-时间跳变超过 50 ms 后网关锁存拒绝控制，需排除时钟问题并重启。网络发送成功、ROS 服务成功和固件 ACK 都不等于机械停机；PWM 状态是目标值。
+时间跳变超过 50 ms 后网关锁存拒绝控制，需排除时钟问题并重启；时钟采样前后被调度暂停超过 5 ms 的样本不用于判断跳变。Qt 优先处理同批最新票据，再处理申请回复；旧租约的指令失败回复不影响新租约。界面保留最近控制中断原因。网络发送成功、ROS 服务成功和固件 ACK 都不等于机械停机；PWM 状态是目标值。
 
 本地验证可运行：
 

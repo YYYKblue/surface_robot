@@ -96,7 +96,7 @@ ros2 launch f1_nano_bridge bridge.launch.py \
 | computed_at、valid_until | 同机系统时钟的原始计算时间/期限，0<TTL≤150 ms，最多容忍5 ms未来计算时间；转发不得刷新 |
 | direction | STOP=0、FORWARD=1、REVERSE=2、LEFT=3、RIGHT=4，互斥 |
 | speed_percent | 25/50/75；PWM档位，不是实测速度/推力，默认25 |
-| mode | FRONT=0、BOTH=1、BACK=2；同租约改变轮组会撤销授权 |
+| mode | FRONT=0、BOTH=1、BACK=2；允许同租约切换，固件停用被排除的轮组 |
 | direction_until | 可选绝对脉冲结束时间，零表示使用valid_until；设置时须在computed_at之后且不超过500 ms |
 | brush_enabled/percent | 滚刷明确开关、±100%辅助速度 |
 | thrust_enabled/percent | 第五路，默认不允许启用 |
@@ -133,6 +133,7 @@ CTRL为版本2共20字段：末尾新增speed_percent、direction，结果增加
 - RC接管、epoch变化、设备时钟重置或重连立即丢弃任务；RC期间不发送Nano帧。交回后重新握手，等待明确acquire，不恢复旧动作。
 - CTRL≥400 ms陈旧不再发送；ACK≥400 ms不前进撤销；发帧间隔≥80 ms撤销，不追赶补发运动。
 - 原始命令到期、stop或release均撤销、清空目标；STOP屏障累计ACK后才可重新申请。
+- `ControlState.last_stop_reason` 保留本次租约失效原因，避免停止握手覆盖原因；新授权清空该字段。`allow_fifth_thruster` 报告 bridge 的第五路配置，网关结合自己的配置决定 UI 能力。
 - 短写、串口错误和接收积压关闭链路；重连不保存运动。系统时钟相对monotonic变化>50 ms锁存FAULT。
 - 独立线程20 ms调度，Linux/Python非硬实时。状态记录最大发送间隔。串口采用exclusive、描述符检查和TIOCEXCL，仍需停用已知旧消费者。
 

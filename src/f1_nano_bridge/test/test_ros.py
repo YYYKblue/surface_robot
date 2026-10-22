@@ -82,9 +82,12 @@ def test_ros_state_stop_and_unauthorized_commands():
         rclpy.shutdown()
 
 
-def test_default_launch_and_group_sigint():
+@pytest.mark.parametrize("launch_file,fifth", [
+    ("bridge.launch.py", "false"), ("ui_control.launch.py", "false"),
+    ("ui_control.launch.py", "true")])
+def test_default_launch_and_group_sigint(launch_file, fifth):
     process = subprocess.Popen(
-        ["ros2", "launch", "f1_nano_bridge", "bridge.launch.py"],
+        ["ros2", "launch", "f1_nano_bridge", launch_file, "allow_fifth_thruster:=" + fifth],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
     try:
         time.sleep(1.5)
@@ -92,6 +95,7 @@ def test_default_launch_and_group_sigint():
         os.killpg(process.pid, signal.SIGINT)
         output = process.communicate(timeout=5)[0]
         assert "serial=False, motion=False" in output, output
+        assert "fifth=" + fifth.capitalize() in output, output
         assert "process has finished cleanly" in output, output
         assert process.returncode == 0, output
     finally:

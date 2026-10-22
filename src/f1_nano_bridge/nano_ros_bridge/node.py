@@ -67,7 +67,7 @@ class Bridge(Node):
         self.worker.start()
         self.get_logger().info(
             f"F103 bridge: serial={get('serial_enabled')}, motion={get('motion_enabled')}, "
-            f"profile={PROFILE}; firmware unchanged")
+            f"fifth={get('allow_fifth_thruster')}, profile={PROFILE}; firmware unchanged")
 
     def _validate_parameters(self, parameters):
         for p in parameters:

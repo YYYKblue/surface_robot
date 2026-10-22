@@ -115,18 +115,32 @@ def test_invalid_owned_command_revokes_lease(harness, changes):
 def test_fifth_thruster_requires_explicit_gateway_configuration(harness):
     core, _, backend, _ = harness
     core.allow_fifth = True
+    core.update_state(ready(allow_fifth_thruster=True))
     command(core, acquire(harness), thrust_enabled=True, thrust_percent=-20)
     assert backend.commands[-1].thrust_enabled
     assert backend.commands[-1].thrust_percent == -20
 
 
-def test_mode_change_and_sequence_replay_revoke(harness):
+def test_mode_change_preserves_lease_and_forwards_new_group(harness):
     core, _, backend, _ = harness
     command(core, acquire(harness))
     core.tick()
     ticket = next(reversed(core.clients[b"ui"].tickets))
     command(core, ticket, sequence=2, mode=2)
-    assert len(backend.commands) == 1 and backend.released == ["lease"]
+    assert len(backend.commands) == 2 and not backend.released
+    assert core.clients[b"ui"].token == "lease" and backend.commands[-1].mode == 2
+
+
+@pytest.mark.parametrize("gateway,bridge", [(False, False), (False, True), (True, False), (True, True)])
+def test_fifth_capability_requires_both_nodes(harness, gateway, bridge):
+    core, _, backend, packets = harness
+    core.allow_fifth = gateway
+    core.update_state(ready(allow_fifth_thruster=bridge))
+    ticket = acquire(harness)
+    core.tick()
+    assert packets[-1][1]["capabilities"]["allow_fifth_thruster"] is (gateway and bridge)
+    command(core, ticket, thrust_enabled=True, thrust_percent=25)
+    assert bool(backend.commands) is (gateway and bridge)
 
 
 def test_repeated_sequence_with_new_ticket_is_rejected(harness):
@@ -248,6 +262,25 @@ def test_clock_jump_latches_fault_and_releases(harness):
     core.update_state(ready())
     send(core, "acquire", owner="F1-Qt")
     assert not backend.pending
+
+
+def test_deschedule_between_clock_reads_does_not_revoke_control(harness):
+    core, clock, backend, _ = harness
+    acquire(harness)
+    called = False
+
+    def slow_clock_read():
+        nonlocal called
+        if not called:
+            clock.advance(.06)
+            called = True
+        return clock.unix
+
+    core.unix_ns = slow_clock_read
+    core.tick()
+    core.tick()  # A skipped sample must not poison the next clock comparison.
+    assert not core.clock_fault and not backend.released
+    assert core.clients[b"ui"].token == "lease"
 
 
 def test_clients_and_tickets_remain_bounded(harness):

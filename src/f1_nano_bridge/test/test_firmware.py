@@ -1,4 +1,5 @@
 import ctypes as c
+import json
 import os
 from pathlib import Path
 import random
@@ -6,6 +7,7 @@ import subprocess
 
 from nano_ros_bridge.protocol import channels, decode, encode, neutral
 from nano_ros_bridge.session import Command, Session
+from nano_ros_bridge.ui_protocol import GatewayCore, PROTOCOL
 
 
 def report(lib, milliseconds):
@@ -147,3 +149,80 @@ def test_v1_rejected_and_conflict_is_reported_with_independent_aux(firmware):
     feed(lib, bytes(old), 360)
     state = report(lib, 360)
     assert state.epoch != 1 and state.neutral
+
+
+def test_ui_gateway_session_and_real_firmware_keep_lease_across_groups_and_auxiliaries(firmware):
+    """Exercise the UI wire contract all the way to the compiled C control mux."""
+    lib = firmware
+    session = Session(motion_enabled=True, allow_fifth=True)
+    session.opened()
+    session.receive(report(lib, 0), 0.)
+    now_ms = 0
+
+    def step():
+        nonlocal now_ms
+        now_ms += 20
+        now = now_ms / 1000
+        frame = session.frame(now)
+        assert frame is not None
+        feed(lib, frame, now_ms)
+        session.sent(now)
+        state = report(lib, now_ms)
+        session.receive(state, now)
+        return state
+
+    for _ in range(21):
+        step()
+    assert session.ready
+
+    class Backend:
+        def acquire(self, owner, callback):
+            token, reason = session.acquire(owner, now_ms / 1000)
+            callback(dict(success=bool(token), token=token, message=reason,
+                          epoch=1, max_command_ttl_ms=150))
+
+        def release(self, token, callback):
+            callback(dict(success=session.release(token)))
+
+        def publish(self, command):
+            assert session.accept(command, now_ms / 1000, unix_ns())
+
+    unix_ns = lambda: 10_000_000_000 + now_ms * 1_000_000
+    replies = []
+    gateway = GatewayCore(Backend(), lambda ident, packet: replies.append(packet),
+                          allow_fifth_thruster=True, clock=lambda: now_ms / 1000, unix_ns=unix_ns)
+
+    def update_gateway():
+        state = session.snapshot(now_ms / 1000)
+        ctrl = state.pop("ctrl")
+        state.update(source=ctrl.source, epoch=ctrl.epoch, armed=ctrl.armed, result=ctrl.result)
+        gateway.update_state(state)
+
+    def send(op, **fields):
+        gateway.handle(b"ui", json.dumps(dict(protocol=PROTOCOL, op=op, request_id=op, **fields)).encode())
+
+    update_gateway()
+    send("hello")
+    send("acquire", owner="Qt-chain-test")
+    token = replies[-1]["token"]
+    assert token == session.token
+    for sequence, (mode, brush, thrust) in enumerate(((1, 25, -35), (0, -50, 40), (2, 75, -20)), 1):
+        update_gateway()
+        gateway.tick()
+        send("command", token=token, ticket=replies[-1]["ticket"], sequence=sequence,
+             direction=1, speed_percent=25, mode=mode,
+             brush_enabled=True, brush_percent=brush, thrust_enabled=True, thrust_percent=thrust)
+        assert replies[-1]["success"]
+        state = step()
+        expected = tuple(1500 if mode == 0 and i < 2 or mode == 2 and i >= 2
+                         else pwm for i, pwm in enumerate((1625, 1625, 1375, 1375)))
+        assert state.pwm == expected and state.result == "OK"
+        assert state.brush_enabled and state.brush_percent == brush
+        assert state.thrust_enabled and state.thrust_percent == thrust
+        assert session.token == token and gateway.clients[b"ui"].token == token
+    # With no new UI computation, the original deadline still stops every output.
+    for _ in range(6):
+        state = step()
+    assert state.neutral and not session.token
+    assert session.last_stop_reason == "command deadline expired"
+    gateway.close()

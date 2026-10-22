@@ -14,6 +14,8 @@
 
 Python 使用 `from f1_interfaces.msg import ActuatorCommand` 或 `from f1_interfaces.srv import AcquireControl`；依赖包在 `package.xml` 中声明 `f1_interfaces`。
 
+2026-10-22 控制链修复：`ControlState` 新增 `allow_fifth_thruster`（bridge 第五路配置）及 `last_stop_reason`（最近撤权原因，保留到下一次成功申请）。更新时重新构建本包和依赖节点，并同步重启，不能混用旧生成消息。
+
 ## 从旧接口包迁移
 
 Nano 已清空旧工作空间时不执行本节，按[从零部署指南](../../DEPLOY_NANO.md)直接创建并编译 `surface_ws`。以下仅供其他保留旧接口包的环境参考。
