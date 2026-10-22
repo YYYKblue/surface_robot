@@ -82,18 +82,22 @@ ssh nvidia@192.168.1.188
 以下命令都在 **Nano** 执行：
 
 ```bash
-source /opt/ros/humble/setup.bash
-cd /home/nvidia/surface_ws
-if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then
-  sudo rosdep init
-fi
-rosdep update --rosdistro humble
-rosdep install --from-paths src --ignore-src --rosdistro humble -y
-rosdep check --from-paths src --ignore-src --rosdistro humble
-colcon list --names-only
+(
+  set -e
+  source /opt/ros/humble/setup.bash
+  cd /home/nvidia/surface_ws
+  if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then
+    sudo rosdep init
+  fi
+  rosdep update --rosdistro humble
+  rosdep install --from-paths src --ignore-src --rosdistro humble -y
+  rosdep check --from-paths src --ignore-src --rosdistro humble
+  colcon list --names-only
+)
 ```
 
 `rosdep update` 使用普通用户执行。该流程依据[官方 rosdep 使用说明](https://docs.ros.org/en/humble/Tutorials/Intermediate/Rosdep.html)，从 `package.xml` 解析依赖；网络或依赖解析失败时先解决错误，再执行下一步。
+括号内启用了失败即停止，避免更新失败后继续使用已有缓存安装依赖。若出现缺失的 `debian.yaml` 或 GitHub 索引超时，按[第 9 节](#9-rosdep-更新报错处理)修复后重试。
 
 当前应列出恰好五个项目包：
 
@@ -206,3 +210,42 @@ ros2 run f1_mapping_bringup scan_check --samples 100
 ```
 
 确认扫描有效后，再按[纯雷达建图步骤](START_LIDAR.md)启动 SLAM，或按[矩形任务实景验证](src/f1_rectangle_cleaning/DEPLOY_TEST_NANO.md)继续。已有地图备份仍在 PC 的 `backups/nano_maps`，需要时再单独恢复。
+
+## 9. rosdep 更新报错处理
+
+2026-10-22 Nano 反馈了两处更新错误：
+
+| 报错 | 含义 |
+| --- | --- |
+| 找不到 `file:///usr/share/python3-rosdep2/debian.yaml` | rosdep 源列表仍引用一个已不存在的本地规则文件；可能是更换 rosdep 安装包后遗留的配置，单凭日志不能确认变更过程 |
+| `raw.githubusercontent.com/.../index-v4.yaml` 超时 | ROS 发行版索引下载失败；base/python 等规则已经使用镜像，不代表发行版索引也已换源 |
+
+后续 `All system dependencies have been satisfied` 表示依照当前可用规则，项目声明的依赖已满足，不表示上面的更新成功。五个包已列出则说明源码位置与功能包发现正常，无需重新传输源码。
+
+在该 Ubuntu Nano 上，仅当所引用文件确实不存在时，备份源列表并注释失效引用：
+
+```bash
+if [ ! -f /usr/share/python3-rosdep2/debian.yaml ]; then
+  sudo sed -i.bak '\|^[[:space:]]*yaml[[:space:]].*file:///usr/share/python3-rosdep2/debian\.yaml|s|^|# disabled missing source: |' \
+    /etc/ros/rosdep/sources.list.d/*.list
+fi
+```
+
+`.bak` 保存修改前的列表；命令只注释匹配的源行，保留其他规则源。无需为了这条失效引用再同时安装另一套 rosdep。
+
+根据[清华 TUNA 的 rosdistro 镜像说明](https://mirrors.tuna.tsinghua.edu.cn/help/rosdistro/)，为当前终端指定发行版索引，再重新更新并检查：
+
+```bash
+export ROSDISTRO_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/rosdistro/index-v4.yaml
+(
+  set -e
+  source /opt/ros/humble/setup.bash
+  cd /home/nvidia/surface_ws
+  rosdep update --rosdistro humble
+  rosdep install --from-paths src --ignore-src --rosdistro humble -y
+  rosdep check --from-paths src --ignore-src --rosdistro humble
+  colcon list --names-only
+)
+```
+
+确认没有 `ERROR`，并显示缓存更新成功与依赖检查通过，再继续第 5 节编译。该 `export` 只对当前终端有效；以后新终端执行 rosdep 更新前需重新设置，或手动在 `~/.bashrc` 中保留一行同样的设置。若镜像仍超时，先检查网络，不继续反复初始化或删除源码。
