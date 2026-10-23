@@ -1,4 +1,4 @@
-"""Pure single-left-wall controller; map endpoint, no transfer or speed assumption."""
+"""Direct left-wall control: angle gate, continuous yaw correction and side distance."""
 from dataclasses import dataclass
 import math
 
@@ -44,31 +44,28 @@ def command_fields(effort, config):
 class Mission:
     def __init__(self, config=None):
         self.c = (config or Config()).validate()
-        self.phase, self.reason = "IDLE", "manually place near and parallel to left wall A"
+        self.phase, self.reason = "IDLE", "waiting for start"
         self.started_ns = self.last_update_ns = 0
         self.last_scan = -1
-        self.pulse_until = self.next_pulse = 0
-        self.pulse_direction = 0
-        self.side_output = 0.
         self.last_effort = None
 
     @property
     def active(self):
-        return self.phase in ("FOLLOW", "CORRECT_HEADING", "NEUTRAL_DWELL")
+        return self.phase in ("FOLLOW", "CORRECT_HEADING")
 
     def halt(self, reason, phase="PAUSED"):
         self.phase, self.reason = phase, reason
-        self.side_output = 0.
-        self.pulse_direction = self.pulse_until = self.next_pulse = 0
         self.last_effort = None
 
     def front_remaining(self, pose):
         x, _ = self.c.pool_xy(pose.x, pose.y)
         yaw = wrap(pose.yaw - self.c.axis_yaw_rad)
-        # Distance from the foremost corner of the enclosing hull to the fixed
-        # short wall. At zero yaw this is centre distance minus hull half length.
+        # Use the short wall ahead of the boat, for either long-wall direction.
+        # A consistent 180-degree map relocalization therefore gives the same
+        # clearance without a manually rotated "current side" configuration.
         extent = self.c.hull_half_length_m * abs(math.cos(yaw)) + self.c.hull_half_width_m * abs(math.sin(yaw))
-        return self.c.length_m - x - extent
+        centre_distance = self.c.length_m - x if math.cos(yaw) >= 0 else x
+        return centre_distance - extent
 
     def error(self, f, now):
         c = self.c
@@ -79,29 +76,12 @@ class Mission:
                                   (p.stamp_ns, c.pose_max_age_sec, "pose")):
             if stamp <= 0 or not 0 <= now - stamp < age * 1e9:
                 return name + " stale or future stamped"
-        if abs(w.stamp_ns - p.stamp_ns) > c.feedback_skew_sec * 1e9:
-            return "feedback timestamp skew"
-        if not all(math.isfinite(v) for v in (w.distance, w.angle, w.front_clearance,
-                w.residual, w.support, w.ratio, w.front_fraction, p.x, p.y, p.yaw)):
+        if not all(math.isfinite(v) for v in (w.distance, w.angle, p.x, p.y, p.yaw)):
             return "nonfinite feedback"
-        if not w.valid or not 0 <= w.residual <= .025 or w.support < .5 or w.inliers < 12 or not .75 <= w.ratio <= 1:
-            return "left wall invalid or insufficient support"
-        if w.rigid_collision or w.distance <= c.min_wall_distance_m:
-            return "rigid hull clearance violated"
-        if w.distance > c.max_wall_distance_m:
-            return "outside manually placed wall approach range"
-        x, y = c.pool_xy(p.x, p.y)
-        yaw = wrap(p.yaw - c.axis_yaw_rad)
-        if abs(w.angle) > c.heading_limit_rad or abs(yaw) > c.heading_limit_rad:
-            return "heading exceeds first-trial limit; manual alignment required"
-        if not c.hull_half_length_m < x < c.length_m - c.hull_half_length_m:
-            return "pose outside long-wall A working corridor"
-        if abs(c.width_m - y - w.distance) > c.map_wall_tolerance_m:
-            return "map and observed left wall disagree; check A identity"
-        if abs(wrap(yaw + w.angle)) > c.heading_limit_rad:
-            return "map and observed wall heading disagree"
-        # The user selected fixed-map endpoint stopping because the bow is blind.
-        # Do not fabricate front_observed or interpret unknown clearance as zero.
+        if not w.valid or w.distance <= 0:
+            return "left wall invalid"
+        # Perception supplies the measured wall. No second wall-quality gate,
+        # hull/brush/sweep checks, or map-to-wall identity gates here.
         return ""
 
     def start(self, f, now):
@@ -119,7 +99,8 @@ class Mission:
 
     def _visible_front_stop(self, w):
         # Available positive evidence remains useful even in map endpoint mode.
-        return w.front_observed and w.front_fraction >= .85 and w.front_clearance <= self.c.front_stop_m
+        return (w.front_observed and math.isfinite(w.front_fraction) and w.front_fraction >= .85
+                and math.isfinite(w.front_clearance) and w.front_clearance <= self.c.front_stop_m)
 
     def update(self, f, now):
         if not self.active:
@@ -128,7 +109,8 @@ class Mission:
         if error:
             self.halt(error)
             return None
-        if now < self.last_update_ns or now - self.started_ns >= self.c.run_timeout_sec * 1e9:
+        if now < self.last_update_ns or (self.c.run_timeout_sec > 0
+                and now - self.started_ns >= self.c.run_timeout_sec * 1e9):
             self.halt("clock reversed or run timeout")
             return None
         self.last_update_ns = now
@@ -146,33 +128,20 @@ class Mission:
         deadline = min(now + round(c.command_ttl_sec * 1e9),
                        w.stamp_ns + round(c.wall_max_age_sec * 1e9),
                        f.pose.stamp_ns + round(c.pose_max_age_sec * 1e9))
-        # Strict hysteresis: equality and the band preserve the previous state.
+        # Signed fifth-thruster correction about 40 cm, with a 38--42 cm band.
         if w.distance > c.side_on_distance_m:
-            self.side_output = c.side_percent
+            side_output = c.side_percent
         elif w.distance < c.side_off_distance_m:
-            self.side_output = 0.
-        aligned = abs(w.angle) <= c.heading_deadband_rad
-        desired = 0 if aligned else (3 if w.angle > 0 else 4)
-        direction = direction_until = 0
-        if self.pulse_direction:
-            if now >= self.pulse_until or desired != self.pulse_direction:
-                ended = min(now, self.pulse_until)
-                self.next_pulse = ended + round(c.neutral_dwell_sec * 1e9)
-                self.pulse_direction = 0
-        if desired and not self.pulse_direction and now >= self.next_pulse:
-            self.pulse_direction = desired
-            self.pulse_until = now + round(c.turn_pulse_sec * 1e9)
-        if self.pulse_direction:
-            clear = w.left_turn_clear if self.pulse_direction == 3 else w.right_turn_clear
-            if not clear:
-                self.halt("required heading-correction sweep is unknown or blocked")
-                return None
-            direction, direction_until = self.pulse_direction, self.pulse_until
-            self.phase = "CORRECT_HEADING"
+            side_output = -c.side_percent
         else:
-            self.phase = "NEUTRAL_DWELL" if now < self.next_pulse else "FOLLOW"
-        self.reason = ""
-        effort = Effort(now, deadline, direction_until, direction, self.side_output,
+            side_output = 0.
+        aligned = abs(w.angle) <= c.heading_deadband_rad
+        direction = 0 if aligned else (3 if w.angle > 0 else 4)
+        self.phase = "FOLLOW" if aligned else "CORRECT_HEADING"
+        self.reason = "within heading band; brush propulsion" if aligned else "correcting heading into band"
+        # No pulse/dwell state: each fresh scan directly renews yaw correction.
+        # Zero direction_until means the normal command deadline applies.
+        effort = Effort(now, deadline, 0, direction, side_output,
                         c.brush_percent if aligned else 0.)
         self.last_effort = effort
         return effort

@@ -61,6 +61,29 @@ class Perception:
         self.previous = None
         self.last_stamp = 0
 
+    def _split_corners(self, cluster, depth=0):
+        """Split connected wall corners before line fitting, preserving quality gates.
+
+        Adjacent perpendicular walls have no range gap at their shared corner.
+        Fitting both as one line can reject a well-supported left wall near the
+        end of a pool. Bound recursion and retain the corner in both children.
+        """
+        if depth >= 5 or len(cluster) < 2 * self.c.min_inliers:
+            return [cluster]
+        chord = cluster[-1] - cluster[0]
+        length = np.linalg.norm(chord)
+        if length < self.c.min_support_m:
+            return [cluster]
+        normal = np.array([-chord[1], chord[0]]) / length
+        errors = np.abs((cluster - cluster[0]) @ normal)
+        index = int(np.argmax(errors))
+        if (errors[index] <= 3 * self.c.fit_threshold_m
+                or index + 1 < self.c.min_inliers
+                or len(cluster) - index < self.c.min_inliers):
+            return [cluster]
+        return (self._split_corners(cluster[:index + 1], depth + 1)
+                + self._split_corners(cluster[index:], depth + 1))
+
     def _fit(self, cluster):
         c = self.c
         # At most 240 points enter RANSAC; front safety still uses every ray.
@@ -169,6 +192,7 @@ class Perception:
                 | (np.linalg.norm(np.diff(points[indices], axis=0), axis=1) > c.cluster_gap_m))
         clusters = [points[group] for group in np.split(indices, np.flatnonzero(gaps) + 1)
                     if len(group) >= c.min_inliers]
+        clusters = [part for cluster in clusters for part in self._split_corners(cluster)]
         # Limit work even on highly fragmented scans; longest clusters first.
         candidates = [f for cluster in sorted(clusters, key=len, reverse=True)[:12]
                       if (f := self._fit(cluster)) is not None]

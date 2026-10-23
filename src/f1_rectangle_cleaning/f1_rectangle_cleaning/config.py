@@ -1,4 +1,4 @@
-"""Single-side trial settings; rectangle dimensions are map estimates."""
+"""Direct wall-following settings; rectangle dimensions are map estimates."""
 from dataclasses import dataclass, fields
 import math
 
@@ -15,33 +15,23 @@ class Config:
     hull_half_length_m: float = .28
     hull_half_width_m: float = .28
     wall_target_m: float = .40
-    side_on_distance_m: float = .45
+    side_on_distance_m: float = .42
     side_off_distance_m: float = .38
-    min_wall_distance_m: float = .36
-    max_wall_distance_m: float = .65
     front_stop_m: float = .80
-    heading_deadband_rad: float = math.radians(3.)
-    heading_limit_rad: float = math.radians(15.)
-    map_wall_tolerance_m: float = .20
+    heading_deadband_rad: float = math.radians(10.)
     pose_max_age_sec: float = .25
-    feedback_skew_sec: float = .10
-    pose_variance_max: float = .01
-    yaw_variance_max: float = .03
-    pose_jump_m: float = .25
-    yaw_jump_rad: float = .30
     brush_percent: float = 15.
     side_percent: float = 15.
     turn_speed_percent: int = 25
-    turn_pulse_sec: float = .10
-    neutral_dwell_sec: float = .50
     wall_max_age_sec: float = .15
     command_ttl_sec: float = .10
-    run_timeout_sec: float = 120.
+    # Zero: run until the front-wall threshold or an explicit stop.
+    run_timeout_sec: float = 0.
     # User confirmed on 2026-10-23: positive ROS thrust pushes towards left wall.
     fifth_left_sign: int = 1
 
     def validate(self):
-        signed = ("origin_x_m", "origin_y_m", "axis_yaw_rad")
+        signed = ("origin_x_m", "origin_y_m", "axis_yaw_rad", "run_timeout_sec")
         for field in fields(self):
             v = getattr(self, field.name)
             if isinstance(v, (int, float)) and not math.isfinite(v):
@@ -52,18 +42,17 @@ class Config:
             raise ValueError("frames must be nonempty")
         if type(self.fifth_left_sign) is not int or self.fifth_left_sign not in (-1, 0, 1):
             raise ValueError("fifth_left_sign must be -1, 0 (unknown), or +1")
-        if not (self.hull_half_width_m + .03 < self.min_wall_distance_m < self.side_off_distance_m
-                < self.wall_target_m < self.side_on_distance_m < self.max_wall_distance_m < self.width_m / 2):
-            raise ValueError("wall thresholds must order hull margin < min < off < target < on < max < half width")
-        if self.length_m <= 2 * (self.front_stop_m + self.hull_half_length_m):
-            raise ValueError("rectangle must leave a positive trial segment")
-        if not (0 < self.heading_deadband_rad < self.heading_limit_rad <= math.radians(15)):
-            raise ValueError("invalid heading limits")
+        if not (0 < self.side_off_distance_m < self.wall_target_m < self.side_on_distance_m):
+            raise ValueError("wall thresholds must order lower < target < upper")
+        if self.length_m <= 2 * self.hull_half_length_m:
+            raise ValueError("rectangle length must exceed hull length")
+        if not 0 < self.heading_deadband_rad < math.pi / 2:
+            raise ValueError("invalid heading band")
         if (not 0 < self.brush_percent <= 100 or not 0 < self.side_percent <= 20
                 or type(self.turn_speed_percent) is not int or self.turn_speed_percent != 25
-                or not 0 < self.turn_pulse_sec <= .10 or self.neutral_dwell_sec < .50
-                or not 0 < self.command_ttl_sec <= .15 or not 0 < self.wall_max_age_sec <= .15):
-            raise ValueError("single-side trial effort/timing limits exceeded")
+                or not 0 < self.command_ttl_sec <= .15 or not 0 < self.wall_max_age_sec <= .15
+                or self.run_timeout_sec < 0):
+            raise ValueError("invalid effort, feedback timing or optional run timeout")
         return self
 
     def pool_xy(self, x, y):

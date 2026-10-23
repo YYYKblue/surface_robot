@@ -15,7 +15,7 @@ rectangle_perception:
     brush_allowed: false
     stopping_distance_m: 0.80
     front_slow_distance_m: 1.0
-    # Brush gating lives in rectangle_controller; no contact/sweep exemption.
-    # Original blind-bow mounting is unchanged; map pose supplies endpoint distance.
-    # Limited-angle flags guard only small heading-correction pulses.
+    # Controller uses wall distance/angle and map endpoint distance only.
+    # Hull and turn-sweep flags remain diagnostic; they do not gate this task.
+    # Original blind-bow mounting is unchanged.
     turn_sweep_rad: 0.20

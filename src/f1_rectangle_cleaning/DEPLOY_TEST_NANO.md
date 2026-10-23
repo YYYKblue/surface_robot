@@ -1,10 +1,19 @@
-# Nano：第一版单边测试
+# Nano：简化单边沿墙测试
 
-更新：2026-10-23。以本文件取代旧的两边、不开刷、必须前方可见流程。用户确认雷达没有转向，保持原外参；通过固定地图定位判断前方短墙距离；第五路正号将船推向左墙。小角度纠偏空间未知时仍暂停，人工摆正重启。
+更新：2026-10-23。±10° 内开滚刷，范围外四个主电机持续纠偏；第五路双向控制中心墙距 38–42 cm。取消转向空间等几何门控和脉冲等待。雷达保持原外参，前墙 80 cm 仍由已有地图定位计算，按当前船头方向选择前方短墙。
 
 ## 1. 同步和构建
 
-源码传输与基础依赖按 [Nano 从零部署指南](../../DEPLOY_NANO.md)。不复制 PC 的 build/install/log。新增依赖 `tf2_ros`、`cartographer_ros`，正常运行 rosdep 后构建即可。
+源码传输与基础依赖按 [Nano 从零部署指南](../../DEPLOY_NANO.md)。不复制 PC 的 build/install/log。已有 Nano 工作空间可直接同步本次控制包和此前实测修复过的感知包：
+
+```bash
+rsync -av /home/bboss/new-nano/surface_ws/src/f1_rectangle_cleaning/ \
+  nvidia@192.168.1.188:/home/nvidia/surface_ws/src/f1_rectangle_cleaning/
+rsync -av /home/bboss/new-nano/surface_ws/src/f1_wall_cleaning/ \
+  nvidia@192.168.1.188:/home/nvidia/surface_ws/src/f1_wall_cleaning/
+```
+
+依赖 `tf2_ros`、`cartographer_ros`，正常运行 rosdep 后构建即可。
 
 地图副本路径约定为 `/home/nvidia/surface_ws/maps/20261021_145054/lidar_20261021_145054.pbstream`。PC 同步示例：
 
@@ -60,7 +69,7 @@ ros2 run tf2_ros tf2_echo map base_link
 
 `use_initial_pose=false` 依赖 Cartographer 对冻结地图的重定位，矩形环境可能匹配错误或需要时间收敛。不能把新轨迹建立成功当作定位正确。通过已知 A 墙、实际船头方向和尺量距离核对地图位姿，必要时用 RViz 叠加 scan/map。若使用手工初值服务，`use_initial_pose=true` 的位姿是相对指定参考轨迹的变换，不能直接把任意 map 坐标塞入；需按所用 Cartographer 版本和参考轨迹换算。未能建立正确定位时先处理定位，不启动清洗。
 
-源地图和参数矩形必须匹配。当前长宽是约 2.883 × 1.520 m 的墙带估计；换地图后需重新给出 origin/axis/length/width。默认只沿 A 墙、朝池坐标 +x 行驶，不会自动识别任意初始边。
+源地图和参数矩形必须匹配。当前长宽是约 2.883 × 1.520 m 的墙带估计；换地图后需重新给出 origin/axis/length/width。可沿任意一侧长墙、朝池坐标 +x 或 -x 行驶，按船头方向选前方短墙，左墙仍以实时雷达观测为准。
 
 ## 3. 无输出预览验收
 
@@ -94,14 +103,15 @@ ros2 service call /rectangle_cleaning/start std_srvs/srv/Trigger '{}'
 | 测试 | 预期 |
 |---|---|
 | 平行 | STOP + 刷盘 15%，主轮不发前进 |
-| d 从 0.40 增到 >0.45，再回到 0.40，再降到 <0.38 | 第五路依次关、+15%、保持 +15%、关；等号保持原状态 |
-| 夹角超过 +3° / -3° 且对应扫掠区域可见 | 刷盘关；LEFT / RIGHT 25%，最长 0.1 s，中位至少 0.5 s |
-| 误差恢复到 ±3° 内 | 主轮 STOP，刷盘恢复 15%；无独立速度调节 |
-| 纠偏方向的空间标志为 false | PAUSED、全部输出关闭；不以地图替代扫掠检查 |
+| d 从 0.40 增到 >0.42，再回到 0.40，再降到 <0.38 | 第五路依次关、+15%、关、-15%；38–42 cm 范围内均关闭 |
+| 夹角超过 +10° / -10° | 刷盘关；四个主电机 LEFT / RIGHT 25%、BOTH 持续纠偏，没有脉冲/中位等待 |
+| 误差恢复到 ±10° 内，包括等号 | 主轮 STOP，当帧恢复刷盘 15% |
+| 纠偏方向的空间标志为 false | 仍按夹角纠偏，不暂停 |
 | 地图前缘净空达到 ≤0.80 m | STOPPED、主轮/刷盘/第五路全部关闭；不出现第二边任务 |
-| 停止雷达或定位、定位明显跳变 | PAUSED；反馈恢复不自动续跑 |
+| 停止雷达或定位 | PAUSED；反馈恢复不自动续跑 |
+| 地图位姿更新或跳变 | 接受更新，重新计算前墙距离；不做额外地图墙身份验证 |
 
-人工移动过快可能触发定位跳变保护。0.36 m 是刚性最小墙距停止阈值，与 0.38 m 第五路关闭阈值不同。暂停后重新放正并核对定位，再执行 `cancel` 和 `start`。
+本版没有 0.36 m 最小墙距暂停门槛；墙距偏小时由第五路向外纠正。超出 ±10° 可以启动任务，先纠偏再开刷。暂停后执行 `cancel` 和 `start`。
 
 ## 4. 单边实机测试
 
@@ -122,7 +132,9 @@ ros2 launch f1_rectangle_cleaning rectangle_cleaning.launch.py output_enabled:=t
 ros2 service call /rectangle_cleaning/start std_srvs/srv/Trigger '{}'
 ```
 
-start 返回 acquire requested 仅表示已请求租约；看 status 的 `lease_held` 与 phase 确认实际启动。第五路固定正 15%，刷盘默认 15%。`brush_percent` 改变推进效果也改变刷洗强度，本版不闭环控制速度。
+start 返回 acquire requested 仅表示已请求租约；看 status 的 `lease_held` 与 phase 确认实际启动。第五路按墙距输出 +15% / 0 / -15%，刷盘默认 15%。默认 `run_timeout_sec=0`，没有固定时长上限；如需限时试验可另设正值。`brush_percent` 改变推进效果也改变刷洗强度，本版不闭环控制速度。
+
+使用本次默认配置；不要套用历史 `diagnostics/single_side_remote_20261023/rectangle_current_side.yaml`，该文件仍保存旧 ±3° 与 8 秒限制。
 
 停止：
 
@@ -143,4 +155,4 @@ ros2 bag record -o single_side_trial \
   /rectangle_cleaning/status /rectangle_cleaning/command_preview /f1/control_state
 ```
 
-记录实际墙距、夹角、15% 刷盘是否能推进、第五路滞回是否振荡、纠偏次数、停车触发位置和最终滑行距离。刷尖原几何距中心 0.33 m，因此中心墙距 0.40 m 不保证刷毛接触；本版不自动向接触压缩目标推进。
+记录实际墙距、夹角、15% 刷盘是否能推进、第五路双向纠偏是否振荡、纠偏次数、停车触发位置和最终滑行距离。刷尖原几何距中心 0.33 m，因此中心墙距 0.40 m 不保证刷毛接触；本版不自动向接触压缩目标推进。

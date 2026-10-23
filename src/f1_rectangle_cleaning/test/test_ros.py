@@ -2,6 +2,7 @@
 import json
 import math
 import time
+from dataclasses import replace
 
 import pytest
 import rclpy
@@ -59,7 +60,8 @@ class Harness:
         for i in (0, 7, 35):
             p.pose.covariance[i] = .001
         self.sequence += 1
-        w = to_observation_message(f.wall, c.base_frame, self.session, self.sequence)
+        wall = replace(f.wall, left_turn_clear=False, right_turn_clear=False)
+        w = to_observation_message(wall, c.base_frame, self.session, self.sequence)
         return p, w
 
     def publish(self):
@@ -121,22 +123,43 @@ def test_perception_restart_latches_pause(harness):
     assert "perception restarted" in h.controller.mission.reason
 
 
-def test_map_jump_latches_pause(harness):
+def test_map_jump_is_accepted_without_extra_startup_or_identity_gates(harness):
     h = harness
     h.start()
+    old_x = h.controller.pose.x
     h.pose_offset = .4
-    h.wait(lambda: h.controller.mission.phase == "PAUSED")
-    assert "localization jump" in h.controller.mission.reason
+    h.wait(lambda: h.controller.pose and h.controller.pose.x > old_x + .3)
+    assert h.controller.mission.active
+    assert h.controller.mission.error(h.controller._feedback(), h.peer.get_clock().now().nanoseconds) == ""
 
 
-def test_invalid_covariance_clears_previous_feedback(harness):
+def test_missing_covariance_is_diagnostic_and_does_not_block_control(harness):
     h = harness
     h.start()
     h.enabled = False
     p, _ = h.messages()
     p.pose.covariance[0] = 0.
     h.controller._pose(p)
-    assert h.controller.pose is None and h.controller.mission.phase == "PAUSED"
+    assert h.controller.pose is not None and h.controller.mission.active
+    assert not h.controller.pose_covariance_available
+
+
+@pytest.mark.parametrize("angle,direction", [(10., 0), (-10., 0), (12., 3), (-12., 4)])
+def test_ros_ten_degree_gate_and_continuous_correction_without_turn_clearance(harness, angle, direction):
+    h = harness
+    h.angle = math.radians(angle)
+    h.distance = .5
+    h.start()
+    h.wait(lambda: len(h.commands) >= 10)
+    commands = h.commands[-8:]
+    assert all(m.direction == direction and m.mode == 1 for m in commands)
+    assert all(m.brush_enabled == (direction == 0) and m.thrust_percent == 15. for m in commands)
+    assert all(m.direction_until.sec == 0 and m.direction_until.nanosec == 0 for m in commands)
+    assert h.controller.mission.active
+    # The next scan restores brush propulsion and reverses side correction.
+    h.angle, h.distance = 0., .37
+    h.wait(lambda: h.commands[-1].direction == 0 and h.commands[-1].brush_enabled
+           and h.commands[-1].thrust_percent == -15.)
 
 
 @pytest.mark.parametrize("extra", [Parameter("use_sim_time", value=True), Parameter("fifth_left_sign", value=0)])
@@ -152,7 +175,7 @@ def test_ros_map_endpoint_closes_all_outputs(harness):
     h.wait(lambda: any(m.thrust_enabled and m.brush_enabled for m in h.commands))
     c = h.controller.config
     endpoint = c.length_m - c.hull_half_length_m - c.front_stop_m
-    # Approach in increments below localization jump rejection threshold.
+    # Feed a sequence of updated positions until the front threshold is reached.
     while h.along < endpoint:
         h.along = min(endpoint + .001, h.along + .15)
         target = h.along
@@ -162,7 +185,7 @@ def test_ros_map_endpoint_closes_all_outputs(harness):
     assert h.commands[-1].direction == 0
 
 
-def test_tf_pose_preserves_source_stamp_and_rejects_jump():
+def test_tf_pose_preserves_source_stamp_and_accepts_updated_pose():
     from geometry_msgs.msg import TransformStamped
     h = Harness([Parameter("use_map_tf", value=True)])
     try:
@@ -182,12 +205,12 @@ def test_tf_pose_preserves_source_stamp_and_rejects_jump():
         assert h.controller.received["pose"] == received
         h.controller._wall(w)
         assert h.controller._start(None, Trigger.Response()).success
-        tf.header.stamp = stamp(h.peer.get_clock().now().nanoseconds + 1_000_000)
+        tf.header.stamp = stamp(h.peer.get_clock().now().nanoseconds)
         tf.transform.translation.x += .4
         h.controller.tf_buffer.set_transform(tf, "test")
         h.controller._read_tf_pose()
-        assert h.controller.mission.phase == "PAUSED"
-        assert "jump" in h.controller.mission.reason
+        assert h.controller.mission.active
+        assert h.controller.pose.x == tf.transform.translation.x
     finally:
         h.close()
 
@@ -225,6 +248,29 @@ class FakeBridge:
         self.state.state, self.state.owner, self.state.motion_authorized = "READY", "", False
         self.token = ""
         return res
+
+
+def test_live_lease_continuous_yaw_and_signed_fifth_output():
+    h = Harness([Parameter("output_enabled", value=True)])
+    b = FakeBridge(h)
+    h.angle, h.distance = math.radians(12), .37
+    try:
+        h.wait(lambda: h.controller.lease.bridge is not None and h.controller.lease.acquire.service_is_ready())
+        h.start()
+        h.wait(lambda: len(b.commands) >= 12)
+        assert all(m.token == "fake-lease" and m.direction == 3 and m.mode == 1
+                   and not m.brush_enabled and m.thrust_percent == -15.
+                   and m.direction_until.sec == 0 and m.direction_until.nanosec == 0
+                   for m in b.commands[-10:])
+        h.angle, h.distance = math.radians(-12), .5
+        h.wait(lambda: b.commands[-1].direction == 4 and b.commands[-1].thrust_percent == 15.)
+        h.angle, h.distance = math.radians(10), .4
+        h.wait(lambda: b.commands[-1].brush_enabled and b.commands[-1].direction == 0
+               and not b.commands[-1].thrust_enabled)
+        h.controller._cancel(None, Trigger.Response())
+        h.wait(lambda: bool(b.releases))
+    finally:
+        h.close()
 
 
 @pytest.mark.parametrize("fault", ["RC", "epoch", "stream", "cancel", "bridge_stream"])

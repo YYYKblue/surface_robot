@@ -169,3 +169,30 @@ def test_cached_sweep_rechecks_changed_returns_blind_sectors_and_ray_count(calib
     assert estimator._turn_clearance(angles, valid, blocked) == (False, False)
     estimator.reset()
     assert estimator._turn_clearance(angles[::2], valid[::2], ranges[::2]) == (True, True)
+
+
+@pytest.mark.parametrize("angle", [0., .17, -.12])
+def test_connected_rear_corner_does_not_hide_left_wall(calibrated, angle):
+    # Dense short-wall returns are connected to the left wall without a range
+    # gap, as in the 2026-10-23 Nano capture near the back corner of the pool.
+    c = replace(calibrated, lidar_x_m=-.2143195, hull_length_m=.56,
+                hull_width_m=.56, brush_tip_y_m=.33, brush_compression_m=.01)
+    theta = np.linspace(math.radians(-140), math.radians(140), 3500)
+    rays = np.c_[np.cos(theta + c.lidar_yaw_rad), np.sin(theta + c.lidar_yaw_rad)]
+    origin = np.array([c.lidar_x_m, c.lidar_y_m])
+    tangent = np.array([math.cos(angle), math.sin(angle)])
+    normal = np.array([-math.sin(angle), math.cos(angle)])
+    walls = [(normal, .40), (-normal, 1.12), (-tangent, .40), (tangent, 2.48)]
+    ranges = np.full(len(theta), np.inf)
+    for n, d in walls:
+        denom = rays @ n
+        hit = denom > 1e-8
+        ranges[hit] = np.minimum(ranges[hit], (d - origin @ n) / denom[hit])
+    from f1_wall_cleaning.perception import Scan
+    scan = Scan(10**9, c.scan_frame, theta[0], theta[1] - theta[0], tuple(ranges), .03, 20.)
+    observation = Perception(c).process(scan, scan.stamp_ns)
+    assert observation.valid
+    assert observation.distance == pytest.approx(.4, abs=.006)
+    assert observation.angle == pytest.approx(angle, abs=.006)
+    assert not observation.front_observed
+    assert not observation.left_turn_clear and not observation.right_turn_clear

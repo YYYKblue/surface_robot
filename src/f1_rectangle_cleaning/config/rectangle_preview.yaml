@@ -13,15 +13,15 @@ rectangle_controller:
     length_m: 2.8829072052510294
     width_m: 1.5199000413306079
     wall_target_m: 0.40
-    side_on_distance_m: 0.45
+    # Fifth thruster: left above 42 cm, right below 38 cm, neutral in between.
+    side_on_distance_m: 0.42
     side_off_distance_m: 0.38
-    min_wall_distance_m: 0.36
     front_stop_m: 0.80
     # User confirmed positive -> left, 2026-10-23.
     fifth_left_sign: 1
     side_percent: 15.0
     brush_percent: 15.0
-    heading_deadband_rad: 0.05235987755982989
+    # +/-10 degrees, inclusive. Continuous correction outside the band.
+    heading_deadband_rad: 0.17453292519943295
     turn_speed_percent: 25
-    turn_pulse_sec: 0.10
-    neutral_dwell_sec: 0.50
+    run_timeout_sec: 0.0

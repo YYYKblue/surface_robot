@@ -15,9 +15,9 @@
 现已新增 [`f1_wall_cleaning`](src/f1_wall_cleaning/README.md)，共用 `f1_interfaces`，实现左侧单墙感知、back2 互斥方向脉冲控制和租约任务接口。默认仅观测/预览，未知几何参数阻止启动运动。固定地图定位、完整池边路线、自动过角和 UI→ROS 适配仍按清洁方案后续实施。
 建图包仅保留纯雷达模式；硬件桥的 IMU 遥测不参与建图。
 
-基于已保存地图和第五路横向侧推的新思路，新增独立功能包 [f1_rectangle_cleaning](src/f1_rectangle_cleaning/README.md)，负责矩形水池两条长边任务。当前提供无输出状态机、侧推组合指令预览、停车反馈检查及人工换边入口；固定地图定位输入链路、实机输出与自动换边尚未实现。设计与地图示意见 [两条长边刷洗设计](docs/long_wall_plan/DESIGN.md)。
+独立功能包 [f1_rectangle_cleaning](src/f1_rectangle_cleaning/README.md) 目前采用简化单边策略：±10° 内开滚刷推进，超限用四个主电机持续纠偏，第五路双向控制中心到左墙约 40 cm，船体前缘到前墙 80 cm 时关闭输出。已接入固定地图定位与可选 bridge 租约输出，无转向空间门控、脉冲等待或自动换边。历史两边设计与地图示意见 [两条长边刷洗设计](docs/long_wall_plan/DESIGN.md)。
 
-矩形任务后续采用纯雷达反馈，不引入 IMU 航向控制。部署和第一轮实景验证见 [Nano 同步与纯雷达测试](src/f1_rectangle_cleaning/DEPLOY_TEST_NANO.md)。
+矩形任务采用纯雷达反馈，不引入 IMU 航向控制。部署与下水步骤见 [Nano 同步与纯雷达测试](src/f1_rectangle_cleaning/DEPLOY_TEST_NANO.md)。
 
 建图流程仅使用 **纯雷达模式**：
 `ros2 launch f1_mapping_bringup lidar_mapping.launch.py`。
@@ -31,6 +31,10 @@
 使用步骤与当前验证边界见 [功能包说明](src/f1_mapping_bringup/README.md)。
 `src/f1_nano_bridge` 统一管理桥接功能，内部 `nano_ros_bridge.imu` 保留旧 ZMQ 接入节点和共用的纯 IMU 转换库；原生桥直接从串口发布 IMU。
 旧链路历史说明见 [IMU 接入说明](src/f1_nano_bridge/IMU.md)，当前固件启动以原生串口桥说明为准。
+
+## 2026-10-23 简化沿墙控制验证
+
+5 包构建通过；矩形包 53 项逻辑和 19 项 ROS 集成测试通过，感知/单墙控制另 62 项回归通过。使用合成反馈与模拟 bridge，未连接或同步 Nano。详见 [简化版验证记录](docs/single_side_trial/SIMPLIFIED_VALIDATION_20261023.md)。
 
 ## 2026-10-22 本地验证记录
 

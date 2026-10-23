@@ -16,7 +16,7 @@ from f1_interfaces.msg import ActuatorCommand, WallObservation
 from f1_wall_cleaning.ros_support import stamp, stamp_ns, from_observation_message
 
 from .config import Config
-from .mission import Mission, Feedback, Pose, Effort, command_fields, wrap
+from .mission import Mission, Feedback, Pose, Effort, command_fields
 from .lease import Lease
 
 
@@ -96,33 +96,22 @@ class RectangleController(Node):
         if self.mission.active:
             self._tick()
 
-    @staticmethod
-    def _covariance_ok(cov, indices, limits):
-        return all(math.isfinite(v) for v in cov) and all(
-            0 < cov[i] <= limit for i, limit in zip(indices, limits))
-
     def _pose(self, msg):
         c, p, cov = self.config, msg.pose.pose, msg.pose.covariance
         q = p.orientation
         values = (p.position.x, p.position.y, q.x, q.y, q.z, q.w)
         norm = q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w
         if (msg.header.frame_id != c.map_frame or not all(math.isfinite(v) for v in values)
-                or abs(norm - 1.) > .01
-                or not self._covariance_ok(cov, (0, 7, 35), (c.pose_variance_max, c.pose_variance_max, c.yaw_variance_max))):
-            self._invalidate("pose", "invalid map pose/frame/quaternion/covariance")
+                or abs(norm - 1.) > .01):
+            self._invalidate("pose", "invalid map pose/frame/quaternion")
             return
         yaw = math.atan2(2*(q.w*q.z + q.x*q.y), 1 - 2*(q.y*q.y + q.z*q.z))
         pose = Pose(stamp_ns(msg.header.stamp), p.position.x, p.position.y, yaw)
-        self._accept_pose(pose, covariance_available=True)
+        covariance_available = all(math.isfinite(v) for v in cov) and all(cov[i] > 0 for i in (0, 7, 35))
+        self._accept_pose(pose, covariance_available=covariance_available)
 
     def _accept_pose(self, pose, covariance_available=False):
         if self.pose and pose.stamp_ns <= self.pose.stamp_ns:
-            return
-        c = self.config
-        if self.pose and (self.mission.active or self.mission.phase == "ACQUIRING") and (
-                math.hypot(pose.x - self.pose.x, pose.y - self.pose.y) > c.pose_jump_m
-                or abs(wrap(pose.yaw - self.pose.yaw)) > c.yaw_jump_rad):
-            self._invalidate("pose", "map localization jump; manual reassociation required")
             return
         self.pose = pose
         self.pose_covariance_available = covariance_available
@@ -171,7 +160,7 @@ class RectangleController(Node):
         return response
 
     def _pause(self, request, response):
-        self._halt("user pause; cancel and manually replace at A to restart")
+        self._halt("user pause; cancel before restarting")
         response.success, response.message = True, self.mission.reason
         return response
 
@@ -245,7 +234,12 @@ class RectangleController(Node):
                       brush_enabled=bool(valid and effort.brush_percent),
                       logical_side_left_percent=effort.side_left_percent if valid else 0.,
                       direction=effort.direction if valid and (not effort.direction_until_ns or now < effort.direction_until_ns) else 0,
-                      front_distance_source="fixed_map_hull_clearance",
+                      wall_distance_m=self.wall.distance if self.wall and math.isfinite(self.wall.distance) else None,
+                      wall_angle_deg=math.degrees(self.wall.angle) if self.wall and math.isfinite(self.wall.angle) else None,
+                      heading_band_deg=math.degrees(self.config.heading_deadband_rad),
+                      wall_target_m=self.config.wall_target_m,
+                      front_stop_m=self.config.front_stop_m,
+                      front_distance_source="map_short_wall_in_heading_direction",
                       map_front_clearance_m=self.mission.front_remaining(f.pose) if f else None,
                       front_observed=bool(self.wall and self.wall.front_observed),
                       blind_front_obstacle_detection_available=False,

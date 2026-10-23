@@ -1,33 +1,41 @@
-# f1_rectangle_cleaning：第一版单边沿墙清洗测试
+# f1_rectangle_cleaning：简化单边沿墙清洗
 
-2026-10-23 策略更新：人工将船放在长边 A 附近、左侧为墙且尽量平行；只刷这一边，不换边、不掉头。基于已有矩形地图定位，在船体前缘到前方短墙剩余 **0.80 m** 时关闭输出。雷达保持原安装（船头盲区），第五路 ROS **正号向左**，均按用户确认实现。
+2026-10-23 更新：只沿当前左墙清洗，不换边、不掉头。滚刷负责推进，四个主电机负责航向纠偏，第五电机负责中心到左墙约 40 cm 的距离控制。
 
-| 项目 | 第一版行为 |
+| 条件 | 输出 |
 |---|---|
-| 前进 | 夹角在 ±3° 内时刷盘 15%，主电机 `direction=STOP`；不发 FORWARD/REVERSE，不调速度 |
-| 靠墙 | 第五路 +15%；中心到左墙 `d>0.45 m` 开、`d<0.38 m` 关；边界等号和中间区间保持原状态，启动默认关闭；名义目标 0.40 m |
-| 航向 | `|ψ|>3°` 才发 25% LEFT/RIGHT，最长 0.1 s，然后主电机中位至少 0.5 s；误差进入 ±3° 或变号时提前结束脉冲 |
-| 刷盘门控 | `|ψ|≤3°` 才开 15%；纠偏期间及误差仍超限的中位等待期间关刷；夹角恢复后允许开刷 |
-| 停车 | 地图前缘净空 ≤0.80 m，或有效前方观测净空 ≤0.80 m 时，关闭刷盘、第五路和主电机；不反向制动 |
-| 转动空间 | 保留雷达小角度扫掠检查；所需方向空间未知或受阻即暂停，人工摆正、cancel 后再 start |
+| 左墙夹角在 **[-10°, +10°]**，包括边界 | 滚刷 **15%** 开启推进；四个主电机中位 |
+| 夹角 **>+10°** | 关滚刷，四个主电机 **LEFT 25%、BOTH** 持续纠偏 |
+| 夹角 **<-10°** | 关滚刷，四个主电机 **RIGHT 25%、BOTH** 持续纠偏 |
+| 夹角回到 ±10° 内 | 当帧停止转向，恢复滚刷；没有脉冲间隔或中位等待 |
+| 中心到左墙 **>42 cm** | 第五电机向左推，默认 **+15%** |
+| 中心到左墙 **<38 cm** | 第五电机向右推，默认 **-15%** |
+| 中心墙距 **38–42 cm**，包括边界 | 第五电机关闭；不保留上一次推力 |
+| 船体前缘到前墙 **≤80 cm** | 滚刷、主电机、第五电机全部关闭，进入 `STOPPED` |
 
-`ψ` 是 `WallObservation.tangent_rad`：左墙切线相对船头的角度；正误差发 LEFT，负误差发 RIGHT。第五路滞回与夹角门控独立；中位等待只约束主电机。停机、异常、取消时全部输出关闭。
+`ψ = WallObservation.tangent_rad` 是左墙切线相对船头的夹角；正误差发 LEFT，负误差发 RIGHT。每个新墙观测都重新计算航向与侧推，纠偏时第五电机仍工作。超出 ±10° 也可以启动任务，先纠偏再开滚刷。
 
-## 地图与距离定义
+已移除：转向空间验证、刷毛接触/压缩门控、刚性最小墙距门控、人工摆放距离范围、地图与左墙身份/夹角一致性、重复墙线质量门控、定位协方差门槛、定位跳变暂停，以及纠偏脉冲/中位等待。墙线提取仍输出实际有效性，控制器要求有效、新鲜、数值有限的墙观测和位姿。保留通信超时、执行器命令期限、遥控接管、取消/暂停关闭输出。
 
-默认矩形来自 `backups/nano_maps/20261021_145054/lidar_20261021_145054.pbstream` 对应地图，长约 2.883 m、宽约 1.520 m、长轴约 -11.31°。这是墙带估计，并非现场测量值。A 为池坐标 +y 侧长墙，船头沿池坐标 +x。
+默认无固定运行时长上限，直到前墙阈值或手动停止；可通过 `run_timeout_sec > 0` 另设试验时长。状态序列为 `IDLE → FOLLOW ↔ CORRECT_HEADING → STOPPED`；数据或通信异常进入 `PAUSED`。暂停后 `cancel` 再 `start`。
 
-- 左墙距离是 **base_link 中心到墙的垂直距离**，不是刷尖到墙距离。
-- 前方距离是固定地图短墙到船体前缘的保守投影：`length - pool_x - (0.28*|cos(yaw_error)| + 0.28*|sin(yaw_error)|)`，单位 m。
-- 默认启动读取原时间戳的 `map → base_link` TF；也可设 `use_map_tf:=false`，接入 `/rectangle_cleaning/map_pose`（`PoseWithCovarianceStamped`）。不再依赖未接通的局部速度输入。
-- TF 不提供协方差，状态明确给出 `pose_covariance_available=false`；不会填造协方差或零速度。使用 topic 输入时仍检查 x/y/yaw 协方差。
-- 检查墙线质量、定位新鲜度、墙/位姿时戳偏差、定位跳变、地图与左墙距离/夹角一致性。定位错误或反馈中断会关闭输出并锁定暂停，不能自动续跑。
+## 前墙距离
 
-**地图停车不能发现船头盲区中的新增障碍。** `front_observed=false` 不再单独阻止本版地图端点任务，但绝不改写为 true；任何实际观测到的刚性碰撞或有效前方障碍仍触发停止。地图本身和起始墙身份需在无输出预览中核对。
+现有雷达安装有船头盲区，因此仍用已有冻结地图的 `map → base_link` 位姿计算前墙距离；这版没有改雷达外参。默认地图矩形长约 2.883 m、宽约 1.520 m，参数来自 `20261021_145054` 地图。
 
-`STOPPED` 仅表示本次单边任务已关闭输出。它不证明船体停稳，惯性滑行未测；80 cm 是触发阈值，不是保证最终停在 80 cm。当前刷尖几何为中心左侧 0.33 m，0.40 m 中心墙距通常仍有间隙，本轮检验控制行为和实际接触效果，不宣称清洗覆盖率。
+按船头在矩形长轴上的朝向选择前方短墙，支持沿长轴正向或反向行驶，无需手动切换“当前边”配置。令池坐标为 `x`、船头与长轴夹角为 `yaw`：
 
-## 构建与测试
+```text
+船体前缘投影 = 0.28*|cos(yaw)| + 0.28*|sin(yaw)|
+朝长轴正向：前墙净空 = length - x - 船体前缘投影
+朝长轴反向：前墙净空 = x - 船体前缘投影
+```
+
+船体位姿随矩形地图一致旋转 180° 时，计算出的前墙净空相同。有效前方雷达观测若已显示净空 ≤80 cm，也会关闭输出；`front_observed=false` 不阻止启动，不会把未知距离当成零。
+
+80 cm 指 **船体前缘到墙**，不是船中心到墙；这是关闭输出的触发点，实际滑行距离仍需下水测量。地图距离仍依赖真实定位精度，不能发现雷达盲区新增障碍。40 cm 指 **base_link 中心到左墙**；现有刷尖距中心 33 cm，40 cm 墙距不保证刷毛接触。
+
+## 构建与离线验证
 
 ```bash
 cd /home/bboss/new-nano/surface_ws
@@ -40,37 +48,31 @@ RMW_IMPLEMENTATION=rmw_cyclonedds_cpp colcon test \
 colcon test-result --test-result-base build/f1_rectangle_cleaning --verbose
 ```
 
-演示为合成反馈，不是动力学仿真。测试包括纯逻辑、localhost DDS 预览、TF 输入与模拟 bridge 租约，不连接串口或实机。
+演示和测试使用合成反馈、localhost DDS 和模拟 bridge，不连接串口或实机。
 
-## 启动与接口
+## 启动
 
-先按 [Nano 测试步骤](DEPLOY_TEST_NANO.md)加载冻结地图定位、核对当前 A 墙及剩余距离，然后启动：
+Nano 源码同步、地图定位和 bridge 启动见 [下水测试步骤](DEPLOY_TEST_NANO.md)。默认预览不申请租约：
 
 ```bash
-# 默认预览；不申请租约、不创建执行器发布者。
 ros2 launch f1_rectangle_cleaning rectangle_cleaning.launch.py
 ros2 topic echo /rectangle_cleaning/status
 ros2 topic echo /rectangle_cleaning/command_preview
+```
+
+实机使用同一个入口，显式开启输出，再启动任务：
+
+```bash
+ros2 launch f1_rectangle_cleaning rectangle_cleaning.launch.py output_enabled:=true
+# 另一终端：
 ros2 service call /rectangle_cleaning/start std_srvs/srv/Trigger '{}'
+# 暂停或取消：
 ros2 service call /rectangle_cleaning/pause std_srvs/srv/Trigger '{}'
 ros2 service call /rectangle_cleaning/cancel std_srvs/srv/Trigger '{}'
 ```
 
-状态序列：`IDLE → FOLLOW ↔ CORRECT_HEADING / NEUTRAL_DWELL → STOPPED`；异常为 `PAUSED`。无第二边确认服务。暂停后须 `cancel`、人工重新摆正并确认定位，再 `start`。
+实机需要已有 bridge 的串口/运动许可、主电机方向确认和 `allow_fifth_thruster=true`。`mode=BOTH` 由固件混控四个主电机；这版不发主电机 FORWARD/REVERSE，推进仍由滚刷提供。保持第五路既有“正号向左”的映射。
 
-实机模式在启动时显式传 `output_enabled:=true`，还需 bridge 的串口/运动许可、主电机方向确认和 `allow_fifth_thruster=true`。本包通过唯一租约发布组合 `ActuatorCommand`；遥控接管、bridge 重启/epoch 变化、命令过期、反馈中断和退出均撤销输出。`use_sim_time=true` 或第五路极性未知时拒绝实机模式。默认仍不开硬件；本次修改未连接或部署 Nano。
+状态包含 `wall_angle_deg`、`wall_distance_m`、`heading_band_deg`、`map_front_clearance_m`、刷盘/侧推请求及租约状态。预览 token 始终为空。`STOPPED` 只表示输出已关闭，不代表船体已经停稳。
 
-`command_preview` token 始终为空，不能 remap 到执行器话题。状态包含实际输出模式、租约、刷盘请求、侧推请求、地图前缘净空、前方观测状态及定位来源。`stopped_verified` 和 `coverage_available` 始终为 false。
-
-## 文件
-
-| 文件 | 用途 |
-|---|---|
-| `f1_rectangle_cleaning/mission.py` | 单边状态机、滞回、刷盘门控、纠偏脉冲、地图停车 |
-| `f1_rectangle_cleaning/config.py` / `config/rectangle_preview.yaml` | 策略阈值、矩形几何和参数检查 |
-| `f1_rectangle_cleaning/controller_node.py` | TF/topic 位姿、墙反馈、预览和服务 |
-| `f1_rectangle_cleaning/lease.py` | 可选 bridge 租约输出与接管/失联检查 |
-| `config/perception.yaml` | 原雷达外参、墙线和小角度扫掠感知 |
-| `launch/rectangle_localization.launch.py` / `config/rectangle_localization.lua` | 加载冻结 pbstream 的纯雷达定位入口 |
-
-历史两边任务设计保留于工作空间 `docs/long_wall_plan/DESIGN.md`，不是本版运行流程。
+请使用本包更新后的默认配置。历史诊断目录中的 `rectangle_current_side.yaml` 仍保存当时的 ±3°、8 秒限制，不是本版测试参数。

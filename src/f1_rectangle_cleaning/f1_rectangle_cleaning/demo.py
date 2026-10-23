@@ -23,7 +23,7 @@ def run_demo():
     for i in range(80):
         now += 50_000_000
         # Script feedback independently of commands; no assumed propulsion model.
-        angle = math.radians(5) if 5 <= i < 18 else 0.
+        angle = math.radians(12) if 5 <= i < 18 else 0.
         along = .8 + max(0, i - 20) * .025
         mission.update(sample(c, now, along=along, angle=angle), now)
         if mission.phase != history[-1]:
@@ -38,7 +38,7 @@ def run_demo():
 def main():
     print("SCRIPTED PREVIEW ONLY — no ROS output or dynamics model")
     print(" -> ".join(run_demo()))
-    print("Single side; map endpoint; brush 15%; STOPPED means outputs off, not verified rest")
+    print("Single side; +/-10 degrees; 40 cm side target; 80 cm front stop; brush 15%")
 
 
 if __name__ == "__main__":
