@@ -15,7 +15,7 @@ rsync -av /home/bboss/new-nano/surface_ws/src/f1_wall_cleaning/ \
   nvidia@192.168.1.188:/home/nvidia/surface_ws/src/f1_wall_cleaning/
 ```
 
-依赖 `tf2_ros`、`cartographer_ros`，正常运行 rosdep 后构建即可。
+统一启动入口还需要已有的 `f1_nano_bridge` 包；`--packages-up-to f1_rectangle_cleaning` 会一起构建。依赖 `tf2_ros`、`cartographer_ros`，正常运行 rosdep 后构建即可。
 
 地图副本路径约定为 `/home/nvidia/surface_ws/maps/20261021_145054/lidar_20261021_145054.pbstream`。PC 同步示例：
 
@@ -50,7 +50,55 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 不要同时运行旧 `wall_controller`、第二个任务控制器或另一份建图/map TF 发布者。雷达沿用已有 `/pavo2_scan` 驱动，无需转动安装或更改 yaw。
 
-## 2. 加载冻结地图定位
+## 2. 推荐：统一启动
+
+完成同步和构建后，下面的快捷脚本在每个终端自动加载 ROS 与当前工作空间环境，域编号默认 33，RMW 默认 CycloneDDS；已设置的环境值会保留。雷达 `/pavo2_scan` 仍使用已有驱动。
+
+终端 A：
+
+```bash
+bash ~/surface_ws/src/f1_rectangle_cleaning/scripts/rectangle_nano
+```
+
+这条命令统一启动地图定位、bridge、墙面感知和清洗控制器，定位启动时自动创建轨迹，不再手动调用 `/start_trajectory`。默认地图仍为 `maps/20261021_145054/lidar_20261021_145054.pbstream`。它启用串口、运动、主电机方向确认和第五路许可，但清洗任务保持 `IDLE`，等待手动 `start`。
+
+脚本不自动判断已有节点。若定位和 bridge 已经运行，改用：
+
+```bash
+bash ~/surface_ws/src/f1_rectangle_cleaning/scripts/rectangle_nano bringup \
+  start_localization:=false start_bridge:=false
+```
+
+只有其中一个已运行时，只传对应的一个 `false` 参数。跳过定位时复用现有定位轨迹，不创建第二条轨迹；跳过 bridge 时沿用现有 bridge 的输出许可配置。启动前应退出旧清洗控制器。若仅已有雷达静态 TF，传 `publish_lidar_tf:=false`。
+
+终端 B 先查看一条完整状态，确认 `feedback_error` 为空、定位与墙距符合现场，再启动任务：
+
+```bash
+bash ~/surface_ws/src/f1_rectangle_cleaning/scripts/rectangle_nano status
+bash ~/surface_ws/src/f1_rectangle_cleaning/scripts/rectangle_nano start
+```
+
+`start` 返回后可再次运行 `status`，检查 `lease_held=true` 和实际阶段。`FOLLOW` 表示夹角已进入 ±3° 纠偏死区；`CORRECT_HEADING` 时若夹角仍在 ±10° 内，滚刷也会开启。`map_front_clearance_m` 对应当前 50 cm 停车阈值。
+
+暂停、取消仍在终端 B 执行：
+
+```bash
+bash ~/surface_ws/src/f1_rectangle_cleaning/scripts/rectangle_nano pause
+bash ~/surface_ws/src/f1_rectangle_cleaning/scripts/rectangle_nano cancel
+```
+
+终端 A 按 `Ctrl+C` 会退出本次统一入口启动的节点；通过跳过参数复用的外部节点继续运行。
+
+已加载环境时，也可直接使用 ROS 启动入口；它默认无硬件输出，实机显式加 `output_enabled:=true`：
+
+```bash
+ros2 launch f1_rectangle_cleaning rectangle_bringup.launch.py output_enabled:=true
+ros2 service call /rectangle_cleaning/start std_srvs/srv/Trigger '{}'
+```
+
+下列各节保留分开启动和预览检查的用法。使用统一入口后，无需再重复启动这些节点或创建定位轨迹。
+
+## 3. 单独加载冻结地图定位
 
 终端 A：
 
@@ -73,7 +121,7 @@ ros2 run tf2_ros tf2_echo map base_link
 
 源地图和参数矩形必须匹配。当前长宽是约 2.883 × 1.520 m 的墙带估计；换地图后需重新给出 origin/axis/length/width。可沿任意一侧长墙、朝池坐标 +x 或 -x 行驶，按船头方向选前方短墙，左墙仍以实时雷达观测为准。
 
-## 3. 无输出预览验收
+## 4. 无输出预览验收
 
 终端 C：
 
@@ -126,7 +174,7 @@ ros2 service call /rectangle_cleaning/start std_srvs/srv/Trigger '{}'
 
 当前默认 `association_timeout_sec=2.0` 长于 `wall_recovery_sec=1.5`。自定义参数时，应保持墙关联有效期大于恢复窗口与扫描时效之和，避免任务仍在等待恢复时墙身份先被清除。
 
-## 4. 单边实机测试
+## 5. 单边实机测试
 
 预览核对后，退出预览控制器，保持定位与感知来源一致。地图无法发现盲区新增障碍；本轮需要人工观察前方并保留遥控接管。0.50 m 只是关闭输出阈值，需记录之后的惯性滑行。
 

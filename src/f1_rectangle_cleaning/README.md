@@ -61,7 +61,17 @@ colcon test-result --test-result-base build/f1_rectangle_cleaning --verbose
 
 ## 启动
 
-Nano 源码同步、地图定位和 bridge 启动见 [下水测试步骤](DEPLOY_TEST_NANO.md)。默认预览不申请租约：
+Nano 源码同步和完整用法见 [下水测试步骤](DEPLOY_TEST_NANO.md)。现在支持统一启动：
+
+```bash
+# Nano 终端 A：自动加载环境，启动定位轨迹、bridge、感知和清洗控制器。
+bash ~/surface_ws/src/f1_rectangle_cleaning/scripts/rectangle_nano
+# Nano 终端 B：查看单条完整状态，然后手动开始任务。
+bash ~/surface_ws/src/f1_rectangle_cleaning/scripts/rectangle_nano status
+bash ~/surface_ws/src/f1_rectangle_cleaning/scripts/rectangle_nano start
+```
+
+统一入口保持任务 `IDLE`，不自动开始清洗。定位和 bridge 已运行时，在终端 A 命令末尾增加 `bringup start_localization:=false start_bridge:=false`，只启动缺少的部分；已有清洗控制器应先退出。快捷脚本默认开启硬件输出许可，默认 ROS 域为 33；已设置的域和 RMW 环境会保留。也可加载环境后运行 `ros2 launch f1_rectangle_cleaning rectangle_bringup.launch.py output_enabled:=true`。原分开启动入口继续保留，默认预览不申请租约：
 
 ```bash
 ros2 launch f1_rectangle_cleaning rectangle_cleaning.launch.py

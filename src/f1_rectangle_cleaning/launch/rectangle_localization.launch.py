@@ -1,4 +1,4 @@
-"""Load a frozen pbstream; require explicit initial-pose trajectory start."""
+"""Load a frozen pbstream, optionally starting a localization trajectory."""
 from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -27,7 +27,7 @@ def nodes(context):
         arguments=["-configuration_directory", str(share / "config"),
                    "-configuration_basename", "rectangle_localization.lua",
                    "-load_state_filename", str(state), "-load_frozen_state=true",
-                   "-start_trajectory_with_default_topics=false"],
+                   "-start_trajectory_with_default_topics=" + value("start_trajectory")],
         remappings=[("scan", value("scan_topic"))]))
     return result
 
@@ -36,6 +36,8 @@ def generate_launch_description():
     mapping = Path(get_package_share_directory("f1_mapping_bringup"))
     return LaunchDescription([
         DeclareLaunchArgument("load_state_filename"),
+        DeclareLaunchArgument("start_trajectory", default_value="false", choices=["true", "false"],
+                              description="Start localization without a separate /start_trajectory call"),
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),
         DeclareLaunchArgument("lidar_extrinsics_file", default_value=str(mapping / "config/lidar_planar.yaml")),
         DeclareLaunchArgument("publish_lidar_tf", default_value="true", choices=["true", "false"]),
