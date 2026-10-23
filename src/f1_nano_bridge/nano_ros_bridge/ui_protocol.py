@@ -10,6 +10,7 @@ from .session import Command
 PROTOCOL = "f1-ui-v2"
 COMMAND_FIELDS = {"token", "ticket", "sequence", "direction", "speed_percent", "mode",
                   "brush_enabled", "brush_percent", "thrust_enabled", "thrust_percent"}
+OPTIONAL_COMMAND_FIELDS = {"input_age_ns"}
 
 
 @dataclass
@@ -21,19 +22,25 @@ class Client:
     sequence: int = -1
     seen_active: bool = False
     tickets: dict = field(default_factory=dict)
+    loss_reason: str = ""
+    timing: dict = field(default_factory=dict)
 
 
 class GatewayCore:
-    TICKET_TTL_NS = 100_000_000
+    # Keep the original GUI sample valid for at most the bridge's 150 ms
+    # command TTL. input_age_ns is subtracted from ticket creation time, so a
+    # network worker cannot refresh an old GUI snapshot with a newer ticket.
+    TICKET_TTL_NS = 150_000_000
     INPUT_TIMEOUT = .250
     STATE_TIMEOUT = .300
     MAX_CLIENTS = 32
 
     def __init__(self, backend, send, *, allow_fifth_thruster=False,
-                 clock=time.monotonic, unix_ns=time.time_ns):
+                 clock=time.monotonic, unix_ns=time.time_ns, report_loss=None):
         self.backend, self.send = backend, send
         self.allow_fifth = allow_fifth_thruster
         self.clock, self.unix_ns = clock, unix_ns
+        self.report_loss = report_loss or (lambda reason: None)
         self.gateway_id = secrets.token_hex(16)
         self.clients = {}
         self.state = {}
@@ -69,8 +76,11 @@ class GatewayCore:
                               request_id=packet["request_id"], success=success,
                               message=message, **fields))
 
-    def _revoke(self, client):
+    def _revoke(self, client, reason="control released"):
         token = client.token
+        if token or client.pending:
+            client.loss_reason = reason
+            self.report_loss(f"{reason}; timing={client.timing}")
         client.token = client.pending = ""
         client.sequence, client.seen_active = -1, False
         client.tickets.clear()
@@ -91,7 +101,7 @@ class GatewayCore:
         key = (state.get("connection_id"), state.get("epoch"), state.get("source"))
         if self.bridge_key is not None and key != self.bridge_key:
             for client in self.clients.values():
-                self._revoke(client)
+                self._revoke(client, f"bridge connection/source changed: {self.bridge_key} -> {key}")
         self.bridge_key = key
         self.state, self.state_at = dict(state), self.clock()
         self._expire()
@@ -104,7 +114,7 @@ class GatewayCore:
                 if (now - created) * 1e9 >= self.TICKET_TTL_NS:
                     del client.tickets[ticket]
             if now - client.last_seen >= self.INPUT_TIMEOUT:
-                self._revoke(client)
+                self._revoke(client, f"UI connection timeout: {(now - client.last_seen) * 1000:.1f} ms")
                 del self.clients[ident]
                 continue
             if client.token or client.pending:
@@ -114,7 +124,10 @@ class GatewayCore:
                         client.seen_active = True
                     invalid |= client.seen_active and not self.state.get("motion_authorized")
                 if invalid or now - client.last_input >= self.INPUT_TIMEOUT:
-                    self._revoke(client)
+                    reason = (f"bridge={self.state.get('state')}: "
+                              f"{self.state.get('last_stop_reason') or self.state.get('reason', 'unhealthy feedback')}"
+                              if invalid else f"UI command timeout: {(now - client.last_input) * 1000:.1f} ms")
+                    self._revoke(client, reason)
 
     @staticmethod
     def _decode(payload):
@@ -159,9 +172,11 @@ class GatewayCore:
         fields = set(packet) - {"protocol", "op", "request_id"}
         expected = {"hello": set(), "acquire": {"owner"}, "stop": {"token"},
                     "release": {"token"}, "command": COMMAND_FIELDS}[op]
-        if fields != expected:
+        valid_fields = (fields == expected or op == "command" and
+                        fields == expected | OPTIONAL_COMMAND_FIELDS)
+        if not valid_fields:
             if client.token and packet.get("token") == client.token:
-                self._revoke(client)
+                self._revoke(client, "unexpected or missing command fields")
             self._reply(ident, packet, False, "unexpected or missing fields")
             return
         if op == "hello":
@@ -200,6 +215,7 @@ class GatewayCore:
                     return
                 client.token, client.last_input = token, self.clock()
                 client.sequence = -1
+                client.loss_reason, client.timing = "", {}
                 self._reply(ident, packet, True, result.get("message", "control acquired"),
                             token=token, epoch=result.get("epoch", 0))
             else:
@@ -242,7 +258,21 @@ class GatewayCore:
             if ((self.clock() - created) * 1e9 >= self.TICKET_TTL_NS
                     or self.unix_ns() >= computed_ns + self.TICKET_TTL_NS or not self._fresh()):
                 raise ValueError("expired ticket or bridge state")
-            command = Command(client.token, sequence, computed_ns, computed_ns + self.TICKET_TTL_NS,
+            input_age_ns = packet.get("input_age_ns", 0)
+            if type(input_age_ns) is not int or not 0 <= input_age_ns < self.TICKET_TTL_NS:
+                raise ValueError("input_age_ns must be an integer within the 150 ms command TTL")
+            command_computed_ns = computed_ns - input_age_ns
+            command_deadline_ns = command_computed_ns + self.TICKET_TTL_NS
+            gap_ms = (self.clock() - client.last_input) * 1000
+            client.timing = dict(
+                ticket_round_trip_ms=(self.clock() - created) * 1000,
+                input_age_ms=input_age_ns / 1e6,
+                command_remaining_ms=(command_deadline_ns - self.unix_ns()) / 1e6,
+                input_gap_ms=gap_ms,
+                max_input_gap_ms=max(gap_ms, client.timing.get("max_input_gap_ms", 0.)))
+            if self.unix_ns() >= command_deadline_ns:
+                raise ValueError("GUI input snapshot expired")
+            command = Command(client.token, sequence, command_computed_ns, command_deadline_ns,
                               **{key: packet[key] for key in COMMAND_FIELDS
                                  - {"token", "ticket", "sequence"}})
             command.channels()  # Reuse strict direction/gear/boolean/effort validation.
@@ -250,7 +280,7 @@ class GatewayCore:
             if command.thrust_enabled and not allow_fifth:
                 raise ValueError("fifth thruster is disabled: " + reason)
         except (ValueError, TypeError, OverflowError) as error:
-            self._revoke(client)
+            self._revoke(client, str(error))
             self._reply(ident, packet, False, str(error))
             return
         client.sequence, client.last_input = sequence, self.clock()
@@ -276,6 +306,9 @@ class GatewayCore:
                                   bridge_age_sec=-1. if self.state_at is None else now - self.state_at,
                                   gateway_fault="system clock changed; restart gateway required"
                                   if self.clock_fault else "",
+                                  control_fault=client.loss_reason,
+                                  timing=dict(client.timing),
+                                  command_ttl_ms=self.TICKET_TTL_NS // 1_000_000,
                                   ticket=ticket,
                                   capabilities={"allow_fifth_thruster": allow_fifth,
                                                 "fifth_thruster_reason": fifth_reason}))

@@ -125,7 +125,7 @@ def test_tcp_acquire_command_and_token_scoped_stop_through_ros(allow_fifth):
         assert command.thrust_enabled is allow_fifth
         assert command.thrust_percent == (40. if allow_fifth else 0.)
         ns = lambda stamp: stamp.sec * 1_000_000_000 + stamp.nanosec
-        assert ns(command.valid_until) - ns(command.computed_at) == 100_000_000
+        assert ns(command.valid_until) - ns(command.computed_at) == 150_000_000
         assert ns(command.direction_until) == 0
         client.send("stop", token="ros-lease")
         client.until(lambda: client.reply("stop") is not None)

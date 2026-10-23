@@ -83,7 +83,8 @@ class UIGateway(Node):
             raise
         self.backend = RosBackend(self)
         self.core = GatewayCore(self.backend, self._send,
-                                allow_fifth_thruster=self.get_parameter("allow_fifth_thruster").value)
+                                allow_fifth_thruster=self.get_parameter("allow_fifth_thruster").value,
+                                report_loss=lambda reason: self.get_logger().warning("UI control lost: " + reason))
         self.subscription = self.create_subscription(ControlState, "/f1/control_state", self._state, 1)
         self.timer = self.create_timer(.02, self._tick)
         self.get_logger().info(f"f1-ui-v2 listening on tcp://{address}:5556")

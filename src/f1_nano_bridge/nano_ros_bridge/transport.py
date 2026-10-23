@@ -30,9 +30,14 @@ def open_serial(port):
                     pass
         except (FileNotFoundError, PermissionError):
             pass
-    handle = serial.Serial(port, 460800, timeout=0, write_timeout=0.010, exclusive=True)
+    # Worker._write uses one nonblocking os.write directly: pyserial may report
+    # a timeout even after a complete write if the thread was descheduled, and
+    # its zero-timeout loop can busy-spin when os.write raises EAGAIN.
+    handle = serial.Serial(port, 460800, timeout=0, write_timeout=0, exclusive=True)
     try:
         fcntl.ioctl(handle.fileno(), termios.TIOCEXCL)
+        flags = fcntl.fcntl(handle.fileno(), fcntl.F_GETFL)
+        fcntl.fcntl(handle.fileno(), fcntl.F_SETFL, flags | os.O_NONBLOCK)
         handle.reset_input_buffer()
     except BaseException:
         handle.close()
@@ -55,6 +60,16 @@ class Worker:
         self.lines = Lines()
         self.imu = deque(maxlen=128)
         self.invalid_lines = 0
+        self.write_count = 0
+        self.write_failures = 0
+        self.write_zero_bytes = 0
+        self.write_zero_streak = 0
+        self.short_writes = 0
+        self.last_write_duration_sec = 0.
+        self.max_write_duration_sec = 0.
+        self.write_blocked_since = None
+        self.last_write_error_type = ""
+        self.last_write_error = ""
         self.imu_at = None
         self.imu_status = 0
         self.imu_previous = None
@@ -111,6 +126,24 @@ class Worker:
                           imu_status=self.imu_status)
             return result
 
+    def transport_diagnostics(self):
+        """Serial write telemetry for ROS diagnostics (not ControlState)."""
+        with self.lock:
+            now = time.monotonic()
+            blocked = (0. if self.write_blocked_since is None
+                       else max(0., now - self.write_blocked_since))
+            result = dict(serial_write_count=self.write_count,
+                          serial_write_failures=self.write_failures,
+                          serial_write_zero_bytes=self.write_zero_bytes,
+                          serial_write_short=self.short_writes,
+                          serial_write_last_duration_sec=self.last_write_duration_sec,
+                          serial_write_max_duration_sec=self.max_write_duration_sec,
+                          serial_write_blocked_sec=blocked,
+                          serial_write_last_error_type=self.last_write_error_type,
+                          serial_write_last_error=self.last_write_error)
+            result.update(self.core.diagnostics(now))
+            return result
+
     def take_imu(self):
         with self.lock:
             samples = list(self.imu)
@@ -123,10 +156,73 @@ class Worker:
 
     def _write(self, frame):
         if frame is not None:
-            if self.handle.write(frame) != len(frame):
-                raise OSError("short serial write")
+            started = time.monotonic()
+            try:
+                try:
+                    written = os.write(self.handle.fileno(), frame)
+                except (BlockingIOError, InterruptedError):
+                    # The POSIX syscall accepted no bytes. Do not spin here or
+                    # retry the same command after its original deadline.
+                    written = 0
+            except (OSError, serial.SerialException) as error:
+                self.last_write_duration_sec = time.monotonic() - started
+                self.max_write_duration_sec = max(
+                    self.max_write_duration_sec, self.last_write_duration_sec)
+                self.write_failures += 1
+                self.last_write_error_type = type(error).__name__
+                self.last_write_error = (
+                    f"{error}; elapsed={self.last_write_duration_sec * 1000:.2f}ms; "
+                    f"failure_count={self.write_failures}")
+                raise OSError(
+                    f"{type(error).__name__} failure #{self.write_failures} after "
+                    f"{self.last_write_duration_sec * 1000:.2f}ms: {error}; "
+                    "frame delivery is unknown, closing port without retry") from error
+            self.last_write_duration_sec = time.monotonic() - started
+            self.max_write_duration_sec = max(
+                self.max_write_duration_sec, self.last_write_duration_sec)
+            if written == 0:
+                self.write_zero_bytes += 1
+                self.write_zero_streak += 1
+                if self.write_blocked_since is None:
+                    self.write_blocked_since = started
+                reference = (self.core.last_tx_at if self.core.last_tx_at is not None
+                             else self.write_blocked_since)
+                gap = time.monotonic() - reference
+                if gap >= self.core.MAX_SEND_GAP:
+                    self.write_failures += 1
+                    self.last_write_error_type = "SerialBackpressureTimeout"
+                    self.last_write_error = (
+                        f"zero bytes accepted for {gap * 1000:.1f}ms; "
+                        f"zero-write attempts={self.write_zero_streak}; "
+                        f"failure_count={self.write_failures}")
+                    raise OSError(
+                        f"serial backpressure exceeded {self.core.MAX_SEND_GAP * 1000:.0f}ms "
+                        f"after {self.write_zero_streak} zero-byte writes "
+                        f"({gap * 1000:.1f}ms), failure #{self.write_failures}; "
+                        "closing port")
+                # EAGAIN means no part of this frame entered the stream. Drop
+                # this attempt; the next 50 Hz tick builds a fresh frame.
+                return
+            if written != len(frame):
+                self.short_writes += 1
+                self.write_failures += 1
+                self.last_write_error_type = "ShortSerialWrite"
+                self.last_write_error = (
+                    f"{written}/{len(frame)} bytes accepted in "
+                    f"{self.last_write_duration_sec * 1000:.2f}ms; "
+                    f"failure_count={self.write_failures}")
+                raise OSError(
+                    f"serial short write #{self.write_failures} "
+                    f"({written}/{len(frame)} bytes) after "
+                    f"{self.last_write_duration_sec * 1000:.2f}ms; "
+                    "frame discarded and port closed without retry")
+            self.write_count += 1
+            self.write_blocked_since = None
+            self.write_zero_streak = 0
             # No flush(): waiting for hardware drains can block the safety loop.
-            self.core.sent(time.monotonic())
+            # Use the conservative syscall-entry time. A deschedule after
+            # write must not make the last physical transmit appear newer.
+            self.core.sent(started)
 
     def _read(self):
         if self.handle.in_waiting > 8192:
@@ -168,6 +264,8 @@ class Worker:
                 pass
             self.handle.close()
             self.handle = None
+        self.write_blocked_since = None
+        self.write_zero_streak = 0
         self.imu.clear()
         self.imu_at = None
         self.imu_status = 0

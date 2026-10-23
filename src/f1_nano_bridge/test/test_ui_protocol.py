@@ -77,7 +77,7 @@ def test_original_ticket_time_survives_forwarding(harness):
     command(core, ticket)
     result = backend.commands[-1]
     assert result.computed_ns == original_ns
-    assert result.deadline_ns == original_ns + 100_000_000
+    assert result.deadline_ns == original_ns + 150_000_000
     assert result.direction == 1 and packets[-1][1]["success"]
 
 
@@ -94,8 +94,44 @@ def test_consumed_ticket_cannot_be_replayed(harness):
 def test_expired_ticket_cannot_be_refreshed(harness):
     core, clock, backend, _ = harness
     ticket = acquire(harness)
-    clock.advance(.101)
+    clock.advance(.151)
     command(core, ticket)
+    assert not backend.commands and backend.released == ["lease"]
+
+
+@pytest.mark.parametrize("elapsed", [.099, .110, .149])
+def test_ticket_round_trip_uses_existing_bridge_ttl(harness, elapsed):
+    core, clock, backend, _ = harness
+    ticket = acquire(harness)
+    created_ns = clock.unix
+    clock.advance(elapsed)
+    command(core, ticket)
+    assert not backend.released
+    assert backend.commands[-1].deadline_ns == created_ns + 150_000_000
+
+
+def test_input_snapshot_age_is_deducted_without_clock_synchronization(harness):
+    core, clock, backend, _ = harness
+    ticket = acquire(harness)
+    created_ns = clock.unix
+    clock.advance(.06)
+    command(core, ticket, input_age_ns=30_000_000)
+    assert backend.commands[-1].computed_ns == created_ns - 30_000_000
+    assert backend.commands[-1].deadline_ns == created_ns + 120_000_000
+
+
+@pytest.mark.parametrize("age", [-1, True, 1.5, "1", 150_000_000])
+def test_invalid_snapshot_age_releases_control(harness, age):
+    core, _, backend, _ = harness
+    command(core, acquire(harness), input_age_ns=age)
+    assert not backend.commands and backend.released == ["lease"]
+
+
+def test_fresh_ticket_cannot_renew_expired_gui_input(harness):
+    core, clock, backend, _ = harness
+    ticket = acquire(harness)
+    clock.advance(.06)
+    command(core, ticket, input_age_ns=100_000_000)
     assert not backend.commands and backend.released == ["lease"]
 
 

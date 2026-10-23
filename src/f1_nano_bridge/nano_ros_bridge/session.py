@@ -57,6 +57,12 @@ class Session:
         self.tx_frames = 0
         self.max_tx_gap = 0.
         self.reconnects = 0
+        self.last_command_at = None
+        self.last_command_age_ms = 0.
+        self.last_command_remaining_ms = 0.
+        self.max_command_gap_ms = 0.
+        self.last_deadline_overrun_ms = 0.
+        self.last_command_rejection = ""
 
     def stop(self, reason):
         if self.token:
@@ -138,6 +144,7 @@ class Session:
             if self.token or self.ready:
                 self.stop("ACK progress timeout")
         if self.token and now >= self.expires:
+            self.last_deadline_overrun_ms = (now - self.expires) * 1000
             self.stop("command deadline expired")
         return True
 
@@ -151,6 +158,10 @@ class Session:
         self.token = secrets.token_hex(24)
         self.owner = owner
         self.last_stop_reason = ""
+        self.last_command_at = None
+        self.last_command_age_ms = self.last_command_remaining_ms = 0.
+        self.max_command_gap_ms = self.last_deadline_overrun_ms = 0.
+        self.last_command_rejection = ""
         self.expires = now + self.TTL
         self.command_seq = -1
         self.reason = "lease acquired; waiting for first command"
@@ -166,6 +177,7 @@ class Session:
         self.health(now)
         if not self.token or cmd.token != self.token or cmd.sequence <= self.command_seq:
             self.rejected += 1
+            self.last_command_rejection = "no matching lease or non-increasing sequence"
             return False
         try:
             cmd.channels()
@@ -181,8 +193,14 @@ class Session:
                 raise ValueError("invalid direction pulse deadline")
         except (ValueError, TypeError, OverflowError) as error:
             self.rejected += 1
+            self.last_command_rejection = str(error)
             self.stop(str(error))
             return False
+        if self.last_command_at is not None:
+            self.max_command_gap_ms = max(self.max_command_gap_ms, (now - self.last_command_at) * 1000)
+        self.last_command_at = now
+        self.last_command_age_ms = (unix_ns - cmd.computed_ns) / 1e6
+        self.last_command_remaining_ms = (cmd.deadline_ns - unix_ns) / 1e6
         self.command = cmd
         self.command_seq = cmd.sequence
         # Conversion happens only once, never on the 50 Hz resend path.
@@ -236,3 +254,12 @@ class Session:
                     sent_sequence=self.last_sent or 0, rejected_commands=self.rejected,
                     tx_frames=self.tx_frames, reconnects=self.reconnects,
                     max_tx_gap_sec=self.max_tx_gap)
+
+    def diagnostics(self, now):
+        return dict(command_receive_age_ms=-1. if self.last_command_at is None
+                    else (now - self.last_command_at) * 1000,
+                    command_age_at_accept_ms=self.last_command_age_ms,
+                    command_remaining_at_accept_ms=self.last_command_remaining_ms,
+                    command_max_receive_gap_ms=self.max_command_gap_ms,
+                    command_deadline_overrun_ms=self.last_deadline_overrun_ms,
+                    command_last_rejection=self.last_command_rejection)

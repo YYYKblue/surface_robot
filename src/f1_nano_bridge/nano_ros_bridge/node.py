@@ -144,6 +144,8 @@ class Bridge(Node):
             status.level = DiagnosticStatus.ERROR
         status.message = f"{state.state}: {state.reason}"
         status.values = [KeyValue(key=k, value=str(v)) for k, v in snap.items() if k != "ctrl"]
+        status.values.extend(KeyValue(key=k, value=str(v))
+                             for k, v in self.worker.transport_diagnostics().items())
         array.status.append(status)
         imu_status = DiagnosticStatus()
         imu_status.name, imu_status.hardware_id = "nano_bridge/imu", status.hardware_id

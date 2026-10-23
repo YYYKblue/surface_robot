@@ -221,7 +221,7 @@ def test_ui_gateway_session_and_real_firmware_keep_lease_across_groups_and_auxil
         assert state.thrust_enabled and state.thrust_percent == thrust
         assert session.token == token and gateway.clients[b"ui"].token == token
     # With no new UI computation, the original deadline still stops every output.
-    for _ in range(6):
+    for _ in range(8):
         state = step()
     assert state.neutral and not session.token
     assert session.last_stop_reason == "command deadline expired"
