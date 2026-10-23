@@ -1,5 +1,7 @@
 # 简化单边沿墙控制验证
 
+> 历史记录：两个清洗包现已合并为 `f1_pool_cleaning`；下文旧包名、命令与测试数量保留当时含义。当前操作见 [合并说明](../../src/f1_pool_cleaning/MIGRATION.md)。
+
 日期：2026-10-23。本记录对应本次 ±10°、40 cm 墙距、80 cm 前墙停车的简化版本，替代第一版策略说明；[第一版验证记录](VALIDATION_20261023.md) 保留作历史记录。
 
 下述初版记录保留 15% / 80 cm 参数；首轮下水后的 **30% / 50 cm** 调整与回归结果见文末，当前参数以包内配置和 README 为准。
@@ -41,7 +43,7 @@ ros2 run f1_rectangle_cleaning rectangle_demo
 
 ## 部署与实测范围
 
-本次未同步 Nano、未启动实船输出。按 [Nano 同步和测试步骤](../../src/f1_rectangle_cleaning/DEPLOY_TEST_NANO.md) 更新源码并在 Nano 构建后运行。历史诊断文件 `rectangle_current_side.yaml` 仍保留旧 ±3° 和 8 秒限制，不用于本版。
+本次未同步 Nano、未启动实船输出。按 [Nano 同步和测试步骤](../../src/f1_pool_cleaning/DEPLOY_TEST_NANO.md) 更新源码并在 Nano 构建后运行。历史诊断文件 `rectangle_current_side.yaml` 仍保留旧 ±3° 和 8 秒限制，不用于本版。
 
 本次没有实测滚刷推进效果、四主电机持续纠偏响应、第五路反向推力效果、地图定位精度或关闭输出后的滑行距离。80 cm 是船体前缘净空的关闭输出阈值，`STOPPED` 不表示实测停稳。
 
@@ -81,7 +83,7 @@ ros2 run f1_rectangle_cleaning rectangle_demo
 - 大偏角端到端纯逻辑测试读取实际任务感知 YAML，使用雷达原外参和 280° 视场，覆盖正负 20°、40°、60°、68° 后回到 8°，验证墙线跟踪、转向指令及刷盘恢复。
 - ROS 模拟租约测试覆盖短暂丢墙期间输出全关但租约保持、恢复后转向/开刷、持续丢墙超时释放租约、取得租约期间丢墙，以及有效距离显示为 40.0 cm、无效距离显示为 null。
 
-全部为本机合成扫描、合成反馈和模拟 bridge，未连接或同步 Nano。现场纠偏响应仍需实船验证。按 [部署步骤](../../src/f1_rectangle_cleaning/DEPLOY_TEST_NANO.md) 同步两个清洗包、构建并重启清洗 launch 后生效。
+全部为本机合成扫描、合成反馈和模拟 bridge，未连接或同步 Nano。现场纠偏响应仍需实船验证。按 [部署步骤](../../src/f1_pool_cleaning/DEPLOY_TEST_NANO.md) 同步两个清洗包、构建并重启清洗 launch 后生效。
 
 ## 后续反向纠偏代码分析与修复
 

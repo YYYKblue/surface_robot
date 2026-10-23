@@ -67,7 +67,7 @@ colcon build --symlink-install --parallel-workers 1 \
   --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 ```
 
-应列出五个包：`f1_interfaces`、`f1_nano_bridge`、`f1_mapping_bringup`、`f1_wall_cleaning` 和 `f1_rectangle_cleaning`。构建成功后，在运行终端加载新的 `install/local_setup.bash`。
+应列出四个包：`f1_interfaces`、`f1_nano_bridge`、`f1_mapping_bringup` 和 `f1_pool_cleaning`。构建成功后，在运行终端加载新的 `install/local_setup.bash`。
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -79,3 +79,5 @@ ros2 launch f1_nano_bridge imu.launch.py --show-args
 原 `ros2 launch/run nano_bridge ...` 改为 `ros2 launch/run f1_nano_bridge ...`；外部包的 `package.xml` 依赖也应改用 `f1_nano_bridge`。外部终端初始化文件、脚本或服务中若保存了旧工作空间路径，需要对应更新并重新加载环境。
 
 移动目录也会影响实际地图 YAML 中的绝对 `image` 路径。使用前应将其改为同目录 PGM 文件名或新路径；归档地图备份保留原始内容。
+
+两个旧清洗包的迁移、话题和命令变更见 [清洗包合并说明](src/f1_pool_cleaning/MIGRATION.md)。

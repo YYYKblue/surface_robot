@@ -12,12 +12,12 @@
 现已新增原生 ROS F103 硬件桥 [`f1_nano_bridge`](src/f1_nano_bridge/README.md) 和
 统一接口包 [`f1_interfaces`](src/f1_interfaces/README.md)，适配 `firmware`（back2，协议 v2），包含二进制控制、租约、CTRL 与 IMU。
 新桥默认不打开串口；与占用同一串口的旧网关及旧 ZMQ IMU 发布节点不能同时使用。新版 `f1_ui_gateway` 只调用 ROS 接口，应与原生桥同时运行。
-现已新增 [`f1_wall_cleaning`](src/f1_wall_cleaning/README.md)，共用 `f1_interfaces`，实现左侧单墙感知、back2 互斥方向脉冲控制和租约任务接口。默认仅观测/预览，未知几何参数阻止启动运动。固定地图定位、完整池边路线、自动过角和 UI→ROS 适配仍按清洁方案后续实施。
+清洗功能统一在 [`f1_pool_cleaning`](src/f1_pool_cleaning/README.md)：合并原 `f1_wall_cleaning` 的感知与原 `f1_rectangle_cleaning` 的当前单边控制，删除旧脉冲控制及其试跑配置。首次升级按 [清洗包迁移说明](src/f1_pool_cleaning/MIGRATION.md) 移走旧包和安装产物。
 建图包仅保留纯雷达模式；硬件桥的 IMU 遥测不参与建图。
 
-独立功能包 [f1_rectangle_cleaning](src/f1_rectangle_cleaning/README.md) 目前采用简化单边策略：±10° 内开滚刷推进，超限用四个主电机持续纠偏，第五路双向控制中心到左墙约 40 cm，船体前缘到前墙 50 cm 时关闭输出。已接入固定地图定位与可选 bridge 租约输出，无转向空间门控、脉冲等待或自动换边。历史两边设计与地图示意见 [两条长边刷洗设计](docs/long_wall_plan/DESIGN.md)。
+[f1_pool_cleaning](src/f1_pool_cleaning/README.md) 保持已验证的单边策略：±10° 内滚刷 30% 推进，四主电机从 ±3° 外持续纠偏，第五路以 ±30% 控制中心墙距 38–42 cm，船体前缘到前墙 50 cm 时关闭输出。已接入固定地图定位与可选 bridge 租约输出，无转向空间门控、脉冲等待或自动换边。历史两边设计与地图示意见 [两条长边刷洗设计](docs/long_wall_plan/DESIGN.md)。
 
-矩形任务采用纯雷达反馈，不引入 IMU 航向控制。部署与下水步骤见 [Nano 同步与纯雷达测试](src/f1_rectangle_cleaning/DEPLOY_TEST_NANO.md)。
+清洗任务采用纯雷达反馈，不引入 IMU 航向控制。入口统一为 `pool_*`，话题/服务统一为 `/pool_cleaning/*`。部署与下水步骤见 [Nano 同步与纯雷达测试](src/f1_pool_cleaning/DEPLOY_TEST_NANO.md)。当前仓库包含四个功能包。
 
 建图流程仅使用 **纯雷达模式**：
 `ros2 launch f1_mapping_bringup lidar_mapping.launch.py`。
@@ -32,7 +32,17 @@
 `src/f1_nano_bridge` 统一管理桥接功能，内部 `nano_ros_bridge.imu` 保留旧 ZMQ 接入节点和共用的纯 IMU 转换库；原生桥直接从串口发布 IMU。
 旧链路历史说明见 [IMU 接入说明](src/f1_nano_bridge/IMU.md)，当前固件启动以原生串口桥说明为准。
 
+## 2026-10-23 清洗包合并验证
+
+四个功能包构建通过；`f1_pool_cleaning` 共 **134 项独立 pytest 用例通过，0 失败、0 错误、0 跳过**：感知与几何参数 28、单边控制 71、反向纠偏回归 3、统一启动 2、ROS 接口与租约 22、合成雷达到实际 bridge Session 链路 8。删除的旧脉冲控制用例不再计入。
+
+合并前后同一组 96 项算法用例均通过；当前控制参数、状态机、租约及墙线算法保持原行为。首次完整测试发现新增链路场景误用了全周合成雷达，改为实机对应的后向 280° 视场后，受影响的 8 项链路测试全部通过，其余组的通过结果沿用。`colcon test-result` 当前显示 135，包含此次单组复测的 1 项 CTest 包装，不是 135 项独立用例。
+
+另已验证新包安装索引、五个可执行入口、Nano 脚本参数入口和离线演示；两个旧包不再出现在安装索引。使用备份 `.pbstream` 启动新的定位入口并查询到冻结轨迹 0，正常退出。ROS 检查仅使用 localhost 隔离域、合成反馈和模拟 bridge；本轮未同步 Nano、未连接串口、未进行水上验证。
+
 ## 2026-10-23 简化沿墙控制验证
+
+以下为合并前的历史验证，旧包名、包数量和测试数量保留当时含义。当前仅部署 `f1_pool_cleaning`，不再同步两个旧清洗包。
 
 5 包构建通过；矩形包 53 项逻辑和 19 项 ROS 集成测试通过，感知/单墙控制另 62 项回归通过。使用合成反馈与模拟 bridge，未连接或同步 Nano。详见 [简化版验证记录](docs/single_side_trial/SIMPLIFIED_VALIDATION_20261023.md)。
 
@@ -70,6 +80,7 @@
 
 从旧版本更新时，先按[接口迁移说明](src/f1_interfaces/README.md#从旧接口包迁移)移走旧接口包源码与生成目录，再重新构建；所有自定义接口统一由 `f1_interfaces` 提供。
 原独立 IMU 包也已合并，需按[桥接包迁移说明](src/f1_nano_bridge/README.md#从独立-imu-包迁移)移走旧包；桥接功能统一由 `f1_nano_bridge` 提供。
+两个清洗包也已合并，按[清洗包迁移说明](src/f1_pool_cleaning/MIGRATION.md) 更新入口、话题和自定义参数文件。
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -92,8 +103,8 @@ Nano 只创建 `/home/nvidia/surface_ws`，系统 ROS 使用 `/opt/ros/humble`�
 
 1. **Nano**：检查 Ubuntu/ROS，移除终端启动文件中失效的环境加载行，安装 SSH、rsync、colcon、rosdep、Cartographer 和 Cyclone DDS。
 2. **PC**：把 `surface_ws` 源码与文档同步到 Nano，排除 `build/`、`install/`、`log/` 等生成目录。
-3. **Nano**：用 rosdep 安装包依赖，确认五个项目包，再以单任务方式编译。
+3. **Nano**：用 rosdep 安装包依赖，确认四个项目包，再以单任务方式编译。
 4. **Nano**：加载 `/home/nvidia/surface_ws/install/local_setup.bash`，检查新包与启动入口，运行离线测试。
-5. **实景使用前**：恢复另行提供的 PAVO2 驱动；它不包含在当前五个包中。若驱动也被删除，须先恢复才有真实雷达输入。
+5. **实景使用前**：恢复另行提供的 PAVO2 驱动；它不包含在当前四个包中。若驱动也被删除，须先恢复才有真实雷达输入。
 
 完整固件互通测试需要额外同步只读固件测试源码，指南中提供了单独传输和补测命令。实际运行桥接节点不需要固件源码。

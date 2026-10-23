@@ -53,7 +53,7 @@ colcon build --symlink-install --cmake-args -DPython3_EXECUTABLE=/usr/bin/python
 ```bash
 source /opt/ros/humble/setup.bash
 cd /home/bboss/new-nano/surface_ws
-colcon build --symlink-install --packages-up-to f1_wall_cleaning \
+colcon build --symlink-install --packages-up-to f1_pool_cleaning \
   --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 source install/local_setup.bash
 ros2 launch f1_nano_bridge bridge.launch.py
@@ -147,9 +147,9 @@ IMU格式未改，要求mask=6，orientation仍标记不可用；时间为主机
 source /opt/ros/humble/setup.bash
 cd /home/bboss/new-nano/surface_ws
 source install/local_setup.bash
-colcon test --packages-select f1_nano_bridge f1_wall_cleaning --return-code-on-test-failure
+colcon test --packages-select f1_nano_bridge f1_pool_cleaning --return-code-on-test-failure
 colcon test-result --test-result-base build/f1_nano_bridge --verbose
-colcon test-result --test-result-base build/f1_wall_cleaning --verbose
+colcon test-result --test-result-base build/f1_pool_cleaning --verbose
 ```
 
 需要cc、pytest、pyserial、ROS Humble及只读back2源码；`F1_FIRMWARE_DIR`可覆盖默认固件目录。测试库编译到临时目录。实际运行无需携带固件源码。

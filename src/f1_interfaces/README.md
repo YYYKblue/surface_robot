@@ -7,8 +7,8 @@
 | msg | `ActuatorCommand` | 执行器指令与租约期限 |
 | msg | `ControlState` | 硬件桥控制状态 |
 | msg | `WallObservation` | 墙面与周边空间观测 |
-| msg | `EffortPreview` | 清洁控制预览 |
-| msg | `CleaningStatus` | 清洁任务状态 |
+| msg | `EffortPreview` | 旧脉冲控制预览接口；保留类型兼容，当前清洗包不发布 |
+| msg | `CleaningStatus` | 旧脉冲控制状态接口；保留类型兼容，当前清洗包不发布 |
 | srv | `AcquireControl` | 申请控制租约 |
 | srv | `ReleaseControl` | 释放控制租约 |
 
@@ -48,4 +48,4 @@ ros2 interface show f1_interfaces/msg/ActuatorCommand
 ros2 interface show f1_interfaces/srv/AcquireControl
 ```
 
-`colcon list` 应只包含一个自定义接口包 `f1_interfaces`，共五个功能包。原独立 IMU 桥也已并入 `f1_nano_bridge`，更新旧版本时同时参考[桥接包迁移说明](../f1_nano_bridge/README.md#从独立-imu-包迁移)。部署入口与测试命令见[工作空间说明](../../README.md)。
+`colcon list` 应只包含一个自定义接口包 `f1_interfaces`，共四个功能包。原独立 IMU 桥也已并入 `f1_nano_bridge`，更新旧版本时同时参考[桥接包迁移说明](../f1_nano_bridge/README.md#从独立-imu-包迁移)。部署入口与测试命令见[工作空间说明](../../README.md)。

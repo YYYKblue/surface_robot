@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Nano shortcut: load the workspace environment, then launch or control a task.
+set -e
+
+action="${1:-bringup}"
+if [ "$#" -gt 0 ]; then shift; fi
+case "$action" in
+  bringup|start|status|pause|cancel) ;;
+  *)
+    printf '%s\n' 'Usage: pool_nano [bringup|start|status|pause|cancel] [launch arguments]'
+    exit 2
+    ;;
+esac
+
+pool_ws="${SURFACE_WS:-}"
+if [ -z "$pool_ws" ]; then
+  pool_ws="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+  while [ ! -f "$pool_ws/install/local_setup.bash" ] && [ "$pool_ws" != / ]; do
+    pool_ws="$(dirname "$pool_ws")"
+  done
+fi
+if [ ! -f "$pool_ws/install/local_setup.bash" ]; then
+  printf '%s\n' 'Workspace install/local_setup.bash not found. Build first or set SURFACE_WS.' >&2
+  exit 1
+fi
+
+source /opt/ros/humble/setup.bash
+source "$pool_ws/install/local_setup.bash"
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-33}"
+export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
+
+case "$action" in
+  bringup)
+    exec ros2 launch f1_pool_cleaning pool_bringup.launch.py \
+      "load_state_filename:=$pool_ws/maps/20261021_145054/lidar_20261021_145054.pbstream" \
+      output_enabled:=true "$@"
+    ;;
+  start|pause|cancel)
+    exec ros2 service call "/pool_cleaning/$action" std_srvs/srv/Trigger '{}'
+    ;;
+  status)
+    exec ros2 topic echo /pool_cleaning/status --once --full-length
+    ;;
+esac

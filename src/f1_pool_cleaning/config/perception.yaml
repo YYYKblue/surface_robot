@@ -1,0 +1,28 @@
+pool_perception:
+  ros__parameters:
+    scan_frame: pavo2s_frame
+    base_frame: base_link
+    lidar_x_m: -0.2143195
+    lidar_y_m: 0.0
+    lidar_yaw_rad: 3.141592653589793
+    geometry_confirmed: true
+    hull_length_m: 0.56
+    hull_width_m: 0.56
+    brush_x_m: 0.10
+    brush_tip_y_m: 0.33
+    brush_compression_m: 0.01
+    brush_max_compression_m: 0.015
+    # Keep tracking the same left wall while recovering from a large yaw.
+    # These are perception limits; the brush gate remains +/-10 degrees.
+    max_wall_angle_rad: 1.2217304763960306  # 70 degrees
+    association_angle_rad: 0.5235987755982988  # 30 degrees between accepted scans
+    # Keep wall identity longer than the controller's 1.5 s recovery window.
+    association_timeout_sec: 2.0
+    # Blind bow leaves a short visible left-wall segment while yawing inward.
+    min_support_m: 0.30
+    stopping_distance_m: 0.50
+    front_slow_distance_m: 1.0
+    # Controller uses wall distance/angle and map endpoint distance only.
+    # Hull and turn-sweep flags remain diagnostic; they do not gate this task.
+    # Original blind-bow mounting is unchanged.
+    turn_sweep_rad: 0.20

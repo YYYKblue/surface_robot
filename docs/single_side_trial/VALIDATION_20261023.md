@@ -1,5 +1,7 @@
 # 第一版单边策略：本机验证记录
 
+> 历史记录：两个清洗包现已合并为 `f1_pool_cleaning`；下文旧包名、命令与测试数量保留当时含义。当前操作见 [合并说明](../../src/f1_pool_cleaning/MIGRATION.md)。
+
 日期：2026-10-23。修改范围：`src/f1_rectangle_cleaning`。修改前源码备份位于本机 `/tmp/f1_rectangle_cleaning_before_single_side_20261023`（临时目录，不作为长期备份）。
 
 ## 已通过

@@ -1,6 +1,6 @@
 # Nano 从零部署 surface_ws
 
-更新：2026-10-22。适用于 Nano 上旧 ROS 工作空间已全部删除的情况。直接创建新目录，不执行旧目录改名、迁移或清理命令。
+更新：2026-10-23。适用于 Nano 上旧 ROS 工作空间已全部删除的情况。直接创建新目录，不执行旧目录改名、迁移或清理命令。若已有旧清洗包，先按 [清洗包合并说明](src/f1_pool_cleaning/MIGRATION.md) 升级，再使用本文当前包列表。
 
 | 项目 | 统一约定 |
 | --- | --- |
@@ -10,6 +10,7 @@
 | 系统 ROS | `/opt/ros/humble` |
 | 桥接功能包 | `f1_nano_bridge` |
 | 自定义接口包 | `f1_interfaces` |
+| 沿边清洗功能包 | `f1_pool_cleaning` |
 
 下面每节标明命令在哪台设备执行。PC 和 Nano 分别编译，不传 PC 的生成目录。本说明没有自动连接或修改 Nano。
 
@@ -101,14 +102,13 @@ ssh nvidia@192.168.1.188
 `rosdep update` 使用普通用户执行。该流程依据[官方 rosdep 使用说明](https://docs.ros.org/en/humble/Tutorials/Intermediate/Rosdep.html)，从 `package.xml` 解析依赖；网络或依赖解析失败时先解决错误，再执行下一步。
 括号内启用了失败即停止，避免更新失败后继续使用已有缓存安装依赖。若出现缺失的 `debian.yaml` 或 GitHub 索引超时，按[第 9 节](#9-rosdep-更新报错处理)修复后重试。
 
-当前应列出恰好五个项目包：
+当前应列出恰好四个项目包：
 
 ```text
 f1_interfaces
 f1_mapping_bringup
 f1_nano_bridge
-f1_rectangle_cleaning
-f1_wall_cleaning
+f1_pool_cleaning
 ```
 
 若列表为空，检查是否把源码放进了 `/home/nvidia/surface_ws/src`。先传源码，再构建，不需要先编译空工作空间。
@@ -124,7 +124,7 @@ CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
   --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 ```
 
-同时限制包间和包内并行度，减小 Nano 编译时的内存占用。成功时应看到 `5 packages finished`，且没有 failed/aborted。失败时保留输出，先定位首个报错；只有编译成功后才加载本工作空间环境。
+同时限制包间和包内并行度，减小 Nano 编译时的内存占用。成功时应看到 `4 packages finished`，且没有 failed/aborted。失败时保留输出，先定位首个报错；只有编译成功后才加载本工作空间环境。
 
 ## 6. Nano：检查安装结果
 
@@ -194,7 +194,7 @@ colcon test-result --verbose
 
 ## 8. 实机雷达：单独恢复驱动
 
-**当前五个包不包含 PAVO2 雷达驱动。** 如果驱动曾放在被删除的工作空间里，它也需要从原源码/备份恢复。上述五包编译成功不代表 `/pavo2_scan` 已恢复。
+**当前四个包不包含 PAVO2 雷达驱动。** 如果驱动曾放在被删除的工作空间里，它也需要从原源码/备份恢复。上述四包编译成功不代表 `/pavo2_scan` 已恢复。
 
 先检查旧服务是否存在、指向哪里：
 
@@ -203,7 +203,7 @@ systemctl cat pavo2-scan.service
 systemctl show pavo2-scan.service -p ExecStart -p WorkingDirectory --no-pager
 ```
 
-服务文件仍存在不等于驱动存在。若入口指向已删除目录，需要恢复对应 ROS 2 驱动源码，并更新服务引用的路径和环境。后续驱动源码也放在 `/home/nvidia/surface_ws/src/` 中，安装依赖并在同一工作空间构建；加入驱动后包数量会多于五个。仓库尚未包含该驱动及服务定义，因此这里不假设其仓库地址、包名或可执行文件。
+服务文件仍存在不等于驱动存在。若入口指向已删除目录，需要恢复对应 ROS 2 驱动源码，并更新服务引用的路径和环境。后续驱动源码也放在 `/home/nvidia/surface_ws/src/` 中，安装依赖并在同一工作空间构建；加入驱动后包数量会多于四个。仓库尚未包含该驱动及服务定义，因此这里不假设其仓库地址、包名或可执行文件。
 
 驱动恢复后，在运行终端检查：
 
@@ -212,7 +212,7 @@ ros2 topic info /pavo2_scan --verbose
 ros2 run f1_mapping_bringup scan_check --samples 100
 ```
 
-确认扫描有效后，再按[纯雷达建图步骤](START_LIDAR.md)启动 SLAM，或按[矩形任务实景验证](src/f1_rectangle_cleaning/DEPLOY_TEST_NANO.md)继续。已有地图备份仍在 PC 的 `backups/nano_maps`，需要时再单独恢复。
+确认扫描有效后，再按[纯雷达建图步骤](START_LIDAR.md)启动 SLAM，或按[沿边清洗实景验证](src/f1_pool_cleaning/DEPLOY_TEST_NANO.md)继续。已有地图备份仍在 PC 的 `backups/nano_maps`，需要时再单独恢复。
 
 ## 9. rosdep 更新报错处理
 
@@ -223,7 +223,7 @@ ros2 run f1_mapping_bringup scan_check --samples 100
 | 找不到 `file:///usr/share/python3-rosdep2/debian.yaml` | rosdep 源列表仍引用一个已不存在的本地规则文件；可能是更换 rosdep 安装包后遗留的配置，单凭日志不能确认变更过程 |
 | `raw.githubusercontent.com/.../index-v4.yaml` 超时 | ROS 发行版索引下载失败；base/python 等规则已经使用镜像，不代表发行版索引也已换源 |
 
-后续 `All system dependencies have been satisfied` 表示依照当前可用规则，项目声明的依赖已满足，不表示上面的更新成功。五个包已列出则说明源码位置与功能包发现正常，无需重新传输源码。
+后续 `All system dependencies have been satisfied` 表示依照当前可用规则，项目声明的依赖已满足，不表示上面的更新成功。四个包已列出则说明源码位置与功能包发现正常，无需重新传输源码。
 
 在该 Ubuntu Nano 上，仅当所引用文件确实不存在时，备份源列表并注释失效引用：
 
