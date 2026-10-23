@@ -142,12 +142,12 @@ ros2 interface show f1_interfaces/msg/ActuatorCommand
 ros2 pkg executables cartographer_ros
 /usr/bin/python3 -c "import zmq; print('PyZMQ:', zmq.__version__); print('ZeroMQ:', zmq.zmq_version())"
 ros2 launch f1_nano_bridge bridge.launch.py --show-args
-ros2 launch f1_nano_bridge imu.launch.py --show-args
+ros2 launch f1_nano_bridge gateway.launch.py --show-args
 ros2 launch f1_nano_bridge gateway.launch.py --show-args
 ros2 launch f1_mapping_bringup lidar_mapping.launch.py --show-args
 ```
 
-`f1_nano_bridge` 前缀应为 `/home/nvidia/surface_ws/install/f1_nano_bridge`，可执行程序包括 `f1_bridge`、`imu_bridge` 和 `f1_ui_gateway`。Cartographer 应有 `cartographer_node` 及 `cartographer_occupancy_grid_node` 或 `occupancy_grid_node`。`--show-args` 只检查启动入口，不启动硬件。
+`f1_nano_bridge` 前缀应为 `/home/nvidia/surface_ws/install/f1_nano_bridge`，可执行程序应只有 `f1_bridge` 和 `f1_ui_gateway`。IMU 随原生串口桥发布，无独立接入节点。Cartographer 应有 `cartographer_node` 及 `cartographer_occupancy_grid_node` 或 `occupancy_grid_node`。`--show-args` 只检查启动入口，不启动硬件。
 
 以后运行节点时只加载 `/opt/ros/humble/setup.bash` 和 `/home/nvidia/surface_ws/install/local_setup.bash`。同机查看结果的终端使用相同 ROS 域；PC 参与实时通信时也设置域 33 和相同 RMW，并加载 PC 自己构建的 `surface_ws`。
 

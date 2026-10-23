@@ -1,5 +1,4 @@
 """ROS API for the F103 worker. Command freshness is checked in the worker too."""
-import json
 import signal
 
 import rclpy
@@ -105,13 +104,10 @@ class Bridge(Node):
 
     def _imu(self):
         for session, sample, unix_ns, mono_ns in self.worker.take_imu():
-            # Reuse the already-tested pure timestamp converter, without a ZMQ
-            # socket or the old f1_imu_bridge node.
-            packet = dict(protocol="f1-imu-v1", session=session, imu=sample,
-                          received_unix_ns=unix_ns, received_monotonic_ns=mono_ns)
             try:
-                converted = self.converter.convert(json.dumps(packet).encode(),
-                                                   self.get_clock().now().nanoseconds)
+                converted = self.converter.convert(
+                    sample, self.get_clock().now().nanoseconds, session=session,
+                    received_unix_ns=unix_ns, received_monotonic_ns=mono_ns)
             except ClockDiscontinuity as error:
                 self.worker.latch_fault(str(error))
                 return

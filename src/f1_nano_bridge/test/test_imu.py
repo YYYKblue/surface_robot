@@ -1,4 +1,3 @@
-import json
 import math
 
 import pytest
@@ -10,20 +9,22 @@ BASE = 1_800_000_000_000_000_000
 MONO = 100_000_000_000
 
 
-def packet(sequence=1, ms=1000, delay_ms=0, session="gateway:1", **imu_overrides):
+def packet(sequence=1, ms=1000, delay_ms=0, session="serial:1", **imu_overrides):
     elapsed = ms - 1000
     imu = {"kind": "IMU", "sequence": sequence, "stm32_ms": ms, "status": 31,
            "acceleration": [0.1, 0.2, 9.81], "angular_velocity": [0, 0, 0.1]}
     imu.update(imu_overrides)
-    return {"protocol": "f1-imu-v1", "session": session,
+    return {"session": session,
             "received_unix_ns": BASE + (elapsed + delay_ms) * 1_000_000,
             "received_monotonic_ns": MONO + (elapsed + delay_ms) * 1_000_000,
             "imu": imu}
 
 
 def convert(converter, document, now=None):
-    return converter.convert(json.dumps(document).encode(),
-                             document["received_unix_ns"] if now is None else now)
+    return converter.convert(
+        document["imu"], document["received_unix_ns"] if now is None else now,
+        session=document["session"], received_unix_ns=document["received_unix_ns"],
+        received_monotonic_ns=document["received_monotonic_ns"])
 
 
 def test_imu_fields_and_absent_orientation():
@@ -86,7 +87,7 @@ def test_device_reset_reanchors_without_replaying_old_timestamps():
 def test_reconnect_changes_session():
     converter = Converter()
     convert(converter, packet())
-    assert convert(converter, packet(sequence=1, ms=1010, session="gateway:2"))
+    assert convert(converter, packet(sequence=1, ms=1010, session="serial:2"))
     assert converter.counts["connection_changes"] == 1
 
 
@@ -135,8 +136,24 @@ def test_bad_fields_are_rejected_without_clock_state_changes(field, value):
     assert converter.counts["invalid"] == 1
 
 
-def test_oversize_and_non_imu_wire_are_rejected():
+def test_non_imu_samples_are_rejected():
     converter = Converter()
-    for wire in (b"x" * 8193, b"null", b"[]", b"{}", b"not-json"):
-        assert converter.convert(wire, BASE) is None
+    for sample in (b"IMU", None, [], {}, {"kind": "CTRL"}):
+        document = packet()
+        document["imu"] = sample
+        assert convert(converter, document) is None
     assert converter.counts["invalid"] == 5
+
+
+@pytest.mark.parametrize("field,value", [
+    ("session", ""), ("session", None),
+    ("received_unix_ns", -1), ("received_unix_ns", True),
+    ("received_monotonic_ns", -1), ("received_monotonic_ns", 1.5),
+])
+def test_invalid_receive_metadata_is_rejected(field, value):
+    converter = Converter()
+    document = packet()
+    document[field] = value
+    assert convert(converter, document) is None
+    assert converter.previous is None
+    assert converter.counts["invalid"] == 1

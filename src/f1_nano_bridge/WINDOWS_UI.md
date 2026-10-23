@@ -20,7 +20,7 @@ ros2 pkg executables f1_nano_bridge
 ros2 launch f1_nano_bridge gateway.launch.py --show-args
 ```
 
-应包含 `f1_bridge`、`imu_bridge`、`f1_ui_gateway`。运行依赖已在 `package.xml` 声明，包含 `python3-zmq`。
+应只包含 `f1_bridge`、`f1_ui_gateway`；IMU 由原生串口桥直接发布。运行依赖已在 `package.xml` 声明，UI 网关需要 `python3-zmq`。
 
 ## 2. 启动原生桥和网关
 

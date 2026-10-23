@@ -1,11 +1,10 @@
-"""Strict wire validation and approximate device-to-host timestamp alignment.
+"""Serial sample validation and approximate device-to-host timestamp alignment.
 
 No serial, ROS, or network side effects. Alignment uses the lowest observed
 host receive latency, not hardware synchronization between IMU and lidar.
 """
 from collections import Counter
 from dataclasses import dataclass
-import json
 import math
 
 
@@ -14,7 +13,7 @@ UINT32 = 1 << 32
 
 
 class ClockDiscontinuity(RuntimeError):
-    """A system clock step requires restarting the live bridge and trajectory."""
+    """A system clock step requires restarting the native bridge."""
 
 
 def integer(value, name, maximum=(1 << 63) - 1):
@@ -56,7 +55,7 @@ class Converter:
         self.max_age_ns = round(positive(max_age_sec, "max_age_sec") * 1e9)
         self.clock_jump_ns = round(positive(clock_jump_sec, "clock_jump_sec") * 1e9)
         self.counts = Counter()
-        self.error = "waiting for gateway IMU data"
+        self.error = "waiting for serial IMU data"
         self.clock_fault = False
         self.session = None
         self.previous = None
@@ -66,21 +65,15 @@ class Converter:
         self.last_stamp_ns = None
         self.last_receive_ns = None
 
-    def convert(self, wire, now_unix_ns):
+    def convert(self, imu, now_unix_ns, *, session, received_unix_ns, received_monotonic_ns):
+        """Convert one decoded serial sample with its original receive timestamps."""
         if self.clock_fault:
             return None
         try:
-            if not isinstance(wire, bytes) or len(wire) > 8192:
-                raise ValueError("IMU packet must be at most 8192 bytes")
-            packet = json.loads(wire)
-            if not isinstance(packet, dict) or packet.get("protocol") != "f1-imu-v1":
-                raise ValueError("expected f1-imu-v1 packet")
-            session = packet.get("session")
             if not isinstance(session, str) or not 1 <= len(session) <= 128:
                 raise ValueError("invalid session")
-            rx_ns = integer(packet.get("received_unix_ns"), "received_unix_ns", (1 << 31) * 10**9 - 1)
-            mono_ns = integer(packet.get("received_monotonic_ns"), "received_monotonic_ns")
-            imu = packet.get("imu")
+            rx_ns = integer(received_unix_ns, "received_unix_ns", (1 << 31) * 10**9 - 1)
+            mono_ns = integer(received_monotonic_ns, "received_monotonic_ns")
             if not isinstance(imu, dict) or imu.get("kind") != "IMU":
                 raise ValueError("missing IMU data")
             sequence = integer(imu.get("sequence"), "sequence", UINT32 - 1)
@@ -89,7 +82,7 @@ class Converter:
             acceleration = vector(imu.get("acceleration"), self.acceleration_scale, "acceleration")
             angular_velocity = vector(imu.get("angular_velocity"), self.angular_velocity_scale,
                                       "angular_velocity")
-        except (ValueError, TypeError, UnicodeError, RecursionError) as error:
+        except (ValueError, TypeError) as error:
             self.counts["invalid"] += 1
             self.error = str(error)
             return None
@@ -101,7 +94,7 @@ class Converter:
         age = now_unix_ns - rx_ns
         if age > self.max_age_ns:
             self.counts["stale"] += 1
-            self.error = "gateway sample is too old"
+            self.error = "serial sample is too old"
             return None
         epoch_offset = rx_ns - mono_ns
         if (age < -self.clock_jump_ns or
@@ -109,7 +102,7 @@ class Converter:
                  abs(epoch_offset - self.epoch_offset_ns) > self.clock_jump_ns)):
             self.clock_fault = True
             self.counts["clock_fault"] += 1
-            self.error = "system clock stepped; restart IMU bridge and Cartographer trajectory"
+            self.error = "system clock stepped; restart native bridge"
             raise ClockDiscontinuity(self.error)
 
         reset = session != self.session
@@ -126,7 +119,7 @@ class Converter:
             if seq_delta >= UINT32 // 2 or ms_delta >= UINT32 // 2:
                 if (sequence < old_sequence and milliseconds < old_ms and
                         seq_delta >= UINT32 // 2 and ms_delta >= UINT32 // 2):
-                    # Serial/ZMQ preserve wire order: both counters moving back
+                    # Serial preserves wire order: both counters moving back
                     # indicate a board reset. A normal uint32 wrap moves forward.
                     reset = True
                     self.counts["device_resets"] += 1
@@ -165,8 +158,8 @@ def to_ros_message(sample, frame_id):
     message.header.stamp.sec, message.header.stamp.nanosec = divmod(sample.stamp_ns, 10**9)
     message.linear_acceleration.x, message.linear_acceleration.y, message.linear_acceleration.z = sample.acceleration
     message.angular_velocity.x, message.angular_velocity.y, message.angular_velocity.z = sample.angular_velocity
-    # Firmware quaternion conventions have not been checked. Cartographer needs
-    # acceleration and angular velocity, so explicitly leave orientation absent.
+    # Firmware quaternion conventions have not been checked; only publish
+    # acceleration and angular velocity, explicitly leaving orientation absent.
     message.orientation_covariance[0] = -1.0
     # Zero acceleration/gyro covariance denotes unknown, not zero measurement noise.
     return message

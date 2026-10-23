@@ -2,25 +2,22 @@
 
 原 ROS 包 `nano_bridge` 已更名为 `f1_nano_bridge`，工作空间更名为 `surface_ws`。当前 Nano 旧工作空间已删除，请按[从零部署指南](../../DEPLOY_NANO.md)传输源码、安装依赖并编译；[改名迁移说明](../../WORKSPACE_MIGRATION.md)只适用于仍保留旧目录的其他环境。Python 模块仍为 `nano_ros_bridge`，原生桥节点 `/nano_bridge` 与 YAML 顶层键 `nano_bridge` 对应。
 
-修订：2026-10-22。只适配 `firmware`（back2，协议 v2） 的版本2协议，固件不修改。实现独占串口、独立50 Hz发送、控制租约、停止屏障、CTRL状态及同串口原生IMU。Python模块为 `nano_ros_bridge`，与根目录旧 `nano_bridge` 区分。
+修订：2026-10-24。只适配 `firmware`（back2，协议 v2） 的版本2协议。实现独占串口、独立50 Hz发送、控制租约、停止屏障、CTRL状态及同串口原生IMU。Python模块为 `nano_ros_bridge`。
 
-2026-10-22：原 `f1_imu_bridge` 已并入本包，工作空间只保留一个桥接功能包 `f1_nano_bridge`。本包负责设备通信、协议转换与 ROS 桥接；消息/服务定义统一在 `f1_interfaces`，清洁任务仍由对应业务包实现。
+本包负责设备通信、协议转换与 ROS 桥接；消息/服务定义统一在 `f1_interfaces`，清洁任务仍由对应业务包实现。IMU 只保留 F103 串口 → 原生桥 → `/f1/imu/data_raw` 接入，旧 ZMQ 接收节点及相关入口已删除。
 
 | 模块或入口 | 职责 |
 | --- | --- |
 | `nano_ros_bridge.protocol/session/transport` | 串口协议、控制租约与传输 |
 | `nano_ros_bridge.node`、`bridge.launch.py` | 原生串口控制、CTRL 与 IMU 遥测 |
 | `nano_ros_bridge.ui_protocol/ui_gateway`、`gateway.launch.py` | Windows UI 的 `f1-ui-v2` TCP 5556 网关；只调用 ROS，不打开串口 |
-| `nano_ros_bridge.imu.conversion` | 两条 IMU 接入链路共用的数据校验、单位与时间转换 |
-| `nano_ros_bridge.imu.node`、`imu.launch.py` | 旧网关 ZMQ → ROS IMU 接入，详见 [IMU 说明](IMU.md) |
+| `nano_ros_bridge.imu.conversion` | 原生串口 IMU 样本校验、单位与时间转换；不提供独立节点或网络入口 |
 
-Windows UI 使用 `bridge.launch.py` + `gateway.launch.py`，完整网络设置及启动命令见 [Windows UI 接入](WINDOWS_UI.md)。原生串口桥已包含 IMU 发布，无需额外启动 `imu.launch.py`。旧 ZMQ 节点的 ROS 名称仍为 `f1_imu_bridge`，保留原 YAML 参数匹配，但它已不是独立功能包。原生串口入口与 Python 模块的既有使用方式不变。
+Windows UI 使用 `ui_control.launch.py`，或分别启动 `bridge.launch.py` 与 `gateway.launch.py`；完整网络设置及启动命令见 [Windows UI 接入](WINDOWS_UI.md)。原生串口桥已包含 IMU 发布，包内只有 `f1_bridge`、`f1_ui_gateway` 两个可执行入口。ZeroMQ 依赖用于 TCP 5556 UI 网关。
 
-## 从独立 IMU 包迁移
+## 更新现有安装
 
-此节只供旧包目录仍存在的环境使用。已清空的 Nano 直接执行从零部署流程。
-
-先结束本工作空间的桥接节点与构建/测试，同步新源码。在未加载旧 `install` 的新终端进入工作空间根目录，移走遗留的旧包源码和生成目录，再重新构建整个工作空间：
+源码更新必须传播文件删除，不能只覆盖新增文件。结束本工作空间的桥接节点与构建/测试，在未加载旧 `install` 的终端中进入工作空间根目录。若存在已废弃的独立 `f1_imu_bridge` 包，先移走；再删除本包的旧生成目录，避免安装空间继续暴露已移除的入口：
 
 ```bash
 bridge_backup="$(mktemp -d /tmp/f1_bridge_migration.XXXXXX)"
@@ -31,13 +28,15 @@ for tree in src build install; do
   fi
 done
 echo "旧 IMU 包备份：$bridge_backup"
+rm -rf build/f1_nano_bridge install/f1_nano_bridge
+rm -rf src/f1_nano_bridge/nano_ros_bridge/imu/__pycache__
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 ```
 
-仅覆盖同步源码会留下旧包。上述命令适用于本项目默认的隔离安装布局；当前新部署使用系统 ROS 作为基础环境，项目包统一在 `surface_ws` 内构建。
+上述命令适用于本项目默认的隔离安装布局。源码同步时还需删除本包遗留的旧节点、脚本、launch、YAML；推荐对源码包目录使用 `rsync --delete --exclude='__pycache__/' --exclude='*.pyc'`，再执行上述缓存与生成目录清理。当前新部署使用系统 ROS 作为基础环境，项目包统一在 `surface_ws` 内构建。
 
-旧入口 `ros2 launch f1_imu_bridge imu.launch.py` 改为 `ros2 launch f1_nano_bridge imu.launch.py`，旧 `ros2 run f1_imu_bridge imu_bridge` 改为 `ros2 run f1_nano_bridge imu_bridge`。Python 导入改用 `nano_ros_bridge.imu.conversion` 或 `nano_ros_bridge.imu.node`。外部包若仍声明依赖 `f1_imu_bridge`，需改为 `f1_nano_bridge`。
+重新构建并加载环境后，`ros2 pkg executables f1_nano_bridge` 应只列出 `f1_bridge`、`f1_ui_gateway`。IMU 随 `bridge.launch.py` 启动；外部包若仍声明依赖 `f1_imu_bridge`，需改为 `f1_nano_bridge`，并移除独立 IMU 节点启动配置。
 
 ## 与上一版的变化
 
@@ -85,7 +84,7 @@ ros2 launch f1_nano_bridge bridge.launch.py \
 | `/f1/release_control` | `ReleaseControl`，仅持有者令牌可撤销自己的控制 |
 | `/f1/stop` | `std_srvs/Trigger`，撤销Nano授权并请求STOP，不能覆盖RC |
 | `/f1/control_state` | `ControlState`，授权、源/epoch/ACK、方向/档位、PWM目标与数据年龄 |
-| `/f1/imu/data_raw` | `sensor_msgs/Imu`，ACC/GYRO mask=6、复用纯时间转换函数 |
+| `/f1/imu/data_raw` | `sensor_msgs/Imu`，同串口 ACC/GYRO mask=6、纯时间转换函数 |
 | `/diagnostics` | 会话与IMU诊断 |
 
 指令定义：
@@ -139,7 +138,7 @@ CTRL为版本2共20字段：末尾新增speed_percent、direction，结果增加
 
 固件100 ms失联、RC五秒静止交回逻辑保持不变。CH03/04端点及SW2变化现在参与接管，CH01/02/H不参与。`/f1/stop`不能覆盖RC，也不是独立硬件急停。PWM字段是目标值，不是当前斜坡、实测转速或推力。
 
-IMU格式未改，要求mask=6，orientation仍标记不可用；时间为主机与设备毫秒近似对齐，不代表硬件同步。不要同时启动旧ZMQ IMU节点。纯雷达建图入口不变。
+IMU串口格式未改，要求mask=6，orientation仍标记不可用；时间为主机与设备毫秒近似对齐，不代表硬件同步。原生桥直接转换已解析的串口样本，不经过 JSON 或 ZMQ。纯雷达建图入口不变。
 
 ## 验证
 
@@ -154,9 +153,17 @@ colcon test-result --test-result-base build/f1_pool_cleaning --verbose
 
 需要cc、pytest、pyserial、ROS Humble及只读back2源码；`F1_FIRMWARE_DIR`可覆盖默认固件目录。测试库编译到临时目录。实际运行无需携带固件源码。
 
-合并后 `f1_nano_bridge` 测试还包含 IMU 转换和旧 ZMQ→ROS 回环。旧 ZMQ 入口及回环测试需要 `python3-zmq`；缺少此依赖时回环测试会 skipped，原生串口桥与 IMU 转换模块可独立导入。
+IMU 测试覆盖原生样本转换、时间与有效位校验、实际固件 C 格式化器到原生解析器及 ROS 消息的转换。固件格式化测试已迁入本包，不再依赖已删除的旧解析模块；`python3-zmq` 仍用于 UI 网关及其测试。
 
 测试覆盖v2参考帧、方向/档位/轮组、非法输入、CTRL、实际固件C的45种组合、v1拒绝、冲突辅助语义、26项固件原有回归、绝对脉冲截止、期限/停止屏障/RC、PTY及ROS默认禁用。当前和历史结果分别记录如下。不构建目标板HEX，不替代船体方向、最低档动力学、跨机DDS或水上验收。
+
+### 2026-10-24 移除旧 IMU 接入验证
+
+- 删除旧 ZMQ IMU 节点、可执行脚本、launch、YAML、专用说明及回环测试；原生桥直接转换串口样本，删除旧 JSON 包装。
+- 原固件目录中依赖旧解析器的 IMU 测试与 C 适配器迁入本包，使用当前解析器，自动编译真实固件格式化器；保留单位、状态有效期、计数器回绕、分帧和偏航边界检查。
+- 清理本机本包 `build/`、`install/` 及 Python 缓存后重新构建成功。安装索引只含 `f1_bridge`、`f1_ui_gateway`，旧 IMU 节点模块与安装文件均不存在。
+- 本包 **172 项独立 pytest 测试通过，0 失败、0 错误、0 跳过**。首次 ROS/UI 两组测试因沙箱禁止枚举 UDP 网络接口失败，放行本机网络后仅补跑这两组并通过；其余组沿用本轮已通过结果。此数量不含 CTest 包装用例。
+- 文档相对文件链接及 `git diff --check` 通过。本轮未向 Nano 部署，未连接设备串口或修改生产固件。
 
 ### 2026-10-22 Windows UI 网关验证
 
@@ -167,10 +174,12 @@ colcon test-result --test-result-base build/f1_pool_cleaning --verbose
 
 ### 2026-10-22 合并、改名与 ZMQ 补测记录（加入 UI 网关前）
 
+以下保留当时测试结果；旧 ZMQ IMU 节点及其回环测试已于 2026-10-24 删除。
+
 - `surface_ws` 五个包全新构建通过，`f1_nano_bridge` 的两个启动入口和安装路径检查通过。
 - 当时本包 pytest 结果为 **72 项通过、0 失败、0 错误、0 跳过**：协议23、会话15、固件互通6、PTY/时钟3、ROS5、IMU转换19、ZMQ回环1。
 - 完整回归时 ZMQ 回环因缺少依赖跳过；安装 PyZMQ 22.3.0 / ZeroMQ 4.3.4 后已单独补跑通过，模拟数据正确转换为 ROS IMU，无输入时不发布伪造样本。
-- 结果来自本机测试，没有连接实际硬件或部署到 Nano。全工作空间结果见[工作空间验证记录](../../README.md#2026-10-22-本地验证记录)，复现命令见 [ZMQ 补测说明](IMU.md#补跑-zmq-回环测试)。
+- 结果来自本机测试，没有连接实际硬件或部署到 Nano。全工作空间结果见[工作空间验证记录](../../README.md#2026-10-22-本地验证记录)。
 
 ### 2026-10-21 back2 验证记录
 

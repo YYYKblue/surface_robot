@@ -1,1 +1,1 @@
-"""Read-only F1 gateway telemetry to ROS 2 IMU conversion."""
+"""Native F103 serial sample validation and ROS 2 IMU conversion."""

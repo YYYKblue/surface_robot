@@ -73,7 +73,7 @@ colcon build --symlink-install --parallel-workers 1 \
 source /opt/ros/humble/setup.bash
 source /home/nvidia/surface_ws/install/local_setup.bash
 ros2 launch f1_nano_bridge bridge.launch.py --show-args
-ros2 launch f1_nano_bridge imu.launch.py --show-args
+ros2 launch f1_nano_bridge gateway.launch.py --show-args
 ```
 
 原 `ros2 launch/run nano_bridge ...` 改为 `ros2 launch/run f1_nano_bridge ...`；外部包的 `package.xml` 依赖也应改用 `f1_nano_bridge`。外部终端初始化文件、脚本或服务中若保存了旧工作空间路径，需要对应更新并重新加载环境。

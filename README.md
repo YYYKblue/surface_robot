@@ -4,14 +4,14 @@
 
 > 本仓库根目录即 ROS 工作空间，包含 `src/`、构建说明和配置，不包含固件、旧网关或桌面 UI。现已在 `f1_nano_bridge` 内提供新版 Windows UI 网关 `f1_ui_gateway`，接入步骤见 [Windows UI 接入](src/f1_nano_bridge/WINDOWS_UI.md)。克隆后直接在仓库根目录运行 colcon。`build/`、`install/`、`log/` 和缓存不纳入版本控制。
 >
-> 固件互通测试另需 back2 源码，默认查找工作空间同级的 `firmware/`，也可通过 `F1_FIRMWARE_DIR=/absolute/path/to/firmware` 指定。实际运行节点不需要固件源码。旧 ZMQ IMU 链路文档仅供历史参考，其依赖的旧网关不包含在本仓库中。
+> 固件互通测试另需 back2 源码，默认查找工作空间同级的 `firmware/`，也可通过 `F1_FIRMWARE_DIR=/absolute/path/to/firmware` 指定。实际运行节点不需要固件源码。IMU 只通过原生串口桥接入，旧 ZMQ 接收节点及相关入口已删除。
 
 
 用于 PAVO2 纯雷达建图的 ROS 2 Humble 工作空间，另含硬件桥与清洁任务功能包。
 
 现已新增原生 ROS F103 硬件桥 [`f1_nano_bridge`](src/f1_nano_bridge/README.md) 和
 统一接口包 [`f1_interfaces`](src/f1_interfaces/README.md)，适配 `firmware`（back2，协议 v2），包含二进制控制、租约、CTRL 与 IMU。
-新桥默认不打开串口；与占用同一串口的旧网关及旧 ZMQ IMU 发布节点不能同时使用。新版 `f1_ui_gateway` 只调用 ROS 接口，应与原生桥同时运行。
+新桥默认不打开串口；不能与占用同一串口的其他程序同时使用。新版 `f1_ui_gateway` 只调用 ROS 接口，应与原生桥同时运行。
 清洗功能统一在 [`f1_pool_cleaning`](src/f1_pool_cleaning/README.md)：合并原 `f1_wall_cleaning` 的感知与原 `f1_rectangle_cleaning` 的当前单边控制，删除旧脉冲控制及其试跑配置。首次升级按 [清洗包迁移说明](src/f1_pool_cleaning/MIGRATION.md) 移走旧包和安装产物。
 建图包仅保留纯雷达模式；硬件桥的 IMU 遥测不参与建图。
 
@@ -29,8 +29,14 @@
 原联合入口、联合 Lua、联合外参及加载代码已删除。
 算法讲解见 [结合代码理解 Cartographer](src/f1_mapping_bringup/CARTOGRAPHER_PRINCIPLES.md)。
 使用步骤与当前验证边界见 [功能包说明](src/f1_mapping_bringup/README.md)。
-`src/f1_nano_bridge` 统一管理桥接功能，内部 `nano_ros_bridge.imu` 保留旧 ZMQ 接入节点和共用的纯 IMU 转换库；原生桥直接从串口发布 IMU。
-旧链路历史说明见 [IMU 接入说明](src/f1_nano_bridge/IMU.md)，当前固件启动以原生串口桥说明为准。
+`src/f1_nano_bridge` 统一管理桥接功能，内部 `nano_ros_bridge.imu` 仅提供原生 IMU 转换库；原生桥直接从串口发布 IMU。
+已有安装需按[桥接包升级说明](src/f1_nano_bridge/README.md#更新现有安装)同步删除旧源码并清理本包生成目录。
+
+## 2026-10-24 移除旧 IMU 接入
+
+`f1_nano_bridge` 已删除旧 ZMQ IMU 接收节点及其脚本、launch、配置、说明和回环测试；原生串口 IMU 直接使用包内转换库。依赖旧解析器的固件 IMU 测试已迁入桥接包并改用当前解析器。
+
+本机清理桥接包生成目录与缓存后重新构建成功，安装索引只保留 `f1_bridge`、`f1_ui_gateway`。桥接包 172 项独立测试全部通过，包含放行本机网络后补跑的 ROS/UI 集成测试；未部署到 Nano。详情见[桥接包验证记录](src/f1_nano_bridge/README.md#2026-10-24-移除旧-imu-接入验证)，已有安装按[升级说明](src/f1_nano_bridge/README.md#更新现有安装)清理旧入口。
 
 ## 2026-10-23 清洗包合并验证
 
@@ -56,7 +62,7 @@
 
 接口合并、桥接包合并及改名完成后，已在 `/home/bboss/new-nano/surface_ws` 全新构建五个功能包，并验证新包索引、安装符号链接和两个桥接 launch 的参数入口。
 
-全工作空间回归后，安装 `python3-zmq` 并补跑此前跳过的 `imu_transport`，结果通过。按各包 pytest XML 汇总，当前保留的测试结果如下（不计 CTest 包装用例）：
+全工作空间回归后，安装 `python3-zmq` 并补跑此前跳过的旧 IMU ZMQ 回环，结果通过。该节点与回环测试已于 2026-10-24 删除；以下为当时各包 pytest XML 汇总的历史结果（不计 CTest 包装用例）：
 
 | 功能包 | 通过 | 失败/错误 | 跳过 |
 | --- | ---: | ---: | ---: |
@@ -68,7 +74,7 @@
 
 `f1_interfaces` 已构建通过，无独立 pytest 用例。以上结果由完整回归与随后单项 ZMQ 补测组成；`colcon test-result` 还统计 CTest 包装记录，其汇总数会随单项重跑变化，不等同于独立测试数。
 
-本地 ZMQ 环境为 PyZMQ 22.3.0、ZeroMQ 4.3.4。回环测试使用 localhost、随机端口及模拟 IMU 数据，没有连接硬件；本次没有向 Nano 同步或部署。补测命令见 [IMU 说明](src/f1_nano_bridge/IMU.md#补跑-zmq-回环测试)。
+当时本地 ZMQ 环境为 PyZMQ 22.3.0、ZeroMQ 4.3.4。回环测试使用 localhost、随机端口及模拟 IMU 数据，没有连接硬件；该轮没有向 Nano 同步或部署。
 
 ## PC 路径
 
@@ -79,7 +85,7 @@
 在未加载本工作空间安装环境的终端中构建：
 
 从旧版本更新时，先按[接口迁移说明](src/f1_interfaces/README.md#从旧接口包迁移)移走旧接口包源码与生成目录，再重新构建；所有自定义接口统一由 `f1_interfaces` 提供。
-原独立 IMU 包也已合并，需按[桥接包迁移说明](src/f1_nano_bridge/README.md#从独立-imu-包迁移)移走旧包；桥接功能统一由 `f1_nano_bridge` 提供。
+原独立 IMU 包及旧 ZMQ 入口已删除，需按[桥接包升级说明](src/f1_nano_bridge/README.md#更新现有安装)清理旧包与生成目录；桥接功能统一由 `f1_nano_bridge` 提供。
 两个清洗包也已合并，按[清洗包迁移说明](src/f1_pool_cleaning/MIGRATION.md) 更新入口、话题和自定义参数文件。
 
 ```bash
