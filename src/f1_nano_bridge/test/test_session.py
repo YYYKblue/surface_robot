@@ -52,7 +52,7 @@ def test_deadline_is_not_renewed_by_resends_or_duplicates():
 
 
 @pytest.mark.parametrize("computed,deadline", [
-    (1_000_000_000, 1_150_000_001), (1_100_000_000, 1_200_000_000),
+    (1_000_000_000, 1_250_000_001), (1_100_000_000, 1_350_000_000),
     (900_000_000, 1_000_000_000), (1_000_000_000, 999_000_000)])
 def test_invalid_times_revoke_lease(computed, deadline):
     core = ready()
@@ -135,7 +135,7 @@ def test_unclaimed_lease_expires_and_other_owner_cannot_release():
     token, _ = core.acquire("wall", .02)
     assert not core.acquire("manual", .03)[0]
     assert not core.release("wrong")
-    core.health(.18)
+    core.health(.28)
     assert not core.release(token) and not core.token
 
 

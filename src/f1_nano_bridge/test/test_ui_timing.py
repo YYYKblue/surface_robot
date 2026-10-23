@@ -16,7 +16,7 @@ from nano_ros_bridge.ui_protocol import GatewayCore, PROTOCOL
 
 
 NS_PER_MS = 1_000_000
-TTL_NS = 150_000_000
+TTL_NS = 250_000_000
 
 
 class Chain:
@@ -108,7 +108,7 @@ class Chain:
         self.acquires += 1
         token, reason = self.session.acquire(owner, self.monotonic())
         callback(dict(success=bool(token), token=token, message=reason,
-                      epoch=self.session.ctrl.epoch, max_command_ttl_ms=150))
+                      epoch=self.session.ctrl.epoch, max_command_ttl_ms=250))
 
     def release(self, token, callback):
         self.released.append(token)
@@ -178,12 +178,15 @@ def test_previous_100_ms_budget_reproduces_deadline_loss(firmware, monkeypatch,
 
 
 def test_latency_beyond_budget_does_not_execute_or_reacquire(firmware):
-    chain = Chain(firmware, down_ms=60, up_ms=60, ui_wait_ms=20, ros_ms=15)
+    chain = Chain(firmware, down_ms=120, up_ms=120, ui_wait_ms=20, ros_ms=15)
     chain.advance(600)
     chain.assert_stopped()
     # Only the seed command can execute; queued commands cannot renew its lease.
     assert sum(ok for _, _, ok in chain.accepted) == 1
-    assert chain.session.last_stop_reason == "command deadline expired"
+    # Either layer may notice first: the gateway releases on its own input
+    # timeout, the bridge on the original deadline.
+    assert chain.session.last_stop_reason in ("command deadline expired",
+                                              "owner released control")
 
 
 def test_new_tickets_cannot_extend_one_old_gui_snapshot(firmware):

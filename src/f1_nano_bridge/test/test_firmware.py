@@ -179,7 +179,7 @@ def test_ui_gateway_session_and_real_firmware_keep_lease_across_groups_and_auxil
         def acquire(self, owner, callback):
             token, reason = session.acquire(owner, now_ms / 1000)
             callback(dict(success=bool(token), token=token, message=reason,
-                          epoch=1, max_command_ttl_ms=150))
+                          epoch=1, max_command_ttl_ms=250))
 
         def release(self, token, callback):
             callback(dict(success=session.release(token)))
@@ -221,7 +221,7 @@ def test_ui_gateway_session_and_real_firmware_keep_lease_across_groups_and_auxil
         assert state.thrust_enabled and state.thrust_percent == thrust
         assert session.token == token and gateway.clients[b"ui"].token == token
     # With no new UI computation, the original deadline still stops every output.
-    for _ in range(8):
+    for _ in range(14):
         state = step()
     assert state.neutral and not session.token
     assert session.last_stop_reason == "command deadline expired"

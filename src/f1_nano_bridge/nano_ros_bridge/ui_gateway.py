@@ -1,6 +1,7 @@
 """ZeroMQ ROUTER to the native ROS bridge; never opens the F103 serial port."""
 import json
 import signal
+import time
 
 import rclpy
 from rclpy.executors import ExternalShutdownException
@@ -81,12 +82,14 @@ class UIGateway(Node):
             self.socket.close(linger=0)
             self.zmq_context.term()
             raise
+        self.send_failures = 0
+        self.last_send_failure_warn = 0.
         self.backend = RosBackend(self)
         self.core = GatewayCore(self.backend, self._send,
                                 allow_fifth_thruster=self.get_parameter("allow_fifth_thruster").value,
                                 report_loss=lambda reason: self.get_logger().warning("UI control lost: " + reason))
         self.subscription = self.create_subscription(ControlState, "/f1/control_state", self._state, 1)
-        self.timer = self.create_timer(.02, self._tick)
+        self.timer = self.create_timer(.01, self._tick)
         self.get_logger().info(f"f1-ui-v2 listening on tcp://{address}:5556")
 
     @staticmethod
@@ -99,8 +102,15 @@ class UIGateway(Node):
     def _send(self, ident, packet):
         try:
             self.socket.send_multipart([ident, json.dumps(packet, allow_nan=False).encode()], flags=zmq.DONTWAIT)
-        except (zmq.ZMQError, ValueError):
-            pass  # Backpressure cannot block ROS or extend command validity.
+        except (zmq.ZMQError, ValueError) as error:
+            # Backpressure must not block ROS or extend command validity, but a
+            # silently dropped state packet can outlast the UI's receive window.
+            self.send_failures += 1
+            now = time.monotonic()
+            if now - self.last_send_failure_warn >= 1.:
+                self.last_send_failure_warn = now
+                self.get_logger().warning(
+                    f"gateway state send failed {self.send_failures} times; last={error}")
 
     def _state(self, message):
         state = {}

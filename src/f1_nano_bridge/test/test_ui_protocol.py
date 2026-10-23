@@ -23,7 +23,7 @@ class Backend:
         self.pending.append(callback)
 
     def grant(self, token="lease"):
-        self.pending.pop(0)(dict(success=True, token=token, epoch=1, max_command_ttl_ms=150))
+        self.pending.pop(0)(dict(success=True, token=token, epoch=1, max_command_ttl_ms=250))
 
     def release(self, token, callback):
         self.released.append(token)
@@ -77,7 +77,7 @@ def test_original_ticket_time_survives_forwarding(harness):
     command(core, ticket)
     result = backend.commands[-1]
     assert result.computed_ns == original_ns
-    assert result.deadline_ns == original_ns + 150_000_000
+    assert result.deadline_ns == original_ns + 250_000_000
     assert result.direction == 1 and packets[-1][1]["success"]
 
 
@@ -94,12 +94,12 @@ def test_consumed_ticket_cannot_be_replayed(harness):
 def test_expired_ticket_cannot_be_refreshed(harness):
     core, clock, backend, _ = harness
     ticket = acquire(harness)
-    clock.advance(.151)
+    clock.advance(.251)
     command(core, ticket)
     assert not backend.commands and backend.released == ["lease"]
 
 
-@pytest.mark.parametrize("elapsed", [.099, .110, .149])
+@pytest.mark.parametrize("elapsed", [.099, .110, .249])
 def test_ticket_round_trip_uses_existing_bridge_ttl(harness, elapsed):
     core, clock, backend, _ = harness
     ticket = acquire(harness)
@@ -107,7 +107,7 @@ def test_ticket_round_trip_uses_existing_bridge_ttl(harness, elapsed):
     clock.advance(elapsed)
     command(core, ticket)
     assert not backend.released
-    assert backend.commands[-1].deadline_ns == created_ns + 150_000_000
+    assert backend.commands[-1].deadline_ns == created_ns + 250_000_000
 
 
 def test_input_snapshot_age_is_deducted_without_clock_synchronization(harness):
@@ -117,10 +117,10 @@ def test_input_snapshot_age_is_deducted_without_clock_synchronization(harness):
     clock.advance(.06)
     command(core, ticket, input_age_ns=30_000_000)
     assert backend.commands[-1].computed_ns == created_ns - 30_000_000
-    assert backend.commands[-1].deadline_ns == created_ns + 120_000_000
+    assert backend.commands[-1].deadline_ns == created_ns + 220_000_000
 
 
-@pytest.mark.parametrize("age", [-1, True, 1.5, "1", 150_000_000])
+@pytest.mark.parametrize("age", [-1, True, 1.5, "1", 250_000_000])
 def test_invalid_snapshot_age_releases_control(harness, age):
     core, _, backend, _ = harness
     command(core, acquire(harness), input_age_ns=age)
@@ -131,7 +131,7 @@ def test_fresh_ticket_cannot_renew_expired_gui_input(harness):
     core, clock, backend, _ = harness
     ticket = acquire(harness)
     clock.advance(.06)
-    command(core, ticket, input_age_ns=100_000_000)
+    command(core, ticket, input_age_ns=200_000_000)
     assert not backend.commands and backend.released == ["lease"]
 
 
@@ -190,7 +190,7 @@ def test_repeated_sequence_with_new_ticket_is_rejected(harness):
 def test_hello_cannot_keep_motion_alive(harness):
     core, clock, backend, _ = harness
     command(core, acquire(harness))
-    for _ in range(3):
+    for _ in range(5):
         clock.advance(.1)
         core.update_state(ready())
         send(core, "hello")
@@ -210,7 +210,7 @@ def test_bridge_changes_and_unhealthy_state_revoke(harness, change):
 def test_bridge_staleness_revokes_even_with_client_hello(harness):
     core, clock, backend, _ = harness
     acquire(harness)
-    for _ in range(4):
+    for _ in range(6):
         clock.advance(.08)
         send(core, "hello")
     assert backend.released == ["lease"]
@@ -230,7 +230,7 @@ def test_client_timeout_and_late_acquire_response(harness):
     core, clock, backend, _ = harness
     send(core, "hello")
     send(core, "acquire", owner="F1-Qt")
-    clock.advance(.251)
+    clock.advance(.401)
     core.tick()
     backend.grant("late")
     assert backend.released == ["late"] and not core.clients
@@ -326,7 +326,7 @@ def test_clients_and_tickets_remain_bounded(harness):
     for _ in range(100):
         core.tick()
     assert len(core.clients) == core.MAX_CLIENTS
-    assert all(len(client.tickets) <= 8 for client in core.clients.values())
+    assert all(len(client.tickets) <= core.TICKET_DEPTH for client in core.clients.values())
 
 
 def test_close_releases_current_and_pending_control(harness):

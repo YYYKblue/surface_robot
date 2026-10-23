@@ -93,7 +93,7 @@ ros2 launch f1_nano_bridge bridge.launch.py \
 | 字段 | 合同 |
 | --- | --- |
 | token、sequence | acquire返回的令牌；uint64在单租约内严格递增 |
-| computed_at、valid_until | 同机系统时钟的原始计算时间/期限，0<TTL≤150 ms，最多容忍5 ms未来计算时间；转发不得刷新 |
+| computed_at、valid_until | 同机系统时钟的原始计算时间/期限，0<TTL≤250 ms，最多容忍5 ms未来计算时间；转发不得刷新 |
 | direction | STOP=0、FORWARD=1、REVERSE=2、LEFT=3、RIGHT=4，互斥 |
 | speed_percent | 25/50/75；PWM档位，不是实测速度/推力，默认25 |
 | mode | FRONT=0、BOTH=1、BACK=2；允许同租约切换，固件停用被排除的轮组 |
@@ -101,7 +101,7 @@ ros2 launch f1_nano_bridge bridge.launch.py \
 | brush_enabled/percent | 滚刷明确开关、±100%辅助速度 |
 | thrust_enabled/percent | 第五路，默认不允许启用 |
 
-等待READY → acquire →150 ms内发首个结果 → 每20～50 ms根据新输入计算并更新。重复结果不能更改原始时间。指令QoS为BEST_EFFORT/VOLATILE/KEEP_LAST(1)。无租约、未知profile、非法方向/档位、原始结果过期均不能输出运动。
+等待READY → acquire →250 ms内发首个结果 → 每20～50 ms根据新输入计算并更新。重复结果不能更改原始时间。指令QoS为BEST_EFFORT/VOLATILE/KEEP_LAST(1)。无租约、未知profile、非法方向/档位、原始结果过期均不能输出运动。
 
 脉冲绝对期限只截断动作和辅助输出，不撤销仍新鲜的租约；上层随后发送新计算的STOP，等待后再开始下一脉冲。50 Hz重发不会延长脉冲。若上层停止计算，valid_until到期仍会撤销令牌、等待STOP确认；不能依靠持续发序号让旧动作续命。
 

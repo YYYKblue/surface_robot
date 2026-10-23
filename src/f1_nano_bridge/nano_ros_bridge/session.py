@@ -26,7 +26,7 @@ class Command:
 
 
 class Session:
-    TTL = 0.150
+    TTL = 0.250
     CTRL_TIMEOUT = 0.400
     ACK_TIMEOUT = 0.400
     MAX_SEND_GAP = 0.080

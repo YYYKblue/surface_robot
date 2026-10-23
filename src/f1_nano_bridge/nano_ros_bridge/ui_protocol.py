@@ -27,12 +27,17 @@ class Client:
 
 
 class GatewayCore:
-    # Keep the original GUI sample valid for at most the bridge's 150 ms
-    # command TTL. input_age_ns is subtracted from ticket creation time, so a
-    # network worker cannot refresh an old GUI snapshot with a newer ticket.
-    TICKET_TTL_NS = 150_000_000
-    INPUT_TIMEOUT = .250
-    STATE_TIMEOUT = .300
+    # Keep the original GUI sample valid for at most the bridge's command TTL.
+    # input_age_ns is subtracted from ticket creation time, so a network worker
+    # cannot refresh an old GUI snapshot with a newer ticket. 250 ms leaves room
+    # for one skipped 10 ms tick on every hop without losing the lease; it does
+    # not extend an old sample, because the GUI age is deducted, not reset.
+    TICKET_TTL_NS = 250_000_000
+    INPUT_TIMEOUT = .400
+    STATE_TIMEOUT = .400
+    # 24 tickets cover 240 ms at the 10 ms tick, comfortably more than both the
+    # UI's 80 ms use window and any tolerated scheduling jitter.
+    TICKET_DEPTH = 24
     MAX_CLIENTS = 32
 
     def __init__(self, backend, send, *, allow_fifth_thruster=False,
@@ -260,7 +265,7 @@ class GatewayCore:
                 raise ValueError("expired ticket or bridge state")
             input_age_ns = packet.get("input_age_ns", 0)
             if type(input_age_ns) is not int or not 0 <= input_age_ns < self.TICKET_TTL_NS:
-                raise ValueError("input_age_ns must be an integer within the 150 ms command TTL")
+                raise ValueError("input_age_ns must be an integer within the command TTL")
             command_computed_ns = computed_ns - input_age_ns
             command_deadline_ns = command_computed_ns + self.TICKET_TTL_NS
             gap_ms = (self.clock() - client.last_input) * 1000
@@ -298,7 +303,9 @@ class GatewayCore:
                 ticket = ""
             else:
                 client.tickets[ticket] = (now, self.unix_ns())
-                while len(client.tickets) > 8:
+                # Keep at least the UI's 80 ms ticket-use window in flight even
+                # at the 10 ms tick; TTL pruning still bounds real memory.
+                while len(client.tickets) > self.TICKET_DEPTH:
                     del client.tickets[next(iter(client.tickets))]
             allow_fifth, fifth_reason = self.fifth_capability()
             self.send(ident, dict(protocol=PROTOCOL, type="state", gateway_id=self.gateway_id,
