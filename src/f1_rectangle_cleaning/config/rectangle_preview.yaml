@@ -1,22 +1,27 @@
 rectangle_controller:
   ros__parameters:
-    # v0.1 refuses true: preview has no hardware publisher or lease clients.
     output_enabled: false
+    # Consume fresh map -> base_link TF from fixed-map localization.
+    # Set false when supplying PoseWithCovarianceStamped on map_pose instead.
+    use_map_tf: true
     map_frame: map
     base_frame: base_link
-    odom_frame: odom
-    # Estimated wall-band rectangle; not surveyed geometry or approved route.
+    # Estimated rectangle in the saved 20261021_145054 map; verify in situ.
     origin_x_m: -0.9802816886364385
     origin_y_m: -0.18424262645062695
     axis_yaw_rad: -0.19739548348805863
     length_m: 2.8829072052510294
     width_m: 1.5199000413306079
-    end_inset_m: 0.80
-    wall_target_m: 0.45
+    wall_target_m: 0.40
+    side_on_distance_m: 0.45
+    side_off_distance_m: 0.38
     min_wall_distance_m: 0.36
-    front_stop_m: 0.50
-    # Reverse -> left was reported; ROS command sign remains unverified.
-    fifth_left_sign: 0
-    side_max_percent: 15.0
-    forward_pulse_sec: 0.10
-    neutral_dwell_sec: 1.0
+    front_stop_m: 0.80
+    # User confirmed positive -> left, 2026-10-23.
+    fifth_left_sign: 1
+    side_percent: 15.0
+    brush_percent: 15.0
+    heading_deadband_rad: 0.05235987755982989
+    turn_speed_percent: 25
+    turn_pulse_sec: 0.10
+    neutral_dwell_sec: 0.50
