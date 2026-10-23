@@ -228,15 +228,24 @@ class RectangleController(Node):
         now = self.get_clock().now().nanoseconds
         effort = self.mission.last_effort
         valid = effort is not None and now < effort.valid_until_ns and self.mission.active
-        status = dict(phase=self.mission.phase, reason=self.mission.reason,
+        left_distance = (self.wall.distance if self.wall and self.wall.valid
+                         and math.isfinite(self.wall.distance) and self.wall.distance > 0 else None)
+        status = dict(phase=self.mission.phase,
+                      left_wall_distance_cm=round(left_distance * 100, 1) if left_distance is not None else None,
+                      wall_angle_deg=round(math.degrees(self.wall.angle), 2) if self.wall and self.wall.valid
+                          and math.isfinite(self.wall.angle) else None,
+                      direction=effort.direction if valid and (not effort.direction_until_ns or now < effort.direction_until_ns) else 0,
+                      reason=self.mission.reason,
                       feedback_error=self._stream_error() or self.mission.error(f, now),
                       output_enabled=self.live, lease_held=bool(self.lease and self.lease.token),
                       brush_enabled=bool(valid and effort.brush_percent),
                       logical_side_left_percent=effort.side_left_percent if valid else 0.,
-                      direction=effort.direction if valid and (not effort.direction_until_ns or now < effort.direction_until_ns) else 0,
-                      wall_distance_m=self.wall.distance if self.wall and math.isfinite(self.wall.distance) else None,
-                      wall_angle_deg=math.degrees(self.wall.angle) if self.wall and math.isfinite(self.wall.angle) else None,
+                      wall_distance_m=left_distance,
+                      wall_valid=bool(self.wall and self.wall.valid),
+                      wall_reason=self.wall.reason if self.wall else "wall observation missing",
+                      wall_recovery_sec=self.config.wall_recovery_sec,
                       heading_band_deg=math.degrees(self.config.heading_deadband_rad),
+                      heading_correction_deadband_deg=math.degrees(self.config.heading_correction_deadband_rad),
                       wall_target_m=self.config.wall_target_m,
                       front_stop_m=self.config.front_stop_m,
                       front_distance_source="map_short_wall_in_heading_direction",

@@ -20,6 +20,7 @@ class Config:
     max_wall_distance_m: float = 3.
     association_distance_m: float = .15
     association_angle_rad: float = .20
+    association_timeout_sec: float = 1.
     front_valid_fraction: float = .85
     front_max_gap_rad: float = .06
     geometry_confirmed: bool = False
@@ -64,7 +65,7 @@ class Config:
         if not self.scan_frame or not self.base_frame:
             raise ValueError("frame names must be nonempty")
         positive = ("scan_max_age_sec", "cluster_gap_m", "fit_threshold_m", "min_support_m",
-                    "min_inliers", "association_distance_m", "association_angle_rad",
+                    "min_inliers", "association_distance_m", "association_angle_rad", "association_timeout_sec",
                     "front_max_gap_rad", "max_wall_distance_m", "forward_pulse_sec", "turn_pulse_sec",
                     "neutral_dwell_sec", "turn_sweep_rad", "distance_gain", "heading_deadband_rad",
                     "clean_distance_tolerance_m", "clean_angle_tolerance_rad", "stable_duration_sec",
@@ -73,7 +74,8 @@ class Config:
             raise ValueError("positive algorithm parameters required")
         if not (0 < self.min_inlier_ratio <= 1 and 0 < self.front_valid_fraction <= 1):
             raise ValueError("invalid quality fractions")
-        if not (0 < self.max_approach_angle_rad <= self.max_start_angle_rad <= self.max_wall_angle_rad < .8):
+        if not (0 < self.max_approach_angle_rad <= self.max_start_angle_rad
+                <= self.max_wall_angle_rad < math.pi / 2):
             raise ValueError("invalid angle limits")
         if not (self.command_ttl_sec <= .15 and self.scan_max_age_sec <= .15):
             raise ValueError("command/scan age cannot exceed bridge safety budget of 150 ms")

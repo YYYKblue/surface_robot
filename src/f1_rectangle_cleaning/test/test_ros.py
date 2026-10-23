@@ -45,6 +45,7 @@ class Harness:
         self.start_client = self.peer.create_client(Trigger, "/rectangle_cleaning/start")
         self.sequence, self.session, self.enabled = 0, "test-perception", True
         self.pose_offset = 0.
+        self.wall_valid = True
         self.along, self.distance, self.angle = .8, .4, 0.
         self.timer = self.peer.create_timer(.02, self.publish)
 
@@ -60,7 +61,9 @@ class Harness:
         for i in (0, 7, 35):
             p.pose.covariance[i] = .001
         self.sequence += 1
-        wall = replace(f.wall, left_turn_clear=False, right_turn_clear=False)
+        wall = replace(f.wall, left_turn_clear=False, right_turn_clear=False,
+                       valid=self.wall_valid,
+                       reason=f.wall.reason if self.wall_valid else "left wall association lost")
         w = to_observation_message(wall, c.base_frame, self.session, self.sequence)
         return p, w
 
@@ -103,6 +106,9 @@ def test_real_ros_brush_preview_and_stream_watchdog(harness):
     h.wait(lambda: any(m.brush_enabled for m in h.commands))
     assert all(not m.token and m.direction == 0 and not m.thrust_enabled for m in h.commands)
     h.wait(lambda: bool(h.statuses))
+    h.wait(lambda: any(s["left_wall_distance_cm"] == 40. for s in h.statuses))
+    distance_status = next(s for s in h.statuses if s["left_wall_distance_cm"] == 40.)
+    assert distance_status["wall_distance_m"] == pytest.approx(.4)
     assert all(not s["output_enabled"] and not s["lease_held"] for s in h.statuses)
     publishers = h.peer.get_publisher_names_and_types_by_node("rectangle_controller", "/")
     assert not any(name == "/f1/actuator_command" for name, _ in publishers)
@@ -144,7 +150,7 @@ def test_missing_covariance_is_diagnostic_and_does_not_block_control(harness):
     assert not h.controller.pose_covariance_available
 
 
-@pytest.mark.parametrize("angle,direction", [(10., 0), (-10., 0), (12., 3), (-12., 4)])
+@pytest.mark.parametrize("angle,direction", [(10., 3), (-10., 4), (12., 3), (-12., 4)])
 def test_ros_ten_degree_gate_and_continuous_correction_without_turn_clearance(harness, angle, direction):
     h = harness
     h.angle = math.radians(angle)
@@ -153,7 +159,7 @@ def test_ros_ten_degree_gate_and_continuous_correction_without_turn_clearance(ha
     h.wait(lambda: len(h.commands) >= 10)
     commands = h.commands[-8:]
     assert all(m.direction == direction and m.mode == 1 for m in commands)
-    assert all(m.brush_enabled == (direction == 0) and m.thrust_percent == 30. for m in commands)
+    assert all(m.brush_enabled == (abs(angle) <= 10) and m.thrust_percent == 30. for m in commands)
     assert all(m.direction_until.sec == 0 and m.direction_until.nanosec == 0 for m in commands)
     assert h.controller.mission.active
     # The next scan restores brush propulsion and reverses side correction.
@@ -225,6 +231,7 @@ class FakeBridge:
                                   state="READY", source="NANO", armed=True, result="OK",
                                   allow_fifth_thruster=True, ctrl_age_sec=0., ack_age_sec=0.)
         self.token = ""
+        self.on_acquire = None
         self.commands, self.releases = [], []
         self.pub = h.peer.create_publisher(ControlState, "/f1/control_state", 5)
         self.sub = h.peer.create_subscription(ActuatorCommand, "/f1/actuator_command", self.commands.append, qos_profile_sensor_data)
@@ -240,6 +247,8 @@ class FakeBridge:
         self.token = "fake-lease"
         self.state.state, self.state.owner, self.state.motion_authorized = "ACTIVE", req.owner, True
         res.success, res.token, res.epoch = True, self.token, self.state.epoch
+        if self.on_acquire:
+            self.on_acquire()
         return res
 
     def _release(self, req, res):
@@ -265,10 +274,84 @@ def test_live_lease_continuous_yaw_and_signed_fifth_output():
         h.angle, h.distance = math.radians(-12), .5
         h.wait(lambda: b.commands[-1].direction == 4 and b.commands[-1].thrust_percent == 30.)
         h.angle, h.distance = math.radians(10), .4
-        h.wait(lambda: b.commands[-1].brush_enabled and b.commands[-1].direction == 0
+        h.wait(lambda: b.commands[-1].brush_enabled and b.commands[-1].direction == 3
                and not b.commands[-1].thrust_enabled)
         h.controller._cancel(None, Trigger.Response())
         h.wait(lambda: bool(b.releases))
+    finally:
+        h.close()
+
+
+def test_live_lease_survives_brief_wall_fit_loss_and_resumes_correction():
+    h = Harness([Parameter("output_enabled", value=True)])
+    b = FakeBridge(h)
+    h.distance = .5
+    try:
+        h.wait(lambda: h.controller.lease.bridge is not None and h.controller.lease.acquire.service_is_ready())
+        h.start()
+        h.wait(lambda: any(m.brush_enabled and m.thrust_enabled for m in b.commands))
+        h.wall_valid = False
+        h.wait(lambda: h.controller.mission.phase == "WAIT_WALL")
+        h.wait(lambda: b.commands and not b.commands[-1].brush_enabled and not b.commands[-1].thrust_enabled)
+        begin = len(b.commands)
+        h.wait(lambda: len(b.commands) >= begin + 8)
+        assert all(m.direction == 0 and not m.brush_enabled and not m.thrust_enabled
+                   and m.token == "fake-lease" for m in b.commands[begin:])
+        assert h.controller.lease.token and not b.releases
+        h.wait(lambda: any(s["phase"] == "WAIT_WALL" and not s["wall_valid"]
+                          and s["left_wall_distance_cm"] is None and s["wall_distance_m"] is None
+                          and "association lost" in s["wall_reason"] for s in h.statuses))
+        h.angle, h.wall_valid = math.radians(40), True
+        h.wait(lambda: h.controller.mission.phase == "CORRECT_HEADING" and b.commands[-1].direction == 3)
+        assert not b.commands[-1].brush_enabled
+        h.angle = math.radians(8)
+        h.wait(lambda: b.commands[-1].brush_enabled and b.commands[-1].direction == 3)
+        assert h.controller.lease.token and not b.releases
+        h.controller._cancel(None, Trigger.Response())
+        h.wait(lambda: bool(b.releases))
+    finally:
+        h.close()
+
+
+def test_wall_fit_lost_during_acquisition_starts_neutral_recovery():
+    h = Harness([Parameter("output_enabled", value=True)])
+    b = FakeBridge(h)
+    def lose_wall_before_reply():
+        h.wall_valid = False
+        p, w = h.messages()
+        h.controller._pose(p)
+        h.controller._wall(w)
+    b.on_acquire = lose_wall_before_reply
+    try:
+        h.wait(lambda: h.controller.lease.bridge is not None and h.controller.lease.acquire.service_is_ready())
+        h.start()
+        h.wait(lambda: h.controller.mission.phase == "WAIT_WALL" and bool(b.commands))
+        assert h.controller.lease.token and not b.releases
+        assert all(m.direction == 0 and not m.brush_enabled and not m.thrust_enabled for m in b.commands)
+        h.angle, h.wall_valid = math.radians(40), True
+        h.wait(lambda: b.commands[-1].direction == 3 and h.controller.mission.phase == "CORRECT_HEADING")
+        h.controller._cancel(None, Trigger.Response())
+        h.wait(lambda: bool(b.releases))
+    finally:
+        h.close()
+
+
+def test_live_persistent_wall_fit_loss_pauses_and_releases_lease():
+    h = Harness([Parameter("output_enabled", value=True), Parameter("wall_recovery_sec", value=.15)])
+    b = FakeBridge(h)
+    try:
+        h.wait(lambda: h.controller.lease.bridge is not None and h.controller.lease.acquire.service_is_ready())
+        h.start()
+        h.wait(lambda: any(m.brush_enabled for m in b.commands))
+        h.wall_valid = False
+        h.wait(lambda: h.controller.mission.phase == "PAUSED")
+        assert "left wall lost for" in h.controller.mission.reason
+        assert "association lost" in h.controller.mission.reason
+        h.wait(lambda: bool(b.releases))
+        assert not h.controller.lease.token
+        h.wall_valid = True
+        h.wait(lambda: h.controller.wall and h.controller.wall.valid)
+        assert h.controller.mission.phase == "PAUSED"
     finally:
         h.close()
 

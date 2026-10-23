@@ -1,8 +1,13 @@
 from dataclasses import replace
 import math
+from pathlib import Path
 
 import pytest
+import yaml
 
+from f1_wall_cleaning.config import Config as PerceptionConfig
+from f1_wall_cleaning.perception import Perception
+from f1_wall_cleaning.synthetic import pool_scan
 from f1_rectangle_cleaning.config import Config
 from f1_rectangle_cleaning.demo import sample, run_demo
 from f1_rectangle_cleaning.mission import Mission, command_fields, Effort
@@ -49,13 +54,13 @@ def test_side_distance_correction_is_bidirectional_and_has_no_history():
         assert e.brush_percent == 30 and e.direction == 0
 
 
-@pytest.mark.parametrize("angle,direction", [(0, 0), (3, 0), (-3, 0), (10, 0), (-10, 0),
+@pytest.mark.parametrize("angle,direction", [(0, 0), (3, 0), (-3, 0), (4, 3), (-4, 4), (10, 3), (-10, 4),
                                             (10.01, 3), (-10.01, 4), (20, 3), (-20, 4)])
 def test_heading_band_brush_gate_and_direction(angle, direction):
     m = started()
     e = update(m, angle=math.radians(angle))
     assert e.direction == direction
-    assert e.brush_percent == (30 if direction == 0 else 0)
+    assert e.brush_percent == (30 if abs(angle) <= 10 else 0)
     assert command_fields(e, m.c)["speed_percent"] == 25
 
 
@@ -75,7 +80,7 @@ def test_alignment_immediately_restores_brush_and_correction_reverses():
     m = started()
     assert update(m, angle=.21).direction == 3
     e = update(m, .04, angle=math.radians(10))
-    assert e.brush_percent == 30 and e.direction == 0
+    assert e.brush_percent == 30 and e.direction == 3
     e = update(m, .08, angle=-.21)
     assert e.direction == 4 and e.brush_percent == 0
     assert update(m, .12, angle=.21).direction == 3
@@ -179,7 +184,7 @@ def test_stale_feedback_pauses_and_never_auto_resumes(field):
     assert update(m, .05) is None
 
 
-@pytest.mark.parametrize("changes", [dict(valid=False), dict(distance=0.),
+@pytest.mark.parametrize("changes", [dict(distance=0.),
     dict(distance=float("nan")), dict(angle=float("inf"))])
 def test_bad_wall_feedback_stops(changes):
     m = started()
@@ -219,7 +224,8 @@ def test_map_wall_identity_and_second_quality_gate_removed():
 @pytest.mark.parametrize("changes", [dict(fifth_left_sign=2), dict(wall_target_m=.32),
     dict(length_m=.5), dict(command_ttl_sec=.2), dict(side_percent=31.), dict(width_m=math.nan),
     dict(side_on_distance_m=.38), dict(brush_percent=101.), dict(turn_speed_percent=50),
-    dict(heading_deadband_rad=math.pi), dict(run_timeout_sec=-1.)])
+    dict(heading_deadband_rad=math.pi), dict(heading_correction_deadband_rad=math.radians(11)),
+    dict(run_timeout_sec=-1.), dict(wall_recovery_sec=0.)])
 def test_invalid_configuration_rejected(changes):
     with pytest.raises(ValueError):
         replace(Config(), **changes).validate()
@@ -250,3 +256,112 @@ def test_timeout_stops_brush_and_side_request():
 def test_default_run_has_no_arbitrary_timeout():
     m = started()
     assert update(m, elapsed=180.).brush_percent == 30 and m.phase == "FOLLOW"
+
+
+def lost_wall(m, now, **kwargs):
+    f = sample(m.c, now, **kwargs)
+    return replace(f, wall=replace(f.wall, valid=False, distance=0., angle=0.,
+                                  reason="left wall association lost"))
+
+
+def test_invalid_wall_rejected_at_start_with_perception_reason():
+    m = Mission()
+    ok, reason = m.start(lost_wall(m, NOW), NOW)
+    assert not ok and "association lost" in reason and m.phase == "IDLE"
+
+
+def test_post_acquisition_start_can_wait_for_fresh_wall_recovery():
+    m = Mission()
+    f = lost_wall(m, NOW)
+    assert m.start(f, NOW, allow_wall_recovery=True)[0]
+    assert m.phase == "WAIT_WALL" and m.wall_lost_since_ns == NOW
+    e = m.update(f, NOW)
+    assert (e.direction, e.brush_percent, e.side_left_percent) == (0, 0, 0)
+    assert update(m, .05, angle=math.radians(40)).direction == 3
+
+
+def test_brief_wall_loss_neutralizes_all_outputs_then_recovers_heading_and_brush():
+    m = started()
+    assert update(m, angle=.3, distance=.5).side_left_percent == 30
+    e = m.update(lost_wall(m, NOW + 50_000_000), NOW + 50_000_000)
+    assert m.phase == "WAIT_WALL" and m.active
+    assert (e.direction, e.brush_percent, e.side_left_percent) == (0, 0, 0)
+    assert "association lost" in m.reason
+    e = update(m, .10, angle=math.radians(40))
+    assert m.phase == "CORRECT_HEADING" and e.direction == 3 and e.brush_percent == 0
+    assert m.wall_lost_since_ns is None
+    assert update(m, .15, angle=math.radians(8)).brush_percent == 30
+    m.update(lost_wall(m, NOW + 200_000_000), NOW + 200_000_000)
+    assert m.wall_lost_since_ns == NOW + 200_000_000
+
+
+def test_persistent_invalid_fresh_scans_pause_after_bounded_recovery():
+    m = started(Config(wall_recovery_sec=.2))
+    for i in range(4):
+        now = NOW + i * 50_000_000
+        e = m.update(lost_wall(m, now), now)
+        assert m.phase == "WAIT_WALL" and e.direction == 0 and e.brush_percent == 0
+    now = NOW + 200_000_000
+    assert m.update(lost_wall(m, now), now) is None and m.phase == "PAUSED"
+    assert "lost for 0.20s" in m.reason and "association lost" in m.reason
+    assert update(m, .25) is None
+
+
+def test_repeated_invalid_scan_cannot_renew_neutral_command_or_lease():
+    m = started()
+    f = lost_wall(m, NOW)
+    e = m.update(f, NOW)
+    assert m.update(f, NOW + 50_000_000) is None and m.last_effort == e
+    assert m.update(f, NOW + 100_000_000) is None and m.phase == "PAUSED"
+    assert "command deadline" in m.reason
+
+
+def test_front_endpoint_still_stops_while_waiting_for_wall_on_pose_only():
+    m = started()
+    m.update(lost_wall(m, NOW), NOW)
+    now = NOW + 50_000_000
+    x = m.c.length_m - m.c.hull_half_length_m - m.c.front_stop_m + 1e-9
+    f = lost_wall(m, now, along=x)
+    f = replace(f, wall=replace(f.wall, stamp_ns=NOW))
+    e = m.update(f, now)
+    assert m.phase == "STOPPED" and (e.direction, e.brush_percent, e.side_left_percent) == (0, 0, 0)
+
+
+@pytest.mark.parametrize("phase", ["PAUSED", "CANCELLED"])
+def test_manual_stop_during_wall_recovery_never_auto_resumes(phase):
+    m = started()
+    m.update(lost_wall(m, NOW), NOW)
+    m.halt("user stop", phase)
+    assert update(m, .05) is None and m.phase == phase
+
+
+@pytest.mark.parametrize("field", ["wall", "pose"])
+def test_wall_recovery_does_not_bypass_stale_feedback(field):
+    m = started()
+    m.update(lost_wall(m, NOW), NOW)
+    now = NOW + 50_000_000
+    f = lost_wall(m, now)
+    f = replace(f, **{field: replace(getattr(f, field), stamp_ns=now - 300_000_000)})
+    assert m.update(f, now) is None and m.phase == "PAUSED"
+
+
+@pytest.mark.parametrize("sign", [-1, 1])
+def test_actual_perception_profile_tracks_large_yaw_and_return_to_brush_band(sign):
+    parameters = yaml.safe_load((Path(__file__).resolve().parents[1] / 'config/perception.yaml').read_text())
+    c = PerceptionConfig(**parameters['rectangle_perception']['ros__parameters']).validate()
+    estimator, m = Perception(c), Mission()
+    # Includes >11.5 degree changes and angles beyond the previous 34.4 degree cap.
+    for i, degrees in enumerate([0, 20, 40, 60, 68, 40, 12, 8]):
+        now = NOW + i * 50_000_000
+        angle = math.radians(degrees * sign)
+        full = pool_scan(now, wall_distance=.4, wall_angle=angle, config=c)
+        scan = replace(full, angle_min=math.radians(-140), ranges=full.ranges[160:-160])
+        wall = estimator.process(scan, now)
+        assert wall.valid, (degrees * sign, wall.reason)
+        assert wall.angle == pytest.approx(angle, abs=.01)
+        f = replace(sample(m.c, now, angle=angle), wall=wall)
+        if i == 0:
+            assert m.start(f, now)[0]
+        e = m.update(f, now)
+        assert e.direction == (0 if degrees <= 3 else 3 if sign > 0 else 4)
+        assert e.brush_percent == (30 if degrees <= 10 else 0)

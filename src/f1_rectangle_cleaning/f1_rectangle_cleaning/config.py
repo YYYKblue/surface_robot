@@ -19,11 +19,14 @@ class Config:
     side_off_distance_m: float = .38
     front_stop_m: float = .50
     heading_deadband_rad: float = math.radians(10.)
+    heading_correction_deadband_rad: float = math.radians(3.)
     pose_max_age_sec: float = .25
     brush_percent: float = 30.
     side_percent: float = 30.
     turn_speed_percent: int = 25
     wall_max_age_sec: float = .15
+    # Fresh scans may temporarily fail wall fitting while the boat yaws.
+    wall_recovery_sec: float = 1.5
     command_ttl_sec: float = .10
     # Zero: run until the front-wall threshold or an explicit stop.
     run_timeout_sec: float = 0.
@@ -46,12 +49,12 @@ class Config:
             raise ValueError("wall thresholds must order lower < target < upper")
         if self.length_m <= 2 * self.hull_half_length_m:
             raise ValueError("rectangle length must exceed hull length")
-        if not 0 < self.heading_deadband_rad < math.pi / 2:
+        if not 0 < self.heading_correction_deadband_rad <= self.heading_deadband_rad < math.pi / 2:
             raise ValueError("invalid heading band")
         if (not 0 < self.brush_percent <= 100 or not 0 < self.side_percent <= 30
                 or type(self.turn_speed_percent) is not int or self.turn_speed_percent != 25
                 or not 0 < self.command_ttl_sec <= .15 or not 0 < self.wall_max_age_sec <= .15
-                or self.run_timeout_sec < 0):
+                or self.run_timeout_sec < 0 or self.wall_recovery_sec <= 0):
             raise ValueError("invalid effort, feedback timing or optional run timeout")
         return self
 

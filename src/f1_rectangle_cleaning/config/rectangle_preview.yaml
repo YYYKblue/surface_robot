@@ -21,7 +21,11 @@ rectangle_controller:
     fifth_left_sign: 1
     side_percent: 30.0
     brush_percent: 30.0
-    # +/-10 degrees, inclusive. Continuous correction outside the band.
+    # Brush gate: +/-10 degrees, inclusive, independently of yaw correction.
     heading_deadband_rad: 0.17453292519943295
+    # Correct yaw while the brush is running; do not wait for +/-10 degrees.
+    heading_correction_deadband_rad: 0.05235987755982989
     turn_speed_percent: 25
     run_timeout_sec: 0.0
+    # Fresh invalid wall fits: neutral outputs, recover automatically up to 1.5 s.
+    wall_recovery_sec: 1.5

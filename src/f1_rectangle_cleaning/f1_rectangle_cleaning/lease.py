@@ -92,7 +92,11 @@ class Lease:
         error = self.node._stream_error()
         # Revalidate observations after async acquisition; never reuse pre-lease effort.
         self.node.mission.halt("lease acquired", "IDLE")
-        ok, reason = (False, error) if error else self.node.mission.start(self.node._feedback(), now)
+        # Explicit start already required a valid wall. If a fresh fit is lost
+        # during acquisition, enter bounded neutral recovery instead of latching
+        # PAUSED before the first actuator command.
+        ok, reason = (False, error) if error else self.node.mission.start(
+            self.node._feedback(), now, allow_wall_recovery=True)
         if not ok:
             self._release(reply.token)
             self.node._halt(reason)

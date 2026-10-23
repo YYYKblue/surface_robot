@@ -48,14 +48,16 @@ class Mission:
         self.started_ns = self.last_update_ns = 0
         self.last_scan = -1
         self.last_effort = None
+        self.wall_lost_since_ns = None
 
     @property
     def active(self):
-        return self.phase in ("FOLLOW", "CORRECT_HEADING")
+        return self.phase in ("FOLLOW", "CORRECT_HEADING", "WAIT_WALL")
 
     def halt(self, reason, phase="PAUSED"):
         self.phase, self.reason = phase, reason
         self.last_effort = None
+        self.wall_lost_since_ns = None
 
     def front_remaining(self, pose):
         x, _ = self.c.pool_xy(pose.x, pose.y)
@@ -67,7 +69,7 @@ class Mission:
         centre_distance = self.c.length_m - x if math.cos(yaw) >= 0 else x
         return centre_distance - extent
 
-    def error(self, f, now):
+    def error(self, f, now, allow_invalid_wall=False):
         c = self.c
         if f is None:
             return "fresh left-wall and fixed-map base_link pose required"
@@ -78,21 +80,26 @@ class Mission:
                 return name + " stale or future stamped"
         if not all(math.isfinite(v) for v in (w.distance, w.angle, p.x, p.y, p.yaw)):
             return "nonfinite feedback"
-        if not w.valid or w.distance <= 0:
-            return "left wall invalid"
+        if not w.valid:
+            return "" if allow_invalid_wall else "left wall invalid: " + (w.reason or "no wall fit")
+        if w.distance <= 0:
+            return "left wall invalid distance"
         # Perception supplies the measured wall. No second wall-quality gate,
         # hull/brush/sweep checks, or map-to-wall identity gates here.
         return ""
 
-    def start(self, f, now):
+    def start(self, f, now, allow_wall_recovery=False):
         if self.phase not in ("IDLE", "CANCELLED", "STOPPED"):
             return False, "cancel before restarting; paused tasks never resume automatically"
-        error = self.error(f, now)
+        error = self.error(f, now, allow_invalid_wall=allow_wall_recovery)
         if error:
             return False, error
         if self.front_remaining(f.pose) <= self.c.front_stop_m or self._visible_front_stop(f.wall):
             return False, "already inside front-wall stopping zone"
-        self.halt("single left side started", "FOLLOW")
+        self.halt("single left side started", "FOLLOW" if f.wall.valid else "WAIT_WALL")
+        if not f.wall.valid:
+            self.wall_lost_since_ns = now
+            self.reason = "lease acquired; waiting for left wall: " + (f.wall.reason or "no wall fit")
         self.started_ns = self.last_update_ns = now
         self.last_scan = -1
         return True, "single-side task started"
@@ -105,7 +112,7 @@ class Mission:
     def update(self, f, now):
         if not self.active:
             return None
-        error = self.error(f, now)
+        error = self.error(f, now, allow_invalid_wall=True)
         if error:
             self.halt(error)
             return None
@@ -128,6 +135,21 @@ class Mission:
         deadline = min(now + round(c.command_ttl_sec * 1e9),
                        w.stamp_ns + round(c.wall_max_age_sec * 1e9),
                        f.pose.stamp_ns + round(c.pose_max_age_sec * 1e9))
+        if not w.valid:
+            if self.wall_lost_since_ns is None:
+                self.wall_lost_since_ns = now
+            elapsed = (now - self.wall_lost_since_ns) / 1e9
+            detail = w.reason or "no wall fit"
+            if elapsed >= c.wall_recovery_sec:
+                self.halt(f"left wall lost for {elapsed:.2f}s: {detail}")
+                return None
+            self.phase = "WAIT_WALL"
+            self.reason = f"waiting for left wall ({elapsed:.2f}s): {detail}"
+            # Keep the active task/lease with fresh neutral commands. Never
+            # steer from a remembered angle or turn on the brush without a fit.
+            self.last_effort = Effort(now, deadline)
+            return self.last_effort
+        self.wall_lost_since_ns = None
         # Signed fifth-thruster correction about 40 cm, with a 38--42 cm band.
         if w.distance > c.side_on_distance_m:
             side_output = c.side_percent
@@ -135,13 +157,14 @@ class Mission:
             side_output = -c.side_percent
         else:
             side_output = 0.
-        aligned = abs(w.angle) <= c.heading_deadband_rad
-        direction = 0 if aligned else (3 if w.angle > 0 else 4)
-        self.phase = "FOLLOW" if aligned else "CORRECT_HEADING"
-        self.reason = "within heading band; brush propulsion" if aligned else "correcting heading into band"
+        brush_aligned = abs(w.angle) <= c.heading_deadband_rad
+        direction = 0 if abs(w.angle) <= c.heading_correction_deadband_rad else (3 if w.angle > 0 else 4)
+        self.phase = "CORRECT_HEADING" if direction else "FOLLOW"
+        self.reason = ("correcting heading; brush propulsion" if direction and brush_aligned else
+                       "correcting heading into brush band" if direction else "within heading band; brush propulsion")
         # No pulse/dwell state: each fresh scan directly renews yaw correction.
         # Zero direction_until means the normal command deadline applies.
         effort = Effort(now, deadline, 0, direction, side_output,
-                        c.brush_percent if aligned else 0.)
+                        c.brush_percent if brush_aligned else 0.)
         self.last_effort = effort
         return effort

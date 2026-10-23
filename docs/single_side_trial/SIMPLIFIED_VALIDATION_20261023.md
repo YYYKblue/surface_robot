@@ -58,3 +58,33 @@ ros2 run f1_rectangle_cleaning rectangle_demo
 本机验证：`colcon build --symlink-install --packages-select f1_rectangle_cleaning` 成功；56 项任务逻辑与 19 项 ROS 集成测试全部通过，含 50 cm 边界、50.1 cm/70 cm/80 cm 继续刷洗、第五路双向 30% 和组合执行器输出。已验证安装目录中的控制与感知参数可正常加载。ROS 测试使用仅 localhost 的隔离域 178 与模拟 bridge。
 
 本次未向 Nano 同步或启动实船输出；同步后需在 Nano 构建并重启清洗 launch 才会采用新参数。
+
+## 大偏角丢墙暂停修复与左墙距离显示
+
+用户现场状态确认 `phase=PAUSED`、`reason=left wall invalid`，这表明左墙观测失效触发了整船输出关闭。旧版代码的感知门限为墙角绝对值 ≤0.60 rad（约 34.4°）、相邻有效观测角度差 ≤0.20 rad（约 11.5°）。本机合成扫描复现了两种暂停路径：逐渐偏转至 36° 后失去墙线，以及从 0° 跳变至 20° 后关联失败。现场具体触发哪一个感知门限尚未由原始扫描确认。
+
+最终修改：
+
+- 矩形任务的感知配置使用 ±70° 墙角范围和 30° 相邻有效观测角度差；滚刷门控仍为 ±10°。共享配置校验支持小于 90° 的墙角上限，以便加载新配置。
+- 新鲜扫描中短暂拟合失败进入 `WAIT_WALL`，用新鲜中位命令保持任务和租约，全部执行器关闭。默认最多等待 1.5 秒；有效墙线恢复后重新计算纠偏或滚刷输出。不会用旧角度在丢墙期间发转向命令。
+- 显式 start 仍要求有效墙线；有效 start 后、异步取得租约时若刚好短暂丢墙，进入同一等待恢复流程。
+- 持续丢墙超过窗口进入 `PAUSED`；手动暂停/取消、反馈过期或通信故障仍锁定停机。前墙阈值在等待丢墙期间仍有效。
+- 状态前部新增 `left_wall_distance_cm`，显示船中心到左墙的垂直距离（厘米，1 位小数），原 `wall_distance_m` 继续保留。墙观测无效时两个距离均为 `null`。新增 `wall_valid`、`wall_reason` 和 `wall_recovery_sec`；感知原因区分无墙/拟合拒绝与关联距离/角度跳变。
+- 滚刷/侧推仍为 30%，前墙阈值仍为 50 cm。
+
+验证结果：
+
+- `colcon build --symlink-install --packages-up-to f1_rectangle_cleaning`：5 包成功。
+- `ROS_DOMAIN_ID=178 ROS_LOCALHOST_ONLY=1 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp colcon test --executor sequential --packages-select f1_wall_cleaning f1_rectangle_cleaning --return-code-on-test-failure`：两包成功。
+- 矩形包 68 项任务逻辑、22 项 ROS 集成测试通过；共享单墙包 73 项测试通过，共 163 项独立用例。
+- `colcon test-result`：矩形包 92 项、单墙包 76 项，均 0 errors、0 failures、0 skipped；总数含 5 项 CTest 包装。
+- 大偏角端到端纯逻辑测试读取实际任务感知 YAML，使用雷达原外参和 280° 视场，覆盖正负 20°、40°、60°、68° 后回到 8°，验证墙线跟踪、转向指令及刷盘恢复。
+- ROS 模拟租约测试覆盖短暂丢墙期间输出全关但租约保持、恢复后转向/开刷、持续丢墙超时释放租约、取得租约期间丢墙，以及有效距离显示为 40.0 cm、无效距离显示为 null。
+
+全部为本机合成扫描、合成反馈和模拟 bridge，未连接或同步 Nano。现场纠偏响应仍需实船验证。按 [部署步骤](../../src/f1_rectangle_cleaning/DEPLOY_TEST_NANO.md) 同步两个清洗包、构建并重启清洗 launch 后生效。
+
+## 后续反向纠偏代码分析与修复
+
+针对“开刷后船头向左墙偏转，纠偏时仍继续向左墙转”的反馈，已在现有 280° 视场、近后墙矩形扫描中复现：0.50 m 最短可见墙段门槛使左墙丢失，1 秒关联超时后将后墙识别为左墙，导致角度由负变正并从 RIGHT 改发 LEFT。日志中的 36.5 cm、约 1 秒等待、恢复后 40.6 cm 可用此构造场景复现，但原日志缺失角度与实际 CTRL，不能据此认定现场唯一原因。
+
+当前配置使用 0.30 m 最短墙段、2 秒墙关联有效期；纠偏死区独立设为 ±3°，滚刷门槛仍为 ±10°，允许开刷同时纠偏。状态前部显示墙角与方向。完整推导、复现表与测试结果见 [反向纠偏分析](HEADING_FEEDBACK_20261023.md)。两个清洗包共 169 项独立测试通过，另验证了实际 C 固件的 45 种方向/档位/轮组编码组合。仍未向 Nano 同步或进行实船验证。

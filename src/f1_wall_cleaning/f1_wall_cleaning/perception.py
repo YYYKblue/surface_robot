@@ -196,12 +196,15 @@ class Perception:
         # Limit work even on highly fragmented scans; longest clusters first.
         candidates = [f for cluster in sorted(clusters, key=len, reverse=True)[:12]
                       if (f := self._fit(cluster)) is not None]
+        fitted = bool(candidates)
         previous = self.previous
-        if previous and scan.stamp_ns - previous.stamp_ns <= 1_000_000_000:
+        if previous and scan.stamp_ns - previous.stamp_ns <= c.association_timeout_sec * 1e9:
             candidates = [f for f in candidates if abs(f[0] - previous.distance) <= c.association_distance_m
                           and abs(wrap(f[1] - previous.angle)) <= c.association_angle_rad]
         if not candidates:
-            return Observation(scan.stamp_ns, reason="left wall absent, ambiguous or association lost",
+            reason = ("left wall association lost: distance/angle change exceeds tracking limits" if fitted
+                      else f"left wall absent or fit rejected (angle limit {math.degrees(c.max_wall_angle_rad):.1f} deg)")
+            return Observation(scan.stamp_ns, reason=reason,
                                front_observed=front[0], front_clearance=front[1],
                                front_fraction=front[2], rigid_collision=front[3])
         candidates.sort(key=lambda f: abs(f[0] - previous.distance) if previous else f[0])
