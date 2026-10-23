@@ -15,7 +15,7 @@
 现已新增 [`f1_wall_cleaning`](src/f1_wall_cleaning/README.md)，共用 `f1_interfaces`，实现左侧单墙感知、back2 互斥方向脉冲控制和租约任务接口。默认仅观测/预览，未知几何参数阻止启动运动。固定地图定位、完整池边路线、自动过角和 UI→ROS 适配仍按清洁方案后续实施。
 建图包仅保留纯雷达模式；硬件桥的 IMU 遥测不参与建图。
 
-独立功能包 [f1_rectangle_cleaning](src/f1_rectangle_cleaning/README.md) 目前采用简化单边策略：±10° 内开滚刷推进，超限用四个主电机持续纠偏，第五路双向控制中心到左墙约 40 cm，船体前缘到前墙 80 cm 时关闭输出。已接入固定地图定位与可选 bridge 租约输出，无转向空间门控、脉冲等待或自动换边。历史两边设计与地图示意见 [两条长边刷洗设计](docs/long_wall_plan/DESIGN.md)。
+独立功能包 [f1_rectangle_cleaning](src/f1_rectangle_cleaning/README.md) 目前采用简化单边策略：±10° 内开滚刷推进，超限用四个主电机持续纠偏，第五路双向控制中心到左墙约 40 cm，船体前缘到前墙 50 cm 时关闭输出。已接入固定地图定位与可选 bridge 租约输出，无转向空间门控、脉冲等待或自动换边。历史两边设计与地图示意见 [两条长边刷洗设计](docs/long_wall_plan/DESIGN.md)。
 
 矩形任务采用纯雷达反馈，不引入 IMU 航向控制。部署与下水步骤见 [Nano 同步与纯雷达测试](src/f1_rectangle_cleaning/DEPLOY_TEST_NANO.md)。
 

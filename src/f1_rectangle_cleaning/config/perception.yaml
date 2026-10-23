@@ -13,7 +13,7 @@ rectangle_perception:
     brush_compression_m: 0.01
     brush_max_compression_m: 0.015
     brush_allowed: false
-    stopping_distance_m: 0.80
+    stopping_distance_m: 0.50
     front_slow_distance_m: 1.0
     # Controller uses wall distance/angle and map endpoint distance only.
     # Hull and turn-sweep flags remain diagnostic; they do not gate this task.

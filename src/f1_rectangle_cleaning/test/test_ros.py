@@ -153,13 +153,13 @@ def test_ros_ten_degree_gate_and_continuous_correction_without_turn_clearance(ha
     h.wait(lambda: len(h.commands) >= 10)
     commands = h.commands[-8:]
     assert all(m.direction == direction and m.mode == 1 for m in commands)
-    assert all(m.brush_enabled == (direction == 0) and m.thrust_percent == 15. for m in commands)
+    assert all(m.brush_enabled == (direction == 0) and m.thrust_percent == 30. for m in commands)
     assert all(m.direction_until.sec == 0 and m.direction_until.nanosec == 0 for m in commands)
     assert h.controller.mission.active
     # The next scan restores brush propulsion and reverses side correction.
     h.angle, h.distance = 0., .37
     h.wait(lambda: h.commands[-1].direction == 0 and h.commands[-1].brush_enabled
-           and h.commands[-1].thrust_percent == -15.)
+           and h.commands[-1].thrust_percent == -30.)
 
 
 @pytest.mark.parametrize("extra", [Parameter("use_sim_time", value=True), Parameter("fifth_left_sign", value=0)])
@@ -259,11 +259,11 @@ def test_live_lease_continuous_yaw_and_signed_fifth_output():
         h.start()
         h.wait(lambda: len(b.commands) >= 12)
         assert all(m.token == "fake-lease" and m.direction == 3 and m.mode == 1
-                   and not m.brush_enabled and m.thrust_percent == -15.
+                   and not m.brush_enabled and m.thrust_percent == -30.
                    and m.direction_until.sec == 0 and m.direction_until.nanosec == 0
                    for m in b.commands[-10:])
         h.angle, h.distance = math.radians(-12), .5
-        h.wait(lambda: b.commands[-1].direction == 4 and b.commands[-1].thrust_percent == 15.)
+        h.wait(lambda: b.commands[-1].direction == 4 and b.commands[-1].thrust_percent == 30.)
         h.angle, h.distance = math.radians(10), .4
         h.wait(lambda: b.commands[-1].brush_enabled and b.commands[-1].direction == 0
                and not b.commands[-1].thrust_enabled)
@@ -283,8 +283,8 @@ def test_live_leased_output_and_fault_release(fault):
         h.start()
         h.wait(lambda: any(m.brush_enabled and m.thrust_enabled for m in b.commands))
         moving = [m for m in b.commands if m.brush_enabled]
-        assert all(m.token == "fake-lease" and m.direction == 0 and m.brush_percent == 15.
-                   and m.thrust_percent == 15. for m in moving)
+        assert all(m.token == "fake-lease" and m.direction == 0 and m.brush_percent == 30.
+                   and m.thrust_percent == 30. for m in moving)
         assert all(not m.token for m in h.commands)
         if fault == "RC":
             b.state.source = "RC"

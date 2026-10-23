@@ -16,11 +16,11 @@ rectangle_controller:
     # Fifth thruster: left above 42 cm, right below 38 cm, neutral in between.
     side_on_distance_m: 0.42
     side_off_distance_m: 0.38
-    front_stop_m: 0.80
+    front_stop_m: 0.50
     # User confirmed positive -> left, 2026-10-23.
     fifth_left_sign: 1
-    side_percent: 15.0
-    brush_percent: 15.0
+    side_percent: 30.0
+    brush_percent: 30.0
     # +/-10 degrees, inclusive. Continuous correction outside the band.
     heading_deadband_rad: 0.17453292519943295
     turn_speed_percent: 25

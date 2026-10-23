@@ -17,11 +17,11 @@ class Config:
     wall_target_m: float = .40
     side_on_distance_m: float = .42
     side_off_distance_m: float = .38
-    front_stop_m: float = .80
+    front_stop_m: float = .50
     heading_deadband_rad: float = math.radians(10.)
     pose_max_age_sec: float = .25
-    brush_percent: float = 15.
-    side_percent: float = 15.
+    brush_percent: float = 30.
+    side_percent: float = 30.
     turn_speed_percent: int = 25
     wall_max_age_sec: float = .15
     command_ttl_sec: float = .10
@@ -48,7 +48,7 @@ class Config:
             raise ValueError("rectangle length must exceed hull length")
         if not 0 < self.heading_deadband_rad < math.pi / 2:
             raise ValueError("invalid heading band")
-        if (not 0 < self.brush_percent <= 100 or not 0 < self.side_percent <= 20
+        if (not 0 < self.brush_percent <= 100 or not 0 < self.side_percent <= 30
                 or type(self.turn_speed_percent) is not int or self.turn_speed_percent != 25
                 or not 0 < self.command_ttl_sec <= .15 or not 0 < self.wall_max_age_sec <= .15
                 or self.run_timeout_sec < 0):

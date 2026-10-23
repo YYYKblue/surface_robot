@@ -1,8 +1,10 @@
 # Nano：简化单边沿墙测试
 
-更新：2026-10-23。±10° 内开滚刷，范围外四个主电机持续纠偏；第五路双向控制中心墙距 38–42 cm。取消转向空间等几何门控和脉冲等待。雷达保持原外参，前墙 80 cm 仍由已有地图定位计算，按当前船头方向选择前方短墙。
+更新：2026-10-23。滚刷默认 30%，第五路推力默认 ±30%，前墙关闭输出阈值 50 cm。±10° 内开滚刷，范围外四个主电机持续纠偏；第五路双向控制中心墙距 38–42 cm。雷达保持原外参，前墙距离仍由已有地图定位计算，按当前船头方向选择前方短墙。
 
 ## 1. 同步和构建
+
+已完成首轮测试的设备，本次只需同步 `f1_rectangle_cleaning` 包、在 Nano 重新构建，并重启 `rectangle_cleaning.launch.py`。参数在节点启动时加载，运行中的旧控制器不会自动采用 30% / 50 cm。定位和 bridge 的启动步骤仍沿用下文。
 
 源码传输与基础依赖按 [Nano 从零部署指南](../../DEPLOY_NANO.md)。不复制 PC 的 build/install/log。已有 Nano 工作空间可直接同步本次控制包和此前实测修复过的感知包：
 
@@ -88,7 +90,7 @@ ros2 topic echo /rectangle_cleaning/status
 ros2 topic echo /rectangle_cleaning/command_preview
 ```
 
-人工放船与左墙平行，中心距左墙约 0.40 m，地图前缘净空大于 0.80 m，核对：
+人工放船与左墙平行，中心距左墙约 0.40 m，地图前缘净空大于 0.50 m，核对：
 
 - 左墙 `valid=true`，距离与夹角符合尺量；`front_observed=false` 是现有安装的预期，不修改该标记。
 - `feedback_error` 为空，地图 `map_front_clearance_m` 与实际船头到短墙距离相符。TF 不含协方差，因此 `pose_covariance_available=false` 是明确的能力限制。
@@ -102,12 +104,12 @@ ros2 service call /rectangle_cleaning/start std_srvs/srv/Trigger '{}'
 
 | 测试 | 预期 |
 |---|---|
-| 平行 | STOP + 刷盘 15%，主轮不发前进 |
-| d 从 0.40 增到 >0.42，再回到 0.40，再降到 <0.38 | 第五路依次关、+15%、关、-15%；38–42 cm 范围内均关闭 |
+| 平行 | STOP + 刷盘 30%，主轮不发前进 |
+| d 从 0.40 增到 >0.42，再回到 0.40，再降到 <0.38 | 第五路依次关、+30%、关、-30%；38–42 cm 范围内均关闭 |
 | 夹角超过 +10° / -10° | 刷盘关；四个主电机 LEFT / RIGHT 25%、BOTH 持续纠偏，没有脉冲/中位等待 |
-| 误差恢复到 ±10° 内，包括等号 | 主轮 STOP，当帧恢复刷盘 15% |
+| 误差恢复到 ±10° 内，包括等号 | 主轮 STOP，当帧恢复刷盘 30% |
 | 纠偏方向的空间标志为 false | 仍按夹角纠偏，不暂停 |
-| 地图前缘净空达到 ≤0.80 m | STOPPED、主轮/刷盘/第五路全部关闭；不出现第二边任务 |
+| 地图前缘净空达到 ≤0.50 m | STOPPED、主轮/刷盘/第五路全部关闭；不出现第二边任务 |
 | 停止雷达或定位 | PAUSED；反馈恢复不自动续跑 |
 | 地图位姿更新或跳变 | 接受更新，重新计算前墙距离；不做额外地图墙身份验证 |
 
@@ -115,7 +117,7 @@ ros2 service call /rectangle_cleaning/start std_srvs/srv/Trigger '{}'
 
 ## 4. 单边实机测试
 
-预览核对后，退出预览控制器，保持定位与感知来源一致。地图无法发现盲区新增障碍；本轮需要人工观察前方并保留遥控接管。0.80 m 只是关闭输出阈值，需记录之后的惯性滑行。
+预览核对后，退出预览控制器，保持定位与感知来源一致。地图无法发现盲区新增障碍；本轮需要人工观察前方并保留遥控接管。0.50 m 只是关闭输出阈值，需记录之后的惯性滑行。
 
 单独终端启动唯一 bridge（串口路径按已有 bridge 配置；direction_confirmed 表示主轮 LEFT/RIGHT 硬件映射已经核对）：
 
@@ -132,7 +134,7 @@ ros2 launch f1_rectangle_cleaning rectangle_cleaning.launch.py output_enabled:=t
 ros2 service call /rectangle_cleaning/start std_srvs/srv/Trigger '{}'
 ```
 
-start 返回 acquire requested 仅表示已请求租约；看 status 的 `lease_held` 与 phase 确认实际启动。第五路按墙距输出 +15% / 0 / -15%，刷盘默认 15%。默认 `run_timeout_sec=0`，没有固定时长上限；如需限时试验可另设正值。`brush_percent` 改变推进效果也改变刷洗强度，本版不闭环控制速度。
+start 返回 acquire requested 仅表示已请求租约；看 status 的 `lease_held` 与 phase 确认实际启动。第五路按墙距输出 +30% / 0 / -30%，刷盘默认 30%。默认 `run_timeout_sec=0`，没有固定时长上限；如需限时试验可另设正值。`brush_percent` 改变推进效果也改变刷洗强度，本版不闭环控制速度。
 
 使用本次默认配置；不要套用历史 `diagnostics/single_side_remote_20261023/rectangle_current_side.yaml`，该文件仍保存旧 ±3° 与 8 秒限制。
 
@@ -155,4 +157,4 @@ ros2 bag record -o single_side_trial \
   /rectangle_cleaning/status /rectangle_cleaning/command_preview /f1/control_state
 ```
 
-记录实际墙距、夹角、15% 刷盘是否能推进、第五路双向纠偏是否振荡、纠偏次数、停车触发位置和最终滑行距离。刷尖原几何距中心 0.33 m，因此中心墙距 0.40 m 不保证刷毛接触；本版不自动向接触压缩目标推进。
+记录实际墙距、夹角、30% 刷盘是否能推进、第五路双向纠偏是否振荡、纠偏次数、停车触发位置和最终滑行距离。刷尖原几何距中心 0.33 m，因此中心墙距 0.40 m 不保证刷毛接触；本版不自动向接触压缩目标推进。
