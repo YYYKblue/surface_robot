@@ -1,6 +1,6 @@
 # Nano 从零部署 surface_ws
 
-更新：2026-10-23。适用于 Nano 上旧 ROS 工作空间已全部删除的情况。直接创建新目录，不执行旧目录改名、迁移或清理命令。若已有旧清洗包，先按 [清洗包合并说明](src/f1_pool_cleaning/MIGRATION.md) 升级，再使用本文当前包列表。
+更新：2026-10-24。适用于 Nano 上旧 ROS 工作空间已全部删除的情况。直接创建新目录，不执行旧目录改名、迁移或清理命令。若已有旧清洗包，先按 [清洗包合并说明](src/f1_pool_cleaning/MIGRATION.md) 升级，再使用本文当前包列表。
 
 | 项目 | 统一约定 |
 | --- | --- |
@@ -11,6 +11,7 @@
 | 桥接功能包 | `f1_nano_bridge` |
 | 自定义接口包 | `f1_interfaces` |
 | 沿边清洗功能包 | `f1_pool_cleaning` |
+| 操作员网关 | `f1_operator_gateway` |
 
 下面每节标明命令在哪台设备执行。PC 和 Nano 分别编译，不传 PC 的生成目录。本说明没有自动连接或修改 Nano。
 
@@ -44,7 +45,7 @@ sudo apt-get update
 sudo apt-get install -y \
   openssh-server rsync build-essential cmake \
   python3-colcon-common-extensions python3-rosdep python3-pytest \
-  python3-serial python3-zmq python3-yaml \
+  python3-serial python3-websockets python3-yaml \
   ros-humble-cartographer-ros ros-humble-rmw-cyclonedds-cpp \
   ros-humble-ros2bag ros-humble-rosbag2-storage-default-plugins
 sudo systemctl enable --now ssh
@@ -53,7 +54,7 @@ mkdir -p /home/nvidia/surface_ws/src
 
 Cartographer 使用系统安装的 `ros-humble-cartographer-ros`，无需另外创建依赖工作空间。其他消息包、RViz、构建与测试依赖在传完源码后由 rosdep 安装。Humble 的 Cartographer 发布信息见 [ROS Index](https://index.ros.org/p/cartographer_ros/)。
 
-如果提示找不到 `ros-humble-*`，先检查系统版本、ROS 软件源和 `apt-get update` 的错误，不继续编译。PC 上安装过 ZMQ 不代表 Nano 上也已安装。
+如果提示找不到 `ros-humble-*`，先检查系统版本、ROS 软件源和 `apt-get update` 的错误，不继续编译。WebSocket 网关依赖 `python3-websockets`，不再安装或使用 ZMQ。
 
 ## 3. PC：把源码和文档传到 Nano
 
@@ -102,12 +103,13 @@ ssh nvidia@192.168.1.188
 `rosdep update` 使用普通用户执行。该流程依据[官方 rosdep 使用说明](https://docs.ros.org/en/humble/Tutorials/Intermediate/Rosdep.html)，从 `package.xml` 解析依赖；网络或依赖解析失败时先解决错误，再执行下一步。
 括号内启用了失败即停止，避免更新失败后继续使用已有缓存安装依赖。若出现缺失的 `debian.yaml` 或 GitHub 索引超时，按[第 9 节](#9-rosdep-更新报错处理)修复后重试。
 
-当前应列出恰好四个项目包：
+当前应列出恰好五个项目包：
 
 ```text
 f1_interfaces
 f1_mapping_bringup
 f1_nano_bridge
+f1_operator_gateway
 f1_pool_cleaning
 ```
 
@@ -140,14 +142,13 @@ ros2 pkg prefix f1_nano_bridge
 ros2 pkg executables f1_nano_bridge
 ros2 interface show f1_interfaces/msg/ActuatorCommand
 ros2 pkg executables cartographer_ros
-/usr/bin/python3 -c "import zmq; print('PyZMQ:', zmq.__version__); print('ZeroMQ:', zmq.zmq_version())"
 ros2 launch f1_nano_bridge bridge.launch.py --show-args
-ros2 launch f1_nano_bridge gateway.launch.py --show-args
-ros2 launch f1_nano_bridge gateway.launch.py --show-args
+ros2 pkg executables f1_operator_gateway
+ros2 launch f1_operator_gateway operator_gateway.launch.py --show-args
 ros2 launch f1_mapping_bringup lidar_mapping.launch.py --show-args
 ```
 
-`f1_nano_bridge` 前缀应为 `/home/nvidia/surface_ws/install/f1_nano_bridge`，可执行程序应只有 `f1_bridge` 和 `f1_ui_gateway`。IMU 随原生串口桥发布，无独立接入节点。Cartographer 应有 `cartographer_node` 及 `cartographer_occupancy_grid_node` 或 `occupancy_grid_node`。`--show-args` 只检查启动入口，不启动硬件。
+`f1_nano_bridge` 前缀应为 `/home/nvidia/surface_ws/install/f1_nano_bridge`，其可执行程序应只有 `f1_bridge`；`f1_operator_gateway` 应提供 `f1_operator_gateway`。IMU 随原生串口桥发布，无独立接入节点。Cartographer 应有 `cartographer_node` 及 `cartographer_occupancy_grid_node` 或 `occupancy_grid_node`。`--show-args` 只检查启动入口，不启动硬件。
 
 以后运行节点时只加载 `/opt/ros/humble/setup.bash` 和 `/home/nvidia/surface_ws/install/local_setup.bash`。同机查看结果的终端使用相同 ROS 域；PC 参与实时通信时也设置域 33 和相同 RMW，并加载 PC 自己构建的 `surface_ws`。
 
@@ -167,7 +168,7 @@ colcon test --executor sequential --return-code-on-test-failure \
 colcon test-result --verbose
 ```
 
-此命令明确排除了 `firmware` 测试，因为 ROS 工作空间不包含它所需的 STM32 固件源码；其余用例包含 ZMQ 回环，应无失败、无错误。测试使用合成输入和本机通信，不连接执行器。测试后关闭该终端，实景终端按第 6 节加载环境。
+此命令明确排除了 `firmware` 测试，因为 ROS 工作空间不包含它所需的 STM32 固件源码；其余用例包含网关协议和本机 ROS 检查，应无失败、无错误。测试使用合成输入和本机通信，不连接执行器。测试后关闭该终端，实景终端按第 6 节加载环境。
 
 如要运行完整测试，在 PC 单独同步只读测试所需的固件目录：
 
@@ -295,7 +296,7 @@ export ROSDISTRO_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/rosdistro/index-
 source /opt/ros/humble/setup.bash
 source /home/nvidia/surface_ws/install/local_setup.bash
 ros2 pkg executables f1_nano_bridge
-ros2 launch f1_nano_bridge gateway.launch.py --show-args
+ros2 launch f1_operator_gateway operator_gateway.launch.py --show-args
 ```
 
 [`--cmake-clean-cache`](https://colcon.readthedocs.io/en/main/reference/verb/build.html#cmake-specific-arguments) 只移除 `CMakeCache.txt`，不等于清空 `.cmake/api` 中的生成索引；本次两个位置都出现异常，因此采用备份整个生成目录的方法。

@@ -82,9 +82,7 @@ def test_ros_state_stop_and_unauthorized_commands():
         rclpy.shutdown()
 
 
-@pytest.mark.parametrize("launch_file,fifth", [
-    ("bridge.launch.py", "false"), ("ui_control.launch.py", "false"),
-    ("ui_control.launch.py", "true")])
+@pytest.mark.parametrize("launch_file,fifth", [("bridge.launch.py", "false")])
 def test_default_launch_and_group_sigint(launch_file, fifth):
     process = subprocess.Popen(
         ["ros2", "launch", "f1_nano_bridge", launch_file, "allow_fifth_thruster:=" + fifth],
