@@ -14,6 +14,8 @@
 
 旧 Windows UI、旧 ZMQ 网关、`f1-ui-v2` 协议及其测试已经删除。硬件桥仍保留内部 ROS 控制会话和固件超时保护，但这些机制不暴露给 App。
 
+清洗任务的后续开发、阶段门槛和实船验收顺序见[沿边清洗开发与验收文档](docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)。
+
 ## 新 App 链路
 
 ```text

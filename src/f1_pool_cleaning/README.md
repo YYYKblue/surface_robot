@@ -46,6 +46,8 @@
 
 ## 包内职责与接口
 
+后续四边和多边形开发按[开发与验收文档](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)执行。当前本包只提供单边沿墙控制，不提供自动换边或全池完成状态。
+
 - `perception.py` / `perception_node.py`：墙线拟合、关联和空间观测；`perception_config.py` 只含感知与几何参数。
 - `mission.py` / `config.py`：已验证的单边控制与控制参数，尚未扩展四边或多边形。
 - `controller_node.py` / `lease.py`：任务服务、状态、预览与 bridge 租约输出。
