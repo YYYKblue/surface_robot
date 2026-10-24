@@ -5,6 +5,7 @@ find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS scripts/pool_controller scripts/pool_perception
   scripts/pool_demo scripts/pool_demo_scan scripts/pool_nano
+  scripts/pool_localization
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 install(FILES README.md DEPLOY_TEST_NANO.md MEASUREMENTS.md MIGRATION.md DESTINATION share/${PROJECT_NAME})
@@ -16,5 +17,6 @@ if(BUILD_TESTING)
   ament_add_pytest_test(bringup test/test_bringup.py TIMEOUT 60)
   ament_add_pytest_test(ros test/test_ros.py TIMEOUT 45)
   ament_add_pytest_test(pipeline test/test_pipeline.py TIMEOUT 60)
+  ament_add_pytest_test(localization test/test_localization.py)
 endif()
 ament_package()

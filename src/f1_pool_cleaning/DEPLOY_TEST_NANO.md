@@ -59,7 +59,7 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano
 ```
 
-这条命令统一启动地图定位、bridge、墙面感知和清洗控制器，定位启动时自动创建轨迹，不再手动调用 `/start_trajectory`。默认地图仍为 `maps/20261021_145054/lidar_20261021_145054.pbstream`。它启用串口、运动、主电机方向确认和第五路许可，但清洗任务保持 `IDLE`，等待手动 `start`。
+这条命令统一启动冻结地图、定位管理器、bridge、墙面感知和清洗控制器。定位启动时不会在没有初始位姿时创建轨迹；默认地图仍为 `maps/20261021_145054/lidar_20261021_145054.pbstream`。它启用串口、运动、主电机方向确认和第五路许可，但清洗任务保持 `IDLE`，等待 RViz2 标定定位并手动 `start`。
 
 脚本不自动判断已有节点。若定位和 bridge 已经运行，改用：
 
@@ -70,12 +70,14 @@ bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano bringup \
 
 只有其中一个已运行时，只传对应的一个 `false` 参数。跳过定位时复用现有定位轨迹，不创建第二条轨迹；跳过 bridge 时沿用现有 bridge 的输出许可配置。启动前应退出旧清洗控制器。若仅已有雷达静态 TF，传 `publish_lidar_tf:=false`。
 
-终端 B 先查看一条完整状态，确认 `feedback_error` 为空、定位与墙距符合现场，再启动任务：
+若需要自动打开 RViz2 配置，在终端 A 的命令后加 `bringup start_rviz:=true`。在 RViz2 中确认 Fixed Frame 为 `map`，显示 Map、LaserScan、TF，使用 `2D Pose Estimate` 标定初始位置和船头方向。确认 `/pool_cleaning/localization_status` 的 `state` 为 `LOCALIZATION_READY` 后，终端 B 再查看状态并启动任务：
 
 ```bash
 bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano status
 bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano start
 ```
+
+没有 `LOCALIZATION_READY` 时 `/pool_cleaning/start` 会拒绝申请任务租约。定位跳变、TF/雷达过期或轨迹结束会关闭输出并进入 `PAUSED`；检查原因后调用 `cancel`，重新标定初始位姿，再次 `start`。
 
 `start` 返回后可再次运行 `status`，检查 `lease_held=true` 和实际阶段。`FOLLOW` 表示夹角已进入 ±3° 纠偏死区；`CORRECT_HEADING` 时若夹角仍在 ±10° 内，滚刷也会开启。`map_front_clearance_m` 对应当前 50 cm 停车阈值。
 
@@ -106,17 +108,16 @@ ros2 launch f1_pool_cleaning pool_localization.launch.py \
   load_state_filename:=/home/nvidia/surface_ws/maps/20261021_145054/lidar_20261021_145054.pbstream
 ```
 
-此入口加载冻结地图，配置纯雷达定位，跟踪/发布坐标系均为 `base_link`，不启动清洗或串口。默认暂停在“尚未创建新的定位轨迹”；不会用任意初始坐标假装定位成功。若已有同一份 `base_link → pavo2s_frame` 静态 TF，增加 `publish_lidar_tf:=false` 避免重复。
+此入口加载冻结地图、静态雷达 TF 和定位管理器，跟踪/发布坐标系均为 `base_link`，不启动清洗或串口。默认不会创建新的定位轨迹；在 RViz2 发布 `/initialpose` 后，管理器调用 Cartographer 的 `/start_trajectory`，使用 `reference_trajectory_id`（默认 0）作为冻结参考轨迹。若已有同一份 `base_link → pavo2s_frame` 静态 TF，增加 `publish_lidar_tf:=false` 避免重复。
 
-终端 B 创建定位轨迹（此命令只启动定位）：
+也可以通过服务提交同一个带 `map` frame 的初始位姿：
 
 ```bash
-ros2 service call /start_trajectory cartographer_ros_msgs/srv/StartTrajectory \
-  "{configuration_directory: '/home/nvidia/surface_ws/install/f1_pool_cleaning/share/f1_pool_cleaning/config', configuration_basename: 'pool_localization.lua', use_initial_pose: false, initial_pose: {orientation: {w: 1.0}}, relative_to_trajectory_id: 0}"
-ros2 run tf2_ros tf2_echo map base_link
+ros2 service call /pool_cleaning/set_initial_pose f1_interfaces/srv/SetInitialPose \
+  "{pose: {header: {frame_id: map}, pose: {pose: {position: {x: 0.0, y: 0.0}, orientation: {w: 1.0}}}}}"
 ```
 
-`use_initial_pose=false` 依赖 Cartographer 对冻结地图的重定位，矩形环境可能匹配错误或需要时间收敛。不能把新轨迹建立成功当作定位正确。通过已知 A 墙、实际船头方向和尺量距离核对地图位姿，必要时用 RViz 叠加 scan/map。若使用手工初值服务，`use_initial_pose=true` 的位姿是相对指定参考轨迹的变换，不能直接把任意 map 坐标塞入；需按所用 Cartographer 版本和参考轨迹换算。未能建立正确定位时先处理定位，不启动清洗。
+`/pool_cleaning/localization_status` 会区分轨迹已创建和定位真正就绪；轨迹创建成功本身不代表定位正确。通过已知 A 墙、实际船头方向和尺量距离核对地图位姿，必要时在 RViz2 叠加 scan/map。错误朝向、地图外位姿、过期 TF、雷达断流和跳变都必须停留在 `LOCALIZATION_CHECK` 或 `PAUSED`，不能启动清洗。
 
 源地图和参数矩形必须匹配。当前长宽是约 2.883 × 1.520 m 的墙带估计；换地图后需重新给出 origin/axis/length/width。可沿任意一侧长墙、朝池坐标 +x 或 -x 行驶，按船头方向选前方短墙，左墙仍以实时雷达观测为准。
 

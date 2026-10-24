@@ -221,6 +221,31 @@ def test_tf_pose_preserves_source_stamp_and_accepts_updated_pose():
         h.close()
 
 
+def test_map_tf_start_requires_localization_ready_gate():
+    from geometry_msgs.msg import TransformStamped
+    h = Harness([Parameter("use_map_tf", value=True),
+                 Parameter("require_localization_ready", value=True)])
+    try:
+        h.enabled = False
+        p, w = h.messages()
+        tf = TransformStamped()
+        tf.header, tf.child_frame_id = p.header, "base_link"
+        tf.transform.translation.x = p.pose.pose.position.x
+        tf.transform.translation.y = p.pose.pose.position.y
+        tf.transform.rotation = p.pose.pose.orientation
+        h.controller.tf_buffer.set_transform(tf, "test")
+        h.controller._read_tf_pose()
+        h.controller._wall(w)
+        blocked = h.controller._start(None, Trigger.Response())
+        assert not blocked.success and "localization" in blocked.message
+        h.controller._localization_status(String(data=json.dumps({
+            "state": "LOCALIZATION_READY", "ready": True, "reason": "stable"})))
+        allowed = h.controller._start(None, Trigger.Response())
+        assert allowed.success
+    finally:
+        h.close()
+
+
 class FakeBridge:
     """DDS lease peer only; never opens a serial port."""
     def __init__(self, h):

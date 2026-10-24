@@ -37,13 +37,19 @@ def generate_launch_description():
         DeclareLaunchArgument("bridge_config", default_value=str(bridge / "config/bridge.yaml")),
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),
         DeclareLaunchArgument("publish_lidar_tf", default_value="true", choices=["true", "false"]),
+        DeclareLaunchArgument("start_rviz", default_value="false", choices=["true", "false"]),
+        DeclareLaunchArgument("rviz_config", default_value=str(share / "config/pool_localization.rviz")),
+        DeclareLaunchArgument("reference_trajectory_id", default_value="0"),
         DeclareLaunchArgument("lidar_extrinsics_file", default_value=str(mapping / "config/lidar_planar.yaml")),
         include(share, "pool_localization.launch.py", {
             "load_state_filename": config("load_state_filename"),
-            "start_trajectory": "true",
+            "start_trajectory": "false",
+            "reference_trajectory_id": config("reference_trajectory_id"),
             "scan_topic": config("scan_topic"),
             "publish_lidar_tf": config("publish_lidar_tf"),
             "lidar_extrinsics_file": config("lidar_extrinsics_file"),
+            "start_rviz": config("start_rviz"),
+            "rviz_config": config("rviz_config"),
         }, IfCondition(config("start_localization"))),
         include(bridge, "bridge.launch.py", {
             "config": config("bridge_config"),
@@ -55,6 +61,7 @@ def generate_launch_description():
             "scan_topic": config("scan_topic"),
             "output_enabled": config("output_enabled"),
             "use_map_tf": "true",
+            "require_localization_ready": "true",
         }),
         LogInfo(msg="Task remains idle. Start with: ros2 service call "
                     "/pool_cleaning/start std_srvs/srv/Trigger '{}'"),

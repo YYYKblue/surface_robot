@@ -7,7 +7,7 @@ import time
 from rclpy.node import Node
 from rclpy.clock import Clock, ClockType
 from rclpy.time import Time
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_msgs.msg import String
@@ -23,10 +23,15 @@ from .lease import Lease
 class PoolController(Node):
     def __init__(self, **kwargs):
         super().__init__("pool_controller", **kwargs)
-        for name, default in (("output_enabled", False), ("use_map_tf", False)):
+        for name, default in (("output_enabled", False), ("use_map_tf", False),
+                              ("require_localization_ready", False),
+                              ("localization_status_max_age_sec", .60)):
             self.declare_parameter(name, default, ParameterDescriptor(read_only=True))
         self.live = self.get_parameter("output_enabled").value
         self.use_map_tf = self.get_parameter("use_map_tf").value
+        self.require_localization_ready = (self.use_map_tf and
+                                            self.get_parameter("require_localization_ready").value)
+        self.localization_status_max_age_sec = self.get_parameter("localization_status_max_age_sec").value
         values = {}
         for field in fields(Config()):
             self.declare_parameter(field.name, getattr(Config(), field.name), ParameterDescriptor(read_only=True))
@@ -43,9 +48,21 @@ class PoolController(Node):
         self.clock_pair = None
         self.clock_fault = False
         self.pose_covariance_available = False
+        self.localization_ready = not self.require_localization_ready
+        self.localization_state = "BYPASSED" if not self.require_localization_ready else "LOCALIZATION_CHECK"
+        self.localization_reason = ("localization gate disabled" if not self.require_localization_ready
+                                    else "waiting for localization status")
+        self.localization_status_received = 0.
+        self.localization_snapshot = {}
         self.preview_sequence = 0
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.wall_sub = self.create_subscription(WallObservation, "/pool_cleaning/wall_observation", self._wall, qos)
+        if self.require_localization_ready:
+            localization_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                                          durability=DurabilityPolicy.TRANSIENT_LOCAL)
+            self.localization_sub = self.create_subscription(
+                String, "/pool_cleaning/localization_status", self._localization_status,
+                localization_qos)
         if self.use_map_tf:
             from tf2_ros import Buffer, TransformListener
             self.tf_buffer = Buffer()
@@ -68,6 +85,34 @@ class PoolController(Node):
         if self.live and any(p.name == "use_sim_time" and p.value for p in parameters):
             return SetParametersResult(successful=False, reason="hardware output requires system time")
         return SetParametersResult(successful=True)
+
+    def _localization_status(self, message):
+        try:
+            status = json.loads(message.data)
+            ready = bool(status.get("ready", False)) and status.get("state") == "LOCALIZATION_READY"
+            self.localization_snapshot = status
+            self.localization_ready = ready
+            self.localization_state = str(status.get("state", "UNKNOWN"))
+            self.localization_reason = str(status.get("reason", "localization not ready"))
+            self.localization_status_received = time.monotonic()
+        except (ValueError, TypeError) as exc:
+            self.localization_ready = False
+            self.localization_state = "LOCALIZATION_CHECK"
+            self.localization_reason = f"invalid localization status: {exc}"
+            self.localization_status_received = time.monotonic()
+        if self.require_localization_ready and self.mission.active and not self.localization_ready:
+            self._halt("localization not ready: " + self.localization_reason)
+
+    def _localization_error(self):
+        if not self.require_localization_ready:
+            return ""
+        if not self.localization_status_received:
+            return "localization status missing"
+        if time.monotonic() - self.localization_status_received >= self.localization_status_max_age_sec:
+            return "localization status stream stopped"
+        if not self.localization_ready:
+            return "localization not ready: " + self.localization_reason
+        return ""
 
     def _halt(self, reason, phase="PAUSED"):
         self.mission.halt(reason, phase)
@@ -144,7 +189,8 @@ class PoolController(Node):
     def _start(self, request, response):
         if self.use_map_tf:
             self._read_tf_pose()
-        error = "clock fault latched; restart controller" if self.clock_fault else self._stream_error()
+        error = ("clock fault latched; restart controller" if self.clock_fault else
+                 self._localization_error() or self._stream_error())
         if error:
             response.success, response.message = False, error
             return response
@@ -190,6 +236,10 @@ class PoolController(Node):
         if not self.mission.active and self.mission.phase != "ACQUIRING":
             return
         error = self._stream_error()
+        if error:
+            self._halt(error)
+            return
+        error = self._localization_error()
         if error:
             self._halt(error)
             return
@@ -254,6 +304,12 @@ class PoolController(Node):
                       blind_front_obstacle_detection_available=False,
                       pose_source="tf" if self.use_map_tf else "map_pose",
                       pose_covariance_available=self.pose_covariance_available,
+                      localization_ready=self.localization_ready,
+                      localization_state=self.localization_state,
+                      localization_reason=self.localization_reason,
+                      localization_status_age_sec=(None if not self.localization_status_received else
+                                                    time.monotonic() - self.localization_status_received),
+                      localization_snapshot=self.localization_snapshot,
                       speed_feedback_available=False, stopped_verified=False,
                       automatic_transfer_available=False, coverage_available=False)
         self.status_pub.publish(String(data=json.dumps(status, ensure_ascii=False, allow_nan=False)))

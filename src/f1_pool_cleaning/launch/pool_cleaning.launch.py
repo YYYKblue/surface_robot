@@ -16,6 +16,7 @@ def generate_launch_description():
         DeclareLaunchArgument("map_pose_topic", default_value="/pool_cleaning/map_pose"),
         DeclareLaunchArgument("output_enabled", default_value="false", choices=["true", "false"]),
         DeclareLaunchArgument("use_map_tf", default_value="true", choices=["true", "false"]),
+        DeclareLaunchArgument("require_localization_ready", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("use_sim_time", default_value="false", choices=["true", "false"]),
         Node(package="f1_pool_cleaning", executable="pool_perception", name="pool_perception",
              parameters=[str(share / "config/perception.yaml"), {"use_sim_time": sim}],
@@ -23,6 +24,8 @@ def generate_launch_description():
         Node(package="f1_pool_cleaning", executable="pool_controller", output="screen",
              parameters=[LaunchConfiguration("config"), {"use_sim_time": sim,
                  "output_enabled": ParameterValue(LaunchConfiguration("output_enabled"), value_type=bool),
-                 "use_map_tf": ParameterValue(LaunchConfiguration("use_map_tf"), value_type=bool)}],
+                 "use_map_tf": ParameterValue(LaunchConfiguration("use_map_tf"), value_type=bool),
+                 "require_localization_ready": ParameterValue(
+                     LaunchConfiguration("require_localization_ready"), value_type=bool)}],
              remappings=[("/pool_cleaning/map_pose", LaunchConfiguration("map_pose_topic"))]),
     ])

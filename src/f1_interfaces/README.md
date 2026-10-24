@@ -11,6 +11,7 @@
 | msg | `CleaningStatus` | 旧脉冲控制状态接口；保留类型兼容，当前清洗包不发布 |
 | srv | `AcquireControl` | 申请控制租约 |
 | srv | `ReleaseControl` | 释放控制租约 |
+| srv | `SetInitialPose` | 向泳池定位管理器提交 RViz2 使用的 `map` 坐标初始位姿 |
 
 Python 使用 `from f1_interfaces.msg import ActuatorCommand` 或 `from f1_interfaces.srv import AcquireControl`；依赖包在 `package.xml` 中声明 `f1_interfaces`。
 

@@ -1,8 +1,8 @@
 # f1_pool_cleaning 开发与验收文档
 
 日期：2026-10-24  
-版本：v0.1  
-状态：开发基线与验收计划，不代表四边清洗已经实现
+版本：v0.1-stage1
+状态：阶段 1 软件实现完成；实船重复标定和现场验收证据仍待归档，不代表四边清洗已经实现
 
 ## 1. 目标与当前边界
 
@@ -23,13 +23,12 @@
 
 当前尚未完成：
 
-- RViz2 `2D Pose Estimate` 到 Cartographer 定位轨迹的正式接入；
 - 通用池边/多边形配置；
 - 当前边选择与边身份管理；
 - 离墙、转移、转角、重新贴墙和自动换边；
 - 四边任务编排、覆盖率统计和漏洗报告。
 
-当前验收结论只能是“单边沿墙控制通过软件验证”，不能称为“全池清洗完成”。
+阶段 1 软件已完成：新增 `pool_localization_manager`，通过 `/initialpose` 或 `/pool_cleaning/set_initial_pose` 管理 Cartographer 纯定位轨迹；新增 `LOCALIZATION_CHECK`、`LOCALIZATION_READY` 和锁存的 `PAUSED` 门控；控制器在定位未就绪、定位状态过期或定位退化时拒绝启动并关闭输出。当前验收结论仍只能是“单边沿墙控制和定位门控通过软件验证”，不能称为“全池清洗完成”。
 
 ## 2. 总体架构
 
@@ -160,13 +159,13 @@ IDLE
 5. 定位管理节点检查轨迹状态、位姿新鲜度、扫描与地图的重合程度和跳变。
 6. 达到稳定条件后发布 `LOCALIZATION_READY`，否则保持 `LOCALIZATION_CHECK`。
 
-当前 `pool_localization.launch.py` 已能加载冻结 pbstream，但尚未完成第 3 和第 5 项。不能把“轨迹创建成功”当成定位正确。
+当前 `pool_localization.launch.py` 会加载冻结 pbstream、发布雷达静态 TF 并启动定位管理器；管理器把 RViz 初始位姿转换为 `StartTrajectory` 请求，查询轨迹状态，并在位姿、扫描、边界和扫描/地图重合连续稳定后发布 `LOCALIZATION_READY`。不能把“轨迹创建成功”当成定位正确。
 
 **建议接口**：
 
 - 输入：`/initialpose`，`geometry_msgs/PoseWithCovarianceStamped`；
 - 输出：`map → base_link` TF、定位状态和诊断；
-- 服务：`/pool_cleaning/set_initial_pose`、`/pool_cleaning/relocalize`，具体服务类型待实现后确定；
+- 服务：`/pool_cleaning/set_initial_pose`（`f1_interfaces/SetInitialPose`）、`/pool_cleaning/relocalize`（`std_srvs/Trigger`）；
 - 任务门控：没有 `LOCALIZATION_READY` 时 `/pool_cleaning/start` 必须拒绝。
 
 **验收方法**：
@@ -178,7 +177,7 @@ IDLE
 - 定位节点重启、雷达断流、TF 过期、位姿跳变都不会产生运动输出；
 - 保存 RViz 配置、初始位姿、定位状态日志和对应 rosbag。
 
-**通过条件**：连续 3 次完整操作均满足定位稳定、任务不误启动、没有旧轨迹/旧租约残留。未通过时不得进入实船自动换边开发。
+**软件通过条件**：连续测试覆盖初始位姿校验、轨迹生命周期、TF/扫描过期、地图外位姿、扫描重合不足、位姿跳变和控制器启动门控，默认 `output_enabled=false`。**现场通过条件**仍为四个区域各 3 次完整操作，且保存 RViz 配置、初始位姿、定位状态日志和对应 rosbag；现场通过前不得进入实船自动换边开发。
 
 ### 阶段 2：通用直边控制
 
@@ -406,4 +405,4 @@ colcon test-result --test-result-base build/f1_pool_cleaning --verbose
 - 清洗轨迹与覆盖报告能复核；
 - 所有安全停机和人工接管路径已验证。
 
-当前完成定义：**单边软件控制和 ROS 联调已通过；阶段 1 至阶段 6 尚未完成。**
+当前完成定义：**阶段 1 的定位管理和任务门控已通过本地软件测试；现场重复标定证据、阶段 2 至阶段 6 尚未完成。**

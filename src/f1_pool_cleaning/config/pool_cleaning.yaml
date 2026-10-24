@@ -4,6 +4,10 @@ pool_controller:
     # Consume fresh map -> base_link TF from fixed-map localization.
     # Set false when supplying PoseWithCovarianceStamped on map_pose instead.
     use_map_tf: true
+    # Stage 1 gate: a task cannot start until the localization manager reports
+    # a stable RViz-initialized map -> base_link pose.
+    require_localization_ready: true
+    localization_status_max_age_sec: 0.60
     map_frame: map
     base_frame: base_link
     # Estimated rectangle in the saved 20261021_145054 map; verify in situ.

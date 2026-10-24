@@ -1,6 +1,8 @@
 # f1_pool_cleaning：泳池沿边清洗
 
-2026-10-23 合并：墙线感知和当前单边控制统一到本包，删除旧脉冲控制器及其试跑配置。目前只沿当前左墙清洗，不换边、不掉头。滚刷负责推进，四个主电机负责航向纠偏，第五电机负责中心到左墙约 40 cm 的距离控制。
+2026-10-24 阶段 1：加入冻结地图定位管理器和 RViz2 初始位姿门控。墙线感知和当前单边控制仍统一在本包，目前只沿当前左墙清洗，不换边、不掉头。滚刷负责推进，四个主电机负责航向纠偏，第五电机负责中心到左墙约 40 cm 的距离控制。
+
+阶段 1 的软件流程已经具备：定位启动默认不创建新轨迹；操作者在 RViz2 的 `map` 坐标系使用 `2D Pose Estimate` 后，管理器通过 Cartographer `/start_trajectory` 创建带初始位姿的纯定位轨迹。管理器同时检查轨迹状态、`map → base_link` TF 新鲜度、地图边界、雷达有效率和扫描/地图重合，并在稳定窗口后发布 `/pool_cleaning/localization_status` 的 `LOCALIZATION_READY`。实船四个区域重复标定、错误位姿和 rosbag 归档仍需按开发验收文档执行。
 
 首轮下水后参数调整：滚刷 30%，第五电机双向推力 ±30%，前墙关闭输出阈值 50 cm。滚刷角度范围仍为 ±10°，四主电机从偏角超过 ±3° 就开始纠偏，开刷与纠偏可以同时进行；中心墙距范围仍为 38–42 cm。
 
@@ -52,7 +54,8 @@
 - `mission.py` / `config.py`：已验证的单边控制与控制参数，尚未扩展四边或多边形。
 - `controller_node.py` / `lease.py`：任务服务、状态、预览与 bridge 租约输出。
 - `ros_support.py` / `runner.py`：公共消息转换、时间戳和节点退出处理。
-- `pool_localization.launch.py` / `pool_localization.lua`：冻结地图定位；尚未接入 RViz 初始位姿。
+- `localization.py` / `localization_node.py`：RViz 初始位姿、Cartographer 轨迹生命周期和定位就绪门控。
+- `pool_localization.launch.py` / `pool_localization.lua`：冻结地图定位、静态雷达 TF 和定位管理器。
 
 感知和控制仍为两个独立节点。当前接口统一为 `/pool_cleaning/*`：
 
@@ -62,6 +65,10 @@
 | `wall_marker` | `visualization_msgs/Marker`，墙线显示 |
 | `reset_observation` | `std_srvs/Trigger`，重置关联；活动任务会暂停 |
 | `map_pose` | `geometry_msgs/PoseWithCovarianceStamped`，仅在 `use_map_tf=false` 时使用 |
+| `localization_status` | `std_msgs/String`，JSON 定位状态和诊断；就绪状态为 `LOCALIZATION_READY` |
+| `localization_ready` | `std_msgs/Bool`，持久化的定位门控结果 |
+| `set_initial_pose` | `f1_interfaces/SetInitialPose`，服务方式提交初始位姿 |
+| `relocalize` | `std_srvs/Trigger`，结束当前定位轨迹并要求重新标定 |
 | `command_preview` | `f1_interfaces/ActuatorCommand`，无令牌预览 |
 | `status` | `std_msgs/String`，JSON 状态 |
 | `start`、`pause`、`cancel` | `std_srvs/Trigger`，任务控制 |
@@ -85,27 +92,35 @@ colcon test-result --test-result-base build/f1_pool_cleaning --verbose
 
 演示和测试使用合成反馈、localhost DDS 和模拟 bridge，不连接串口或实机。
 
-本次合并验证：四包构建成功，本包 134 项独立测试全部通过；新定位入口加载备份地图并查询冻结轨迹成功。具体分项与复测说明见 [工作空间验证记录](../../README.md#2026-10-23-清洗包合并验证)。
+阶段 1 本地验证：四包构建成功，本包 140 项独立测试全部通过；定位入口已能加载备份地图并启动定位管理器，定位轨迹和现场扫描匹配仍需在 Nano 上按验收步骤确认。具体分项与复测说明见[开发与验收文档](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)。
 
 ## 启动
 
 Nano 源码同步和完整用法见 [下水测试步骤](DEPLOY_TEST_NANO.md)。现在支持统一启动：
 
 ```bash
-# Nano 终端 A：自动加载环境，启动定位轨迹、bridge、感知和清洗控制器。
+# Nano 终端 A：自动加载环境，启动冻结地图、定位管理器、bridge、感知和清洗控制器。
 bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano
-# Nano 终端 B：查看单条完整状态，然后手动开始任务。
+# Nano 终端 B：查看定位/墙线状态，然后手动开始任务。
 bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano status
 bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano start
 ```
 
-统一入口保持任务 `IDLE`，不自动开始清洗。定位和 bridge 已运行时，在终端 A 命令末尾增加 `bringup start_localization:=false start_bridge:=false`，只启动缺少的部分；已有清洗控制器应先退出。快捷脚本默认开启硬件输出许可，默认 ROS 域为 33；已设置的域和 RMW 环境会保留。也可加载环境后运行 `ros2 launch f1_pool_cleaning pool_bringup.launch.py output_enabled:=true`。原分开启动入口继续保留，默认预览不申请租约：
+统一入口保持任务 `IDLE`，不会在没有初始位姿时创建新的定位轨迹，也不会自动开始清洗。启动时可加 `start_rviz:=true` 自动打开保存的 RViz2 配置：
+
+```bash
+bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano bringup start_rviz:=true
+```
+
+在 RViz2 中确认 Fixed Frame 为 `map`，显示 Map、LaserScan、TF，然后点击 `2D Pose Estimate` 在地图中标定船体位置和船头方向。确认 `/pool_cleaning/localization_status` 的 `state` 变为 `LOCALIZATION_READY` 后，再运行 `status` 和 `start`。定位和 bridge 已运行时，在终端 A 命令末尾增加 `bringup start_localization:=false start_bridge:=false`，只启动缺少的部分；已有清洗控制器应先退出。快捷脚本默认开启硬件输出许可，默认 ROS 域为 33；已设置的域和 RMW 环境会保留。也可加载环境后运行 `ros2 launch f1_pool_cleaning pool_bringup.launch.py output_enabled:=true`。原分开启动入口继续保留，默认预览不申请租约：
 
 ```bash
 ros2 launch f1_pool_cleaning pool_cleaning.launch.py
 ros2 topic echo /pool_cleaning/status
 ros2 topic echo /pool_cleaning/command_preview
 ```
+
+没有 `LOCALIZATION_READY` 时 `/pool_cleaning/start` 会拒绝申请任务租约；定位跳变、TF/雷达过期或轨迹结束会关闭输出并使任务进入 `PAUSED`。定位恢复后不会自动恢复旧任务，必须检查原因、调用 `cancel`，再次在 RViz2 标定后再 `start`。
 
 实机使用同一个入口，显式开启输出，再启动任务：
 
@@ -122,6 +137,6 @@ ros2 service call /pool_cleaning/cancel std_srvs/srv/Trigger '{}'
 
 状态前部新增 `left_wall_distance_cm`：船中心到左墙的垂直距离，单位厘米，保留 1 位小数，例如 `40.0`。原 `wall_distance_m` 米制字段继续提供相同距离；墙线无效时这两个字段均为 `null`，不把占位值 0 当作实际距离。
 
-状态还包含 `wall_angle_deg`、`wall_valid`、`wall_reason`、`heading_band_deg`、`map_front_clearance_m`、刷盘/侧推请求及租约状态。`wall_reason` 保留感知的拒绝原因，持续丢墙暂停时 `reason` 也会带出该原因。查看单条完整状态：`ros2 topic echo /pool_cleaning/status --once --full-length`。预览 token 始终为空。`STOPPED` 只表示输出已关闭，不代表船体已经停稳。
+状态还包含 `wall_angle_deg`、`wall_valid`、`wall_reason`、`heading_band_deg`、`map_front_clearance_m`、刷盘/侧推请求及租约状态；`localization_ready`、`localization_state`、`localization_reason` 来自定位管理器。`wall_reason` 保留感知的拒绝原因，持续丢墙暂停时 `reason` 也会带出该原因。查看单条完整状态：`ros2 topic echo /pool_cleaning/status --once --full-length`。预览 token 始终为空。`STOPPED` 只表示输出已关闭，不代表船体已经停稳。
 
 请使用本包更新后的默认配置。历史诊断目录中的 `rectangle_current_side.yaml` 仍保存当时的 ±3°、8 秒限制，不是本版测试参数。
