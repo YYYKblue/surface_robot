@@ -159,7 +159,7 @@ IDLE
 5. 定位管理节点检查轨迹状态、位姿新鲜度、扫描与地图的重合程度和跳变。
 6. 达到稳定条件后发布 `LOCALIZATION_READY`，否则保持 `LOCALIZATION_CHECK`。
 
-当前 `pool_localization.launch.py` 会加载冻结 pbstream、发布雷达静态 TF 并启动定位管理器；管理器把 RViz 初始位姿转换为 `StartTrajectory` 请求，查询轨迹状态，并在位姿、扫描、边界和扫描/地图重合连续稳定后发布 `LOCALIZATION_READY`。不能把“轨迹创建成功”当成定位正确。
+当前 `pool_localization.launch.py` 会加载冻结 pbstream、发布雷达静态 TF、启动栅格地图节点发布 `/map`，并启动定位管理器；管理器把 RViz 初始位姿转换为 `StartTrajectory` 请求，查询轨迹状态，并在位姿、扫描、地图边界和扫描端点与 `/map` 占用栅格的重合连续稳定后发布 `LOCALIZATION_READY`。不能把“轨迹创建成功”当成定位正确。
 
 **建议接口**：
 

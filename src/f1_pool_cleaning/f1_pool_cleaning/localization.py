@@ -30,6 +30,45 @@ def yaw_from_quaternion(q):
                       1.0 - 2.0 * (q.y * q.y + q.z * q.z))
 
 
+def occupied_map_overlap(points, resolution, width, height, data,
+                         origin_x, origin_y, origin_yaw,
+                         radius_m=.15, occupied_threshold=50):
+    """Return the fraction of scan endpoints near occupied map cells.
+
+    ``points`` are already expressed in the occupancy grid's frame.  The
+    radius accounts for map rasterization and lidar/map calibration error; it
+    does not turn the rectangle boundary into a map-match signal.
+    """
+    if (not points or not math.isfinite(resolution) or resolution <= 0
+            or width <= 0 or height <= 0 or len(data) < width * height
+            or not math.isfinite(radius_m) or radius_m < 0):
+        return None
+    c, s = math.cos(origin_yaw), math.sin(origin_yaw)
+    radius_cells = int(math.ceil(radius_m / resolution))
+    matches = 0
+    for x, y in points:
+        dx, dy = x - origin_x, y - origin_y
+        local_x = c * dx + s * dy
+        local_y = -s * dx + c * dy
+        column = math.floor(local_x / resolution)
+        row = math.floor(local_y / resolution)
+        found = False
+        for row_offset in range(-radius_cells, radius_cells + 1):
+            for column_offset in range(-radius_cells, radius_cells + 1):
+                test_row = row + row_offset
+                test_column = column + column_offset
+                if not (0 <= test_row < height and 0 <= test_column < width):
+                    continue
+                value = data[test_row * width + test_column]
+                if value >= occupied_threshold:
+                    found = True
+                    break
+            if found:
+                break
+        matches += int(found)
+    return matches / len(points)
+
+
 @dataclass(frozen=True)
 class LocalizationConfig:
     map_frame: str = "map"
@@ -42,6 +81,7 @@ class LocalizationConfig:
     boundary_margin_m: float = .25
     scan_overlap_min: float = .10
     scan_valid_fraction_min: float = .05
+    scan_map_match_radius_m: float = .15
     initial_pose_timeout_sec: float = 5.0
     status_max_age_sec: float = .60
     origin_x_m: float = -0.9802816886364385
@@ -56,6 +96,7 @@ class LocalizationConfig:
         for name in ("pose_max_age_sec", "scan_max_age_sec", "stable_sec",
                      "jump_distance_m", "jump_angle_rad", "boundary_margin_m",
                      "scan_overlap_min", "scan_valid_fraction_min",
+                     "scan_map_match_radius_m",
                      "initial_pose_timeout_sec", "status_max_age_sec",
                      "length_m", "width_m"):
             value = getattr(self, name)

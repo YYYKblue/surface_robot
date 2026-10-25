@@ -1,11 +1,21 @@
-"""Load a frozen pbstream, optionally starting a localization trajectory."""
+"""Load a frozen pbstream and publish its occupancy grid for RViz2."""
+import os
 from pathlib import Path
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from f1_mapping_bringup.configuration import load_lidar_planar_transform, static_tf_arguments
+
+
+def executable(directory, candidates):
+    for name in candidates:
+        if (directory / name).is_file() and os.access(directory / name, os.X_OK):
+            return name
+    raise RuntimeError(
+        f"Cartographer occupancy-grid executable missing: {candidates}; "
+        "check ros2 pkg executables cartographer_ros")
 
 
 def nodes(context):
@@ -15,6 +25,9 @@ def nodes(context):
     if not state.is_file() or state.suffix != ".pbstream":
         raise ValueError("load_state_filename must name the existing reference-map .pbstream")
     share = Path(get_package_share_directory("f1_pool_cleaning"))
+    cartographer_lib = Path(get_package_prefix("cartographer_ros")) / "lib" / "cartographer_ros"
+    occupancy_grid = executable(
+        cartographer_lib, ("cartographer_occupancy_grid_node", "occupancy_grid_node"))
     parameters = [{"use_sim_time": value("use_sim_time") == "true"}]
     result = []
     if value("publish_lidar_tf") == "true":
@@ -29,6 +42,12 @@ def nodes(context):
                    "-load_state_filename", str(state), "-load_frozen_state=true",
                    "-start_trajectory_with_default_topics=" + value("start_trajectory")],
         remappings=[("scan", value("scan_topic"))]))
+    # cartographer_node publishes submaps and TF; this separate node converts
+    # the frozen submaps into the /map OccupancyGrid consumed by RViz2.
+    result.append(Node(package="cartographer_ros", executable=occupancy_grid,
+        name="cartographer_occupancy_grid_node", output="screen", parameters=parameters,
+        arguments=["-resolution", value("occupancy_grid_resolution"),
+                   "-publish_period_sec", value("occupancy_grid_publish_period_sec")]))
     # The manager starts a trajectory only after a valid RViz initial pose. It
     # also publishes the readiness gate consumed by the cleaning controller.
     result.append(Node(package="f1_pool_cleaning", executable="pool_localization",
@@ -54,6 +73,8 @@ def generate_launch_description():
                               description="Compatibility mode; stage 1 starts after /initialpose"),
         DeclareLaunchArgument("reference_trajectory_id", default_value="0"),
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),
+        DeclareLaunchArgument("occupancy_grid_resolution", default_value="0.05"),
+        DeclareLaunchArgument("occupancy_grid_publish_period_sec", default_value="1.0"),
         DeclareLaunchArgument("lidar_extrinsics_file", default_value=str(mapping / "config/lidar_planar.yaml")),
         DeclareLaunchArgument("publish_lidar_tf", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("use_sim_time", default_value="false", choices=["true", "false"]),

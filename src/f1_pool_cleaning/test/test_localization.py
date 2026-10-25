@@ -7,6 +7,7 @@ from f1_pool_cleaning.localization import (
     LocalizationGate,
     PoseSample,
     ScanQuality,
+    occupied_map_overlap,
     json_status,
     validate_initial_pose,
 )
@@ -86,3 +87,15 @@ def test_gate_reports_scan_unknown_and_stale_evidence_without_nan_json():
     assert "unknown" in gate.reason
     status = json_status(gate.as_dict(1_000_000_000))
     assert "NaN" not in status
+
+
+def test_scan_overlap_uses_occupied_cells_instead_of_rectangle_boundary():
+    width = height = 10
+    data = [0] * (width * height)
+    data[5 * width + 8] = 100
+    assert occupied_map_overlap(
+        [(0.85, 0.55)], .1, width, height, data,
+        0., 0., 0., radius_m=.04) == 1.
+    assert occupied_map_overlap(
+        [(0.15, 0.15)], .1, width, height, data,
+        0., 0., 0., radius_m=.04) == 0.
