@@ -2,7 +2,7 @@
 
 2026-10-24 阶段 1：加入冻结地图定位管理器和 RViz2 初始位姿门控。墙线感知和当前单边控制仍统一在本包，目前只沿当前左墙清洗，不换边、不掉头。滚刷负责推进，四个主电机负责航向纠偏，第五电机负责中心到左墙约 40 cm 的距离控制。
 
-阶段 1 的软件流程已经具备：定位启动默认不创建新轨迹；操作者在 RViz2 的 `map` 坐标系使用 `2D Pose Estimate` 后，管理器通过 Cartographer `/start_trajectory` 创建带初始位姿的纯定位轨迹。启动入口同时运行栅格地图节点发布 `/map`，管理器检查轨迹状态、`map → base_link` TF 新鲜度、地图边界、雷达有效率和扫描/地图重合，并在稳定窗口后发布 `/pool_cleaning/localization_status` 的 `LOCALIZATION_READY`。实船四个区域重复标定、错误位姿和 rosbag 归档仍需按开发验收文档执行。
+阶段 1 的软件流程已经具备：定位启动默认不创建新轨迹；操作者在 RViz2 的 `map` 坐标系使用 `2D Pose Estimate` 后，管理器通过 Cartographer `/start_trajectory` 创建带初始位姿的纯定位轨迹。启动入口同时运行栅格地图节点发布 `/map`，管理器检查轨迹状态、`map → base_link` TF 新鲜度、地图边界、雷达有效率和扫描/地图重合，并在稳定窗口后发布 `/pool_cleaning/localization_status` 的 `LOCALIZATION_READY`。当前记录为正常流程验证通过；异常场景和重复验收证据仍需按开发验收文档补齐。
 
 首轮下水后参数调整：滚刷 30%，第五电机双向推力 ±30%，前墙关闭输出阈值 50 cm。滚刷角度范围仍为 ±10°，四主电机从偏角超过 ±3° 就开始纠偏，开刷与纠偏可以同时进行；中心墙距范围仍为 38–42 cm。
 
@@ -92,7 +92,7 @@ colcon test-result --test-result-base build/f1_pool_cleaning --verbose
 
 演示和测试使用合成反馈、localhost DDS 和模拟 bridge，不连接串口或实机。
 
-阶段 1 本地验证：四包构建成功，本包 141 项独立测试全部通过；定位入口已能加载备份地图并启动定位管理器，定位轨迹和现场扫描匹配仍需在 Nano 上按验收步骤确认。具体分项与复测说明见[开发与验收文档](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)。
+阶段 1 本地验证：四包构建成功，本包 141 项独立测试全部通过；Nano 正常定位流程已验证，异常场景和重复验收证据仍待补齐。具体分项与复测说明见[开发与验收文档](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)。
 
 ## 启动
 
