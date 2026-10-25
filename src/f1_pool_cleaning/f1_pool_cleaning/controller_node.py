@@ -49,7 +49,7 @@ class PoolController(Node):
         # zero is the typed "unset" sentinel; real configurations provide
         # paired map x/y values and are validated below.
         self.boundary_xy = self._declare_readonly("boundary_xy", [0.0])
-        self.default_edge_id = self._declare_readonly("default_edge_id", "")
+        self.default_edge_id = self._declare_readonly("default_edge_id", "edge_0")
         self.pool = self._build_pool()
         if self.live and (self.get_parameter("use_sim_time").value or not self.config.fifth_left_sign):
             self.destroy_node()

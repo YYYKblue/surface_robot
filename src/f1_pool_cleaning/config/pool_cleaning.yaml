@@ -44,9 +44,9 @@ pool_controller:
                   2.144718257910, 0.740757602635,
                   1.846641449817, -0.749627029637,
                   -0.980281688636, -0.184242626451]
-    # Empty: choose the nearest edge whose closest point is on base_link +y
-    # (left). Heading is corrected after selection; never reverse for right-wall use.
-    default_edge_id: ""
+    # Always start from the first long edge. The pose must still be near edge_0
+    # and the wall must remain on base_link +y; this does not enable edge transfer.
+    default_edge_id: "edge_0"
     # Wider than the 32--36 cm control band: map edge identity must survive
     # rough initial placement before the fifth thruster closes the gap.
     edge_target_distance_tolerance_m: 0.20
