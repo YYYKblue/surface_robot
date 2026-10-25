@@ -87,6 +87,18 @@ def test_edge_mission_uses_new_wall_band_and_stops_at_edge_endpoint():
     assert effort.direction == 0 and effort.brush_percent == 0 and effort.side_left_percent == 0
 
 
+def test_edge_approach_does_not_stop_after_a_fixed_duration():
+    c = Config().validate()
+    pool = PoolModel.rectangle(c)
+    mission = Mission(c)
+    assert mission.configure_edge(pool, pool.edges[0])[0]
+    assert mission.start(sample(c, NOW, along=.8, distance=.50), NOW)[0]
+    effort = mission.update(sample(c, NOW + 20_000_000_000,
+                                   along=1.0, distance=.34), NOW + 20_000_000_000)
+    assert mission.phase == "FOLLOW"
+    assert effort.brush_percent == c.brush_percent
+
+
 def test_front_stop_distance_is_measured_from_boat_centre():
     c = Config().validate()
     mission = Mission(c)

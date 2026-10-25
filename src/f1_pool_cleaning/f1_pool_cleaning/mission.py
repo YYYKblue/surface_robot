@@ -264,10 +264,6 @@ class Mission:
                 and now - self.started_ns >= self.c.run_timeout_sec * 1e9):
             self.halt("clock reversed or run timeout")
             return None
-        if (self.phase in ("APPROACH_WALL", "APPROACH_EDGE")
-                and now - self.started_ns >= self.c.edge_approach_timeout_sec * 1e9):
-            self.halt("edge approach timeout")
-            return None
         projection = self.edge.project(f.pose, self.c.brush_x_m, self.c.brush_tip_y_m)
         if (self.last_edge_s is not None
                 and projection.s_m < self.last_edge_s - self.c.edge_progress_jump_m):

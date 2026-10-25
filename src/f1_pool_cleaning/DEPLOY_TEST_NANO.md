@@ -194,7 +194,7 @@ ros2 launch f1_pool_cleaning pool_cleaning.launch.py output_enabled:=true
 ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 ```
 
-start 返回 acquire requested 仅表示已请求租约；看 status 的 `lease_held` 与 phase 确认实际启动。第五路按墙距输出 +30% / 0 / -30%，刷盘默认 30%。默认 `run_timeout_sec=0`，没有固定时长上限；如需限时试验可另设正值。`brush_percent` 改变推进效果也改变刷洗强度，本版不闭环控制速度。
+start 返回 acquire requested 仅表示已请求租约；看 status 的 `lease_held` 与 phase 确认实际启动。第五路按墙距输出 +30% / 0 / -30%，刷盘默认 30%。默认 `run_timeout_sec=0`，没有固定时长上限；阶段 2 也不再用固定的靠墙/入口时长限制任务，速度和边长由反馈与地图进度决定。`brush_percent` 改变推进效果也改变刷洗强度，本版不闭环控制速度。
 
 使用本次默认配置；不要套用历史 `diagnostics/single_side_remote_20261023/rectangle_current_side.yaml`，该文件仍保存旧 ±3° 与 8 秒限制。
 

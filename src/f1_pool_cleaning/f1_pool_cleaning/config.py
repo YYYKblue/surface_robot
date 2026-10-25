@@ -44,7 +44,6 @@ class Config:
     edge_select_max_distance_m: float = .85
     # Broad initial association gate; precise heading is corrected before brush-on.
     edge_heading_tolerance_rad: float = math.radians(70.)
-    edge_approach_timeout_sec: float = 12.
     edge_progress_jump_m: float = .35
     corner_exclusion_m: float = .30
     endpoint_margin_m: float = .50
@@ -73,7 +72,7 @@ class Config:
                 or self.run_timeout_sec < 0 or self.wall_recovery_sec <= 0
                 or self.edge_select_max_distance_m <= 0
                 or not 0 < self.edge_heading_tolerance_rad < math.pi / 2
-                or self.edge_approach_timeout_sec <= 0 or self.edge_progress_jump_m <= 0
+                or self.edge_progress_jump_m <= 0
                 or self.corner_exclusion_m < 0 or self.endpoint_margin_m <= 0
                 or self.brush_x_m < -self.hull_half_length_m
                 or abs(self.brush_tip_y_m) <= self.hull_half_width_m
