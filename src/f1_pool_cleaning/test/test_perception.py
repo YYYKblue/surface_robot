@@ -4,7 +4,7 @@ import math
 import numpy as np
 import pytest
 
-from f1_pool_cleaning.perception import Perception
+from f1_pool_cleaning.perception import EdgeTargetContext, Perception
 from f1_pool_cleaning.synthetic import pool_scan
 
 
@@ -33,6 +33,31 @@ def test_unknown_front_is_not_free_space(calibrated):
     estimator = Perception(calibrated)
     o = estimator.process(pool_scan(1_000_000_000, config=calibrated, missing_front=True), 1_000_000_000)
     assert o.valid and not o.front_observed
+
+
+def test_map_edge_target_keeps_the_selected_left_wall_identity(calibrated):
+    scan = pool_scan(1_000_000_000, wall_distance=.34, config=calibrated)
+    estimator = Perception(calibrated)
+    target = EdgeTargetContext(1_000_000_000, 1, "edge_0", True,
+                               expected_distance=.34, expected_angle=0.,
+                               distance_tolerance=.05, angle_tolerance=.10)
+    accepted = estimator.process(scan, 1_000_000_000, target)
+    assert accepted.valid and accepted.distance == pytest.approx(.34, abs=.006)
+
+    wrong = EdgeTargetContext(1_020_000_000, 1, "edge_0", True,
+                              expected_distance=.80, expected_angle=0.,
+                              distance_tolerance=.05, angle_tolerance=.10)
+    rejected = estimator.process(pool_scan(1_020_000_000, wall_distance=.34,
+                                           config=calibrated), 1_020_000_000, wrong)
+    assert not rejected.valid and "target mismatch" in rejected.reason
+
+
+def test_stale_edge_target_is_not_used_to_drive_wall_control(calibrated):
+    target = EdgeTargetContext(1_000_000_000, 1, "edge_0", True,
+                               expected_distance=.34, expected_angle=0.)
+    scan = pool_scan(1_000_000_000, wall_distance=.34, config=calibrated)
+    observation = Perception(calibrated).process(scan, 1_160_000_000, target)
+    assert not observation.valid and "stale" in observation.reason
 
 
 def test_front_obstacle_and_rigid_envelope(calibrated):

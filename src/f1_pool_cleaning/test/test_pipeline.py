@@ -148,7 +148,7 @@ class Harness:
         self.pub = self.driver.create_publisher(LaserScan, "/pavo2_scan", qos_profile_sensor_data)
         self.scanning = True
         self.pose_pub = self.driver.create_publisher(PoseWithCovarianceStamped, "/pool_cleaning/map_pose", qos_profile_sensor_data)
-        self.scan_template = pool_scan(1_000_000_000, wall_distance=.4, config=config)
+        self.scan_template = pool_scan(1_000_000_000, wall_distance=.34, config=config)
         # 20 Hz leaves scan processing time within the 100/150 ms deadlines;
         # a 50 Hz synthetic source can build an artificial backlog on the Nano.
         self.timer = self.driver.create_timer(.05, self.scan)
@@ -289,16 +289,16 @@ def test_live_scan_pipeline_rc_return_requires_cancel_and_start(profile, percept
 
 def test_live_scan_pipeline_signed_side_and_heading_commands(profile):
     h = Harness(profile, live=True)
-    h.scan_template = pool_scan(10**9, wall_distance=.5, wall_angle=math.radians(12), config=profile)
+    h.scan_template = pool_scan(10**9, wall_distance=.44, wall_angle=math.radians(12), config=profile)
     try:
         h.ready()
         assert h.call("start").success
         h.until(lambda: any(accepted and m.direction == 3 and m.thrust_percent == 30.
                             and not m.brush_enabled for m, accepted in h.bridge.commands))
-        h.scan_template = pool_scan(10**9, wall_distance=.37, wall_angle=math.radians(-12), config=profile)
+        h.scan_template = pool_scan(10**9, wall_distance=.31, wall_angle=math.radians(-12), config=profile)
         h.until(lambda: any(accepted and m.direction == 4 and m.thrust_percent == -30.
                             and not m.brush_enabled for m, accepted in h.bridge.commands))
-        h.scan_template = pool_scan(10**9, wall_distance=.4, config=profile)
+        h.scan_template = pool_scan(10**9, wall_distance=.34, config=profile)
         h.until(lambda: any(accepted and m.direction == 0 and m.brush_enabled
                             and not m.thrust_enabled for m, accepted in h.bridge.commands))
         assert all(accepted for _, accepted in h.bridge.commands)

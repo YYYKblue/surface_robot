@@ -11,9 +11,11 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/WallObservation.msg"
   "msg/EffortPreview.msg"
   "msg/CleaningStatus.msg"
+  "msg/EdgeTarget.msg"
   "srv/SetInitialPose.srv"
   "srv/AcquireControl.srv"
   "srv/ReleaseControl.srv"
+  "srv/SetEdge.srv"
   DEPENDENCIES builtin_interfaces geometry_msgs std_msgs)
 ament_export_dependencies(rosidl_default_runtime)
 install(FILES README.md DESTINATION share/${PROJECT_NAME})

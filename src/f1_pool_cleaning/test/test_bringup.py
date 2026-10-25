@@ -19,7 +19,7 @@ def test_combined_preview_and_reuse_existing_nodes(monkeypatch, tmp_path, start_
     monkeypatch.setenv("ROS_LOG_DIR", str(tmp_path / "ros_logs"))
     # A distinct target detects launch argument leakage between child launches.
     config = tmp_path / "cleaning.yaml"
-    config.write_text("pool_controller:\n  ros__parameters:\n    wall_target_m: 0.405\n")
+    config.write_text("pool_controller:\n  ros__parameters:\n    wall_target_m: 0.345\n    side_off_distance_m: 0.325\n    side_on_distance_m: 0.365\n")
     rclpy.init()
     peer = Node("combined_launch_test")
     statuses, states = [], []
@@ -42,7 +42,7 @@ def test_combined_preview_and_reuse_existing_nodes(monkeypatch, tmp_path, start_
                 assert process.poll() is None, log_path.read_text()
             assert statuses, log_path.read_text()
             status = statuses[-1]
-            assert status["wall_target_m"] == pytest.approx(.405)
+            assert status["wall_target_m"] == pytest.approx(.345)
             assert status["phase"] == "IDLE"
             assert status["pose_source"] == "tf"
             assert not status["output_enabled"] and not status["lease_held"]

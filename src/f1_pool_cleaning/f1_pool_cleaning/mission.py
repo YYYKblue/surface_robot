@@ -4,6 +4,7 @@ import math
 
 from f1_pool_cleaning.perception import Observation
 from .config import Config
+from .geometry import PoolModel
 
 
 def wrap(angle):
@@ -49,15 +50,47 @@ class Mission:
         self.last_scan = -1
         self.last_effort = None
         self.wall_lost_since_ns = None
+        # Stage-2 edge mode is enabled by configure_edge().  Keeping the
+        # legacy no-edge path makes the lower-level wall-control tests and
+        # preview API backwards compatible while the ROS controller uses the
+        # edge path exclusively.
+        self.pool = None
+        self.edge = None
+        self.edge_task_id = ""
+        self.edge_projection = None
+        self.last_edge_s = None
+        self.last_contact_s = None
+        self.last_coverage_ns = None
+        self.cleaned_intervals = []
 
     @property
     def active(self):
-        return self.phase in ("FOLLOW", "CORRECT_HEADING", "WAIT_WALL")
+        return self.phase in ("APPROACH_WALL", "APPROACH_EDGE", "FOLLOW",
+                              "CORRECT_HEADING", "WAIT_WALL")
+
+    @property
+    def edge_active(self):
+        return self.edge is not None and self.pool is not None
+
+    def configure_edge(self, pool, edge, task_id=""):
+        if self.active or self.phase == "ACQUIRING":
+            return False, "cancel before changing the current edge"
+        if (not isinstance(pool, PoolModel) or not hasattr(edge, "id")
+                or pool.by_id.get(edge.id) is not edge):
+            return False, "unknown edge model"
+        self.pool, self.edge, self.edge_task_id = pool, edge, task_id
+        self.edge_projection = None
+        self.last_edge_s = self.last_contact_s = None
+        self.last_coverage_ns = None
+        self.cleaned_intervals = []
+        self.reason = f"edge {edge.id} selected; waiting for start"
+        return True, self.reason
 
     def halt(self, reason, phase="PAUSED"):
         self.phase, self.reason = phase, reason
         self.last_effort = None
         self.wall_lost_since_ns = None
+        self.last_coverage_ns = None
 
     def front_remaining(self, pose):
         x, _ = self.c.pool_xy(pose.x, pose.y)
@@ -89,6 +122,8 @@ class Mission:
         return ""
 
     def start(self, f, now, allow_wall_recovery=False):
+        if self.edge_active:
+            return self._start_edge(f, now, allow_wall_recovery)
         if self.phase not in ("IDLE", "CANCELLED", "STOPPED"):
             return False, "cancel before restarting; paused tasks never resume automatically"
         error = self.error(f, now, allow_invalid_wall=allow_wall_recovery)
@@ -104,6 +139,31 @@ class Mission:
         self.last_scan = -1
         return True, "single-side task started"
 
+    def _start_edge(self, f, now, allow_wall_recovery=False):
+        if self.phase not in ("IDLE", "CANCELLED", "STOPPED", "EDGE_STOP"):
+            return False, "cancel before restarting; paused tasks never resume automatically"
+        error = self.error(f, now, allow_invalid_wall=allow_wall_recovery)
+        if error:
+            return False, error
+        projection = self.edge.project(f.pose, self.c.brush_x_m, self.c.brush_tip_y_m)
+        if projection.distance_to_segment_m > self.c.edge_select_max_distance_m:
+            return False, "localized pose is too far from the selected edge"
+        if projection.lateral_distance_m <= 0.:
+            return False, "localized pose is outside the selected edge; wall would be on the right"
+        if abs(projection.heading_error_rad) > self.c.edge_heading_tolerance_rad:
+            return False, "boat heading does not match the selected edge direction"
+        if projection.s_m > self.edge.stop_s_m:
+            return False, "localized pose is past the selected edge stop point"
+        self.halt("edge selected; adjusting wall distance", "APPROACH_WALL")
+        self.started_ns = self.last_update_ns = now
+        self.last_scan = -1
+        self.edge_projection = projection
+        self.last_edge_s = projection.s_m
+        self.last_contact_s = projection.contact_s_m
+        self.last_coverage_ns = None
+        self.reason = f"approaching {self.edge.id}; target wall band 0.32--0.36 m"
+        return True, f"edge {self.edge.id} started"
+
     def _visible_front_stop(self, w):
         # Available positive evidence remains useful even in map endpoint mode.
         return (w.front_observed and math.isfinite(w.front_fraction) and w.front_fraction >= .85
@@ -112,6 +172,8 @@ class Mission:
     def update(self, f, now):
         if not self.active:
             return None
+        if self.edge_active:
+            return self._update_edge(f, now)
         error = self.error(f, now, allow_invalid_wall=True)
         if error:
             self.halt(error)
@@ -150,7 +212,7 @@ class Mission:
             self.last_effort = Effort(now, deadline)
             return self.last_effort
         self.wall_lost_since_ns = None
-        # Signed fifth-thruster correction about 40 cm, with a 38--42 cm band.
+        # Signed fifth-thruster correction for the legacy single-side path.
         if w.distance > c.side_on_distance_m:
             side_output = c.side_percent
         elif w.distance < c.side_off_distance_m:
@@ -167,4 +229,116 @@ class Mission:
         effort = Effort(now, deadline, 0, direction, side_output,
                         c.brush_percent if brush_aligned else 0.)
         self.last_effort = effort
+        return effort
+
+    def _record_coverage(self, projection, now):
+        """Record only continuous left-brush contact-center progress."""
+        if self.edge is None or self.last_contact_s is None:
+            self.last_contact_s = projection.contact_s_m
+            self.last_coverage_ns = now
+            return
+        if (self.last_coverage_ns is None
+                or now - self.last_coverage_ns > 250_000_000
+                or projection.contact_s_m < self.last_contact_s - self.c.edge_progress_jump_m):
+            self.last_contact_s = projection.contact_s_m
+            self.last_coverage_ns = now
+            return
+        low = max(self.edge.clean_start_s_m, min(self.last_contact_s, projection.contact_s_m))
+        high = min(self.edge.clean_end_s_m, max(self.last_contact_s, projection.contact_s_m))
+        if high > low:
+            if self.cleaned_intervals and low <= self.cleaned_intervals[-1][1] + .01:
+                self.cleaned_intervals[-1] = (self.cleaned_intervals[-1][0],
+                                              max(self.cleaned_intervals[-1][1], high))
+            else:
+                self.cleaned_intervals.append((low, high))
+        self.last_contact_s = projection.contact_s_m
+        self.last_coverage_ns = now
+
+    def _update_edge(self, f, now):
+        error = self.error(f, now, allow_invalid_wall=True)
+        if error:
+            self.halt(error)
+            return None
+        if now < self.last_update_ns or (self.c.run_timeout_sec > 0
+                and now - self.started_ns >= self.c.run_timeout_sec * 1e9):
+            self.halt("clock reversed or run timeout")
+            return None
+        if (self.phase in ("APPROACH_WALL", "APPROACH_EDGE")
+                and now - self.started_ns >= self.c.edge_approach_timeout_sec * 1e9):
+            self.halt("edge approach timeout")
+            return None
+        projection = self.edge.project(f.pose, self.c.brush_x_m, self.c.brush_tip_y_m)
+        if (self.last_edge_s is not None
+                and projection.s_m < self.last_edge_s - self.c.edge_progress_jump_m):
+            self.halt("edge progress moved backwards beyond the configured jump")
+            return None
+        if projection.distance_to_segment_m > self.c.edge_select_max_distance_m:
+            self.halt("localized pose left the selected edge corridor")
+            return None
+        if projection.lateral_distance_m <= 0.:
+            self.halt("localized pose is outside the selected edge; wall would be on the right")
+            return None
+        if abs(projection.heading_error_rad) > self.c.edge_heading_tolerance_rad:
+            self.halt("boat heading left the selected edge direction")
+            return None
+        self.edge_projection = projection
+        self.last_edge_s = projection.s_m
+        self.last_update_ns = now
+
+        if projection.s_m >= self.edge.stop_s_m:
+            self.halt("edge stop point reached; outputs off", "EDGE_STOP")
+            self.last_effort = Effort(now, now + round(self.c.command_ttl_sec * 1e9))
+            return self.last_effort
+
+        if f.wall.stamp_ns <= self.last_scan:
+            if self.last_effort and now >= self.last_effort.valid_until_ns:
+                self.halt("command deadline expired without a fresh scan")
+            return None
+        self.last_scan = f.wall.stamp_ns
+        w, c = f.wall, self.c
+        deadline = min(now + round(c.command_ttl_sec * 1e9),
+                       w.stamp_ns + round(c.wall_max_age_sec * 1e9),
+                       f.pose.stamp_ns + round(c.pose_max_age_sec * 1e9))
+        if not w.valid:
+            if self.wall_lost_since_ns is None:
+                self.wall_lost_since_ns = now
+            elapsed = (now - self.wall_lost_since_ns) / 1e9
+            detail = w.reason or "no wall fit"
+            if elapsed >= c.wall_recovery_sec:
+                self.halt(f"left wall lost for {elapsed:.2f}s: {detail}")
+                return None
+            self.phase = "WAIT_WALL"
+            self.reason = f"waiting for left wall ({elapsed:.2f}s): {detail}"
+            self.last_effort = Effort(now, deadline)
+            return self.last_effort
+
+        self.wall_lost_since_ns = None
+        if w.distance > c.side_on_distance_m:
+            side_output = c.side_percent
+        elif w.distance < c.side_off_distance_m:
+            side_output = -c.side_percent
+        else:
+            side_output = 0.
+        wall_in_band = c.side_off_distance_m <= w.distance <= c.side_on_distance_m
+        brush_aligned = abs(w.angle) <= c.heading_deadband_rad
+        direction = 0 if abs(w.angle) <= c.heading_correction_deadband_rad else (3 if w.angle > 0 else 4)
+        if not wall_in_band:
+            self.phase = "APPROACH_WALL"
+            self.reason = "adjusting centre-to-left-wall distance"
+        elif projection.s_m < self.edge.entry_s_m:
+            self.phase = "APPROACH_EDGE"
+            self.reason = "wall stable; approaching selected edge entry"
+        else:
+            self.phase = "CORRECT_HEADING" if direction else "FOLLOW"
+            self.reason = ("correcting heading; brush propulsion" if direction and brush_aligned else
+                           "correcting heading into brush band" if direction else
+                           "within 32--36 cm wall band; brush propulsion")
+        brush = c.brush_percent if wall_in_band and brush_aligned else 0.
+        effort = Effort(now, deadline, 0, direction, side_output, brush)
+        self.last_effort = effort
+        if brush and projection.s_m >= self.edge.clean_start_s_m:
+            self._record_coverage(projection, now)
+        else:
+            self.last_coverage_ns = None
+            self.last_contact_s = projection.contact_s_m
         return effort

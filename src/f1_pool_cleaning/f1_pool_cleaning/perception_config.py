@@ -25,12 +25,13 @@ class PerceptionConfig:
     front_valid_fraction: float = .85
     front_max_gap_rad: float = .06
     geometry_confirmed: bool = False
-    hull_length_m: float = 0.
-    hull_width_m: float = 0.
-    brush_x_m: float = 0.
-    brush_tip_y_m: float = 0.
-    brush_compression_m: float = 0.
-    brush_max_compression_m: float = 0.
+    # Confirmed enclosing boat rectangle and its single left-side brush.
+    hull_length_m: float = .50
+    hull_width_m: float = .45
+    brush_x_m: float = .10
+    brush_tip_y_m: float = .33
+    brush_compression_m: float = .01
+    brush_max_compression_m: float = .015
     rigid_margin_m: float = .03
     stopping_distance_m: float = 0.
     front_slow_distance_m: float = 0.

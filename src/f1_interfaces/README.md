@@ -7,11 +7,13 @@
 | msg | `ActuatorCommand` | 执行器指令与租约期限 |
 | msg | `ControlState` | 硬件桥控制状态 |
 | msg | `WallObservation` | 墙面与周边空间观测 |
+| msg | `EdgeTarget` | 固定地图位姿生成的目标边/左墙上下文 |
 | msg | `EffortPreview` | 旧脉冲控制预览接口；保留类型兼容，当前清洗包不发布 |
 | msg | `CleaningStatus` | 旧脉冲控制状态接口；保留类型兼容，当前清洗包不发布 |
 | srv | `AcquireControl` | 申请控制租约 |
 | srv | `ReleaseControl` | 释放控制租约 |
 | srv | `SetInitialPose` | 向泳池定位管理器提交 RViz2 使用的 `map` 坐标初始位姿 |
+| srv | `SetEdge` | 选择当前阶段 2 地图边 |
 
 Python 使用 `from f1_interfaces.msg import ActuatorCommand` 或 `from f1_interfaces.srv import AcquireControl`；依赖包在 `package.xml` 中声明 `f1_interfaces`。
 

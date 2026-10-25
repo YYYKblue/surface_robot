@@ -40,6 +40,20 @@ class Observation:
     right_turn_clear: bool = False
 
 
+@dataclass(frozen=True)
+class EdgeTargetContext:
+    """Map-derived target used to keep a left-wall identity across loss."""
+    stamp_ns: int
+    generation: int
+    edge_id: str
+    valid: bool
+    reason: str = ""
+    expected_distance: float = 0.
+    expected_angle: float = 0.
+    distance_tolerance: float = .15
+    angle_tolerance: float = .35
+
+
 def wrap(angle):
     return (angle + math.pi) % (2 * math.pi) - math.pi
 
@@ -53,6 +67,7 @@ class Perception:
         self.c = config.validate()
         self.previous = None
         self.last_stamp = 0
+        self.target = None
         # Config is frozen and ROS declares its parameters read-only. Only the
         # hull sweep is invariant; visibility and collisions use every new scan.
         self._turn_sweep = self._turn_geometry()
@@ -60,6 +75,15 @@ class Perception:
     def reset(self):
         self.previous = None
         self.last_stamp = 0
+
+    def set_target(self, target):
+        """Replace target context and invalidate an old wall association."""
+        old = getattr(self, "target", None)
+        self.target = target
+        if (old is None or target is None
+                or (old.generation, old.edge_id, old.valid)
+                != (target.generation, target.edge_id, target.valid)):
+            self.previous = None
 
     def _split_corners(self, cluster, depth=0):
         """Split connected wall corners before line fitting, preserving quality gates.
@@ -159,8 +183,12 @@ class Perception:
             clearance = min(clearance, float(corridor[:, 0].min()) - half_x)
         return bool(observed), max(0., clearance), coverage, rigid
 
-    def process(self, scan, now_ns):
+    def process(self, scan, now_ns, target=None):
         c = self.c
+        if target is not None:
+            self.set_target(target)
+        else:
+            target = getattr(self, "target", None)
         invalid = lambda reason: Observation(scan.stamp_ns, reason=reason)
         if not fresh(scan.stamp_ns, now_ns, c.scan_max_age_sec):
             return invalid("scan stale or future-dated")
@@ -197,6 +225,34 @@ class Perception:
         candidates = [f for cluster in sorted(clusters, key=len, reverse=True)[:12]
                       if (f := self._fit(cluster)) is not None]
         fitted = bool(candidates)
+        if target is not None:
+            if not target.valid:
+                return Observation(scan.stamp_ns, reason=target.reason or "edge target invalid",
+                                   front_observed=front[0], front_clearance=front[1],
+                                   front_fraction=front[2], rigid_collision=front[3])
+            if not fresh(target.stamp_ns, now_ns, c.scan_max_age_sec):
+                return Observation(scan.stamp_ns, reason="edge target stale",
+                                   front_observed=front[0], front_clearance=front[1],
+                                   front_fraction=front[2], rigid_collision=front[3])
+
+            def line_delta(a, b):
+                # A fitted line has no arrow.  Compare its orientation modulo
+                # pi while retaining the positive-left normal from _fit.
+                delta = wrap(a - b)
+                if delta > math.pi / 2:
+                    delta -= math.pi
+                elif delta < -math.pi / 2:
+                    delta += math.pi
+                return delta
+
+            candidates = [f for f in candidates
+                          if abs(f[0] - target.expected_distance) <= target.distance_tolerance
+                          and abs(line_delta(f[1], target.expected_angle)) <= target.angle_tolerance]
+            if not candidates:
+                return Observation(scan.stamp_ns,
+                                   reason=f"edge {target.edge_id} wall target mismatch",
+                                   front_observed=front[0], front_clearance=front[1],
+                                   front_fraction=front[2], rigid_collision=front[3])
         previous = self.previous
         if previous and scan.stamp_ns - previous.stamp_ns <= c.association_timeout_sec * 1e9:
             candidates = [f for f in candidates if abs(f[0] - previous.distance) <= c.association_distance_m

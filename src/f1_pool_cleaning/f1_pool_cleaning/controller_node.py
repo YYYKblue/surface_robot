@@ -12,10 +12,12 @@ from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
-from f1_interfaces.msg import ActuatorCommand, WallObservation
+from f1_interfaces.msg import ActuatorCommand, EdgeTarget, WallObservation
+from f1_interfaces.srv import SetEdge
 from f1_pool_cleaning.ros_support import stamp, stamp_ns, from_observation_message
 
 from .config import Config
+from .geometry import PoolModel
 from .mission import Mission, Feedback, Pose, Effort, command_fields
 from .lease import Lease
 
@@ -29,6 +31,7 @@ class PoolController(Node):
             self.declare_parameter(name, default, ParameterDescriptor(read_only=True))
         self.live = self.get_parameter("output_enabled").value
         self.use_map_tf = self.get_parameter("use_map_tf").value
+        self.edge_task_enabled = self._declare_readonly("edge_task_enabled", False)
         self.require_localization_ready = (self.use_map_tf and
                                             self.get_parameter("require_localization_ready").value)
         self.localization_status_max_age_sec = self.get_parameter("localization_status_max_age_sec").value
@@ -37,11 +40,25 @@ class PoolController(Node):
             self.declare_parameter(field.name, getattr(Config(), field.name), ParameterDescriptor(read_only=True))
             values[field.name] = self.get_parameter(field.name).value
         self.config = Config(**values).validate()
+        self.edge_distance_tolerance_m = self._declare_readonly(
+            "edge_target_distance_tolerance_m", .20)
+        self.edge_angle_tolerance_rad = self._declare_readonly(
+            "edge_target_angle_tolerance_rad", math.radians(35.))
+        self.boundary_order = self._declare_readonly("boundary_order", "clockwise")
+        # ROS 2 cannot infer the type of an empty array parameter.  A single
+        # zero is the typed "unset" sentinel; real configurations provide
+        # paired map x/y values and are validated below.
+        self.boundary_xy = self._declare_readonly("boundary_xy", [0.0])
+        self.default_edge_id = self._declare_readonly("default_edge_id", "")
+        self.pool = self._build_pool()
         if self.live and (self.get_parameter("use_sim_time").value or not self.config.fifth_left_sign):
             self.destroy_node()
             raise ValueError("hardware output requires system time and known fifth_left_sign")
         self.add_on_set_parameters_callback(self._validate_parameters)
         self.mission = Mission(self.config)
+        self.selected_edge = None
+        self.edge_generation = 0
+        self.edge_task_id = f"edge-task-{int(time.time() * 1000)}"
         self.wall = self.pose = None
         self.session, self.sequence = "", -1
         self.received = {}
@@ -57,6 +74,7 @@ class PoolController(Node):
         self.preview_sequence = 0
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.wall_sub = self.create_subscription(WallObservation, "/pool_cleaning/wall_observation", self._wall, qos)
+        self.edge_target_pub = self.create_publisher(EdgeTarget, "/pool_cleaning/edge_target", 2)
         if self.require_localization_ready:
             localization_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                           durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -76,10 +94,31 @@ class PoolController(Node):
             self.create_service(Trigger, "/pool_cleaning/start", self._start),
             self.create_service(Trigger, "/pool_cleaning/pause", self._pause),
             self.create_service(Trigger, "/pool_cleaning/cancel", self._cancel),
+            self.create_service(SetEdge, "/pool_cleaning/set_edge", self._set_edge),
         ]
         steady = Clock(clock_type=ClockType.STEADY_TIME)
         self.timer = self.create_timer(.02, self._tick, clock=steady)
         self.status_timer = self.create_timer(.1, self._status, clock=steady)
+
+    def _declare_readonly(self, name, default):
+        self.declare_parameter(name, default, ParameterDescriptor(read_only=True))
+        return self.get_parameter(name).value
+
+    def _build_pool(self):
+        values = list(self.boundary_xy or [])
+        if len(values) > 1:
+            if len(values) % 2 or len(values) < 6:
+                raise ValueError("boundary_xy must contain paired map x/y values")
+            points = list(zip(values[::2], values[1::2]))
+            return PoolModel.from_boundary(
+                points, boundary_order=self.boundary_order,
+                wall_target_m=self.config.wall_target_m,
+                corner_exclusion_m=self.config.corner_exclusion_m,
+                endpoint_margin_m=self.config.endpoint_margin_m,
+                frame=self.config.map_frame)
+        return PoolModel.rectangle(
+            self.config, corner_exclusion_m=self.config.corner_exclusion_m,
+            endpoint_margin_m=self.config.endpoint_margin_m)
 
     def _validate_parameters(self, parameters):
         if self.live and any(p.name == "use_sim_time" and p.value for p in parameters):
@@ -114,8 +153,72 @@ class PoolController(Node):
             return "localization not ready: " + self.localization_reason
         return ""
 
+    def _publish_edge_target(self, valid=None, reason=""):
+        """Publish the map-derived left-wall context consumed by perception."""
+        if not self.edge_task_enabled:
+            return
+        msg = EdgeTarget()
+        msg.header.frame_id = self.config.base_frame
+        msg.task_id = self.edge_task_id
+        msg.generation = self.edge_generation
+        msg.edge_id = self.selected_edge.id if self.selected_edge else ""
+        msg.valid = bool(self.selected_edge and self.pose) if valid is None else bool(valid)
+        msg.reason = reason or ("waiting for map pose" if not self.pose else "")
+        msg.distance_tolerance_m = self.edge_distance_tolerance_m
+        msg.tangent_tolerance_rad = self.edge_angle_tolerance_rad
+        if self.selected_edge and self.pose:
+            projection = self.selected_edge.project(
+                self.pose, self.config.brush_x_m, self.config.brush_tip_y_m)
+            msg.header.stamp = stamp(self.pose.stamp_ns)
+            msg.expected_distance_m = projection.lateral_distance_m
+            msg.expected_tangent_rad = projection.heading_error_rad
+        else:
+            msg.header.stamp = stamp(self.get_clock().now().nanoseconds)
+        self.edge_target_pub.publish(msg)
+
+    def _set_selected_edge(self, edge, reason="edge selected"):
+        self.selected_edge = edge
+        self.edge_generation += 1
+        if self.edge_task_enabled:
+            self.mission.configure_edge(self.pool, edge, self.edge_task_id)
+        self._publish_edge_target(reason=reason)
+
+    def _set_edge(self, request, response):
+        if self.mission.active or self.mission.phase == "ACQUIRING":
+            response.success = False
+            response.message = "cancel before changing the current edge"
+            return response
+        edge = self.pool.by_id.get(request.edge_id)
+        if edge is None:
+            response.success = False
+            response.message = f"unknown edge id: {request.edge_id}"
+            return response
+        self._set_selected_edge(edge)
+        response.success, response.message = True, f"selected {edge.id}"
+        return response
+
+    def _ensure_edge(self):
+        if self.selected_edge is not None:
+            if self.edge_task_enabled:
+                self.mission.configure_edge(self.pool, self.selected_edge, self.edge_task_id)
+            self._publish_edge_target()
+            return True, "selected edge ready"
+        edge_id = self.default_edge_id or None
+        edge, projection, reason = self.pool.select(
+            self.pose, edge_id=edge_id,
+            max_distance_m=self.config.edge_select_max_distance_m,
+            heading_tolerance_rad=self.config.edge_heading_tolerance_rad,
+            brush_x_m=self.config.brush_x_m, brush_tip_y_m=self.config.brush_tip_y_m)
+        if edge is None:
+            return False, reason
+        self._set_selected_edge(edge, reason)
+        return True, reason
+
     def _halt(self, reason, phase="PAUSED"):
         self.mission.halt(reason, phase)
+        if self.edge_task_enabled and hasattr(self, "edge_target_pub") and self.selected_edge is not None:
+            self.edge_generation += 1
+            self._publish_edge_target(valid=False, reason=reason)
         self._stop_outputs()
 
     def _invalidate(self, name, reason):
@@ -161,6 +264,8 @@ class PoolController(Node):
         self.pose = pose
         self.pose_covariance_available = covariance_available
         self.received["pose"] = time.monotonic()
+        if self.edge_task_enabled and hasattr(self, "edge_target_pub") and self.selected_edge is not None:
+            self._publish_edge_target()
 
     def _read_tf_pose(self):
         from tf2_ros import TransformException
@@ -194,6 +299,14 @@ class PoolController(Node):
         if error:
             response.success, response.message = False, error
             return response
+        if self.edge_task_enabled and self.selected_edge is None:
+            ok, reason = self._ensure_edge()
+            if not ok:
+                response.success, response.message = False, reason
+                return response
+        elif self.edge_task_enabled:
+            self.mission.configure_edge(self.pool, self.selected_edge, self.edge_task_id)
+            self._publish_edge_target()
         response.success, response.message = self.mission.start(self._feedback(), self.get_clock().now().nanoseconds)
         if response.success:
             if self.lease:
@@ -212,6 +325,9 @@ class PoolController(Node):
 
     def _cancel(self, request, response):
         self._halt("user cancelled", "CANCELLED")
+        if self.edge_task_enabled:
+            self.edge_generation += 1
+            self._publish_edge_target(valid=False, reason="task cancelled; edge association reset")
         response.success, response.message = True, "cancelled"
         return response
 
@@ -228,6 +344,13 @@ class PoolController(Node):
         self.clock_pair = now, mono
         if self.use_map_tf:
             self._read_tf_pose()
+        if self.edge_task_enabled and self.selected_edge is not None and not self.mission.active:
+            # Keep the selected map edge available while idle/paused so the
+            # perception node can refresh a valid wall association before a
+            # start retry.  _halt() already publishes one invalid generation
+            # to break the old association; repeatedly publishing invalid
+            # targets here makes a later start impossible after a lease error.
+            self._publish_edge_target(reason=self.mission.reason)
         if self.lease:
             error = self.lease.tick_error()
             if error:
@@ -278,9 +401,26 @@ class PoolController(Node):
         now = self.get_clock().now().nanoseconds
         effort = self.mission.last_effort
         valid = effort is not None and now < effort.valid_until_ns and self.mission.active
+        edge = ((self.mission.edge if self.mission.edge_active else self.selected_edge)
+                if self.edge_task_enabled else None)
+        projection = self.mission.edge_projection
+        cleaned = ([list(interval) for interval in self.mission.cleaned_intervals]
+                   if self.mission.edge_active else [])
+        uncovered = []
+        if edge and cleaned:
+            cursor = edge.clean_start_s_m
+            for low, high in self.mission.cleaned_intervals:
+                if low > cursor:
+                    uncovered.append([cursor, low])
+                cursor = max(cursor, high)
+            if cursor < edge.clean_end_s_m:
+                uncovered.append([cursor, edge.clean_end_s_m])
+        elif edge:
+            uncovered = [[edge.clean_start_s_m, edge.clean_end_s_m]]
         left_distance = (self.wall.distance if self.wall and self.wall.valid
                          and math.isfinite(self.wall.distance) and self.wall.distance > 0 else None)
         status = dict(phase=self.mission.phase,
+                      edge_task_enabled=self.edge_task_enabled,
                       left_wall_distance_cm=round(left_distance * 100, 1) if left_distance is not None else None,
                       wall_angle_deg=round(math.degrees(self.wall.angle), 2) if self.wall and self.wall.valid
                           and math.isfinite(self.wall.angle) else None,
@@ -297,9 +437,26 @@ class PoolController(Node):
                       heading_band_deg=math.degrees(self.config.heading_deadband_rad),
                       heading_correction_deadband_deg=math.degrees(self.config.heading_correction_deadband_rad),
                       wall_target_m=self.config.wall_target_m,
+                      wall_band_min_m=self.config.side_off_distance_m,
+                      wall_band_max_m=self.config.side_on_distance_m,
+                      hull_length_m=2 * self.config.hull_half_length_m,
+                      hull_width_m=2 * self.config.hull_half_width_m,
                       front_stop_m=self.config.front_stop_m,
-                      front_distance_source="map_short_wall_in_heading_direction",
-                      map_front_clearance_m=self.mission.front_remaining(f.pose) if f else None,
+                      front_distance_source=("edge_projection" if edge else
+                                             "map_short_wall_in_heading_direction"),
+                      map_front_clearance_m=(None if edge else
+                                             self.mission.front_remaining(f.pose) if f else None),
+                      current_edge_id=edge.id if edge else "",
+                      edge_count=len(self.pool.edges),
+                      edge_progress_m=None if projection is None else projection.s_m,
+                      edge_contact_progress_m=None if projection is None else projection.contact_s_m,
+                      edge_entry_m=None if edge is None else edge.entry_s_m,
+                      edge_stop_m=None if edge is None else edge.stop_s_m,
+                      edge_clean_start_m=None if edge is None else edge.clean_start_s_m,
+                      edge_clean_end_m=None if edge is None else edge.clean_end_s_m,
+                      cleaned_intervals=cleaned,
+                      uncovered_intervals=uncovered,
+                      coverage_basis=("left_brush_contact_centerline" if edge else None),
                       front_observed=bool(self.wall and self.wall.front_observed),
                       blind_front_obstacle_detection_available=False,
                       pose_source="tf" if self.use_map_tf else "map_pose",
@@ -311,7 +468,7 @@ class PoolController(Node):
                                                     time.monotonic() - self.localization_status_received),
                       localization_snapshot=self.localization_snapshot,
                       speed_feedback_available=False, stopped_verified=False,
-                      automatic_transfer_available=False, coverage_available=False)
+                      automatic_transfer_available=False, coverage_available=bool(edge))
         self.status_pub.publish(String(data=json.dumps(status, ensure_ascii=False, allow_nan=False)))
 
     def destroy_node(self):

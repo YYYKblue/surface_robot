@@ -38,7 +38,7 @@ def run_demo():
 def main():
     print("SCRIPTED PREVIEW ONLY — no ROS output or dynamics model")
     print(" -> ".join(run_demo()))
-    print("Single side; +/-10 degrees; 40 cm side target; 50 cm front stop; brush/side 30%")
+    print("Stage-2 left brush; +/-10 degrees; 34 cm target (32--36 cm band); 50 cm legacy front stop; brush/side 30%")
 
 
 if __name__ == "__main__":

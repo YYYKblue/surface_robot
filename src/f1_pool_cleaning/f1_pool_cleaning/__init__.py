@@ -1,1 +1,1 @@
-"""Pool wall perception and single-edge cleaning with optional leased output."""
+"""Pool wall perception and map-selected left-brush edge cleaning."""

@@ -7,9 +7,9 @@ from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker
 from std_srvs.srv import Trigger
-from f1_interfaces.msg import WallObservation
+from f1_interfaces.msg import EdgeTarget, WallObservation
 
-from .perception import Perception, Scan
+from .perception import EdgeTargetContext, Perception, Scan
 from .ros_support import configuration, stamp_ns, to_observation_message
 
 
@@ -22,12 +22,26 @@ class WallPerception(Node):
         self.sequence = 0
         self.pub = self.create_publisher(WallObservation, "/pool_cleaning/wall_observation", qos_profile_sensor_data)
         self.marker_pub = self.create_publisher(Marker, "/pool_cleaning/wall_marker", 2)
+        self.edge_target_sub = self.create_subscription(
+            EdgeTarget, "/pool_cleaning/edge_target", self._edge_target, 2)
         # Control needs the newest scan, not a queue of old scans when fitting
         # takes longer than the sensor period. Absolute age checks still apply.
         latest_scan = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.subscription = self.create_subscription(LaserScan, "/pavo2_scan", self._scan, latest_scan)
         self.reset_service = self.create_service(Trigger, "/pool_cleaning/reset_observation", self._reset)
         self.previous_clock = 0
+        self.edge_target = None
+
+    def _edge_target(self, message):
+        self.edge_target = EdgeTargetContext(
+            stamp_ns=stamp_ns(message.header.stamp),
+            generation=int(message.generation), edge_id=message.edge_id,
+            valid=bool(message.valid), reason=message.reason,
+            expected_distance=message.expected_distance_m,
+            expected_angle=message.expected_tangent_rad,
+            distance_tolerance=message.distance_tolerance_m,
+            angle_tolerance=message.tangent_tolerance_rad)
+        self.estimator.set_target(self.edge_target)
 
     def _reset(self, request, response):
         self.estimator.reset()
@@ -46,7 +60,10 @@ class WallPerception(Node):
         scan = Scan(stamp_ns(message.header.stamp), message.header.frame_id,
                     message.angle_min, message.angle_increment, tuple(message.ranges),
                     message.range_min, message.range_max, message.time_increment)
-        observation = self.estimator.process(scan, now)
+        if self.edge_target is None:
+            observation = self.estimator.process(scan, now)
+        else:
+            observation = self.estimator.process(scan, now, self.edge_target)
         self.sequence += 1
         output = to_observation_message(observation, self.config.base_frame, self.session_id, self.sequence)
         self.pub.publish(output)

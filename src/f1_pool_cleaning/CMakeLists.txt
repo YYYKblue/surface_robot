@@ -12,6 +12,7 @@ install(FILES README.md DEPLOY_TEST_NANO.md MEASUREMENTS.md MIGRATION.md DESTINA
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(perception test/test_perception.py)
+  ament_add_pytest_test(geometry test/test_geometry.py)
   ament_add_pytest_test(mission test/test_mission.py)
   ament_add_pytest_test(heading_feedback test/test_heading_feedback.py)
   ament_add_pytest_test(bringup test/test_bringup.py TIMEOUT 60)

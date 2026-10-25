@@ -1,6 +1,6 @@
-# Nano：简化单边沿墙测试
+# Nano：阶段 2 地图选边与左侧滚刷测试
 
-更新：2026-10-23。滚刷默认 30%，第五路推力默认 ±30%，前墙关闭输出阈值 50 cm。±10° 内开滚刷，四主电机从偏角超过 ±3° 开始纠偏，允许开刷与纠偏同时进行；第五路双向控制中心墙距 38–42 cm。雷达保持原外参，前墙距离仍由已有地图定位计算，按当前船头方向选择前方短墙。
+更新：2026-10-25。阶段 2 使用冻结地图定位和矩形边段选择。船体按长 50 cm、宽 45 cm 建模，左侧唯一滚刷的稳定中心墙距为 32–36 cm，目标 34 cm。粗略放船并在 RViz2 发布大致初始位姿后，Cartographer 稳定输出 `map → base_link`，控制器选择最近且方向匹配的边，先关闭滚刷靠墙，再调整到边入口；当前边到达安全终点后停车，不自动换边。
 
 ## 1. 同步和构建
 
@@ -79,7 +79,7 @@ bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano start
 
 没有 `LOCALIZATION_READY` 时 `/pool_cleaning/start` 会拒绝申请任务租约。定位跳变、TF/雷达过期或轨迹结束会关闭输出并进入 `PAUSED`；检查原因后调用 `cancel`，重新标定初始位姿，再次 `start`。
 
-`start` 返回后可再次运行 `status`，检查 `lease_held=true` 和实际阶段。`FOLLOW` 表示夹角已进入 ±3° 纠偏死区；`CORRECT_HEADING` 时若夹角仍在 ±10° 内，滚刷也会开启。`map_front_clearance_m` 对应当前 50 cm 停车阈值。
+`start` 返回后可再次运行 `status`，检查 `lease_held=true`、`current_edge_id` 和实际阶段。`APPROACH_WALL` 表示第五路正在把中心墙距调整到 32–36 cm；`APPROACH_EDGE` 表示墙距稳定后正在驶向当前边入口；`FOLLOW`/`CORRECT_HEADING` 是沿边清洗阶段；`EDGE_STOP` 表示已到达当前边的地图终点。阶段 2 的端点判断使用当前边投影和船体包络，旧兼容模式的 `map_front_clearance_m` 仍保留用于诊断。
 
 暂停、取消仍在终端 B 执行：
 
@@ -138,10 +138,11 @@ ros2 topic echo /pool_cleaning/status
 ros2 topic echo /pool_cleaning/command_preview
 ```
 
-人工放船与左墙平行，中心距左墙约 0.40 m，地图前缘净空大于 0.50 m，核对：
+人工将船粗略放在目标边附近，初始中心距墙可在约 0.32–0.50 m 范围，使用 RViz2 发布大致位姿，待 `LOCALIZATION_READY` 后核对：
 
+- `current_edge_id` 已选择且 `edge_target` 有效；目标墙仍为船左侧墙，不能用反向边或符号反转模拟右侧刷墙。
 - 左墙 `valid=true`，距离与夹角符合尺量；`front_observed=false` 是现有安装的预期，不修改该标记。
-- `feedback_error` 为空，地图 `map_front_clearance_m` 与实际船头到短墙距离相符。TF 不含协方差，因此 `pose_covariance_available=false` 是明确的能力限制。
+- `feedback_error` 为空，`localization_state=LOCALIZATION_READY`，地图位姿和墙线均新鲜。TF 不含协方差时，`pose_covariance_available=false` 是明确的能力限制。
 - `output_enabled=false`、`lease_held=false`，预览 token 为空。
 
 调用 `start` 后人工小幅移动/摆角观察（不连接执行器）：
@@ -152,8 +153,8 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 
 | 测试 | 预期 |
 |---|---|
-| 平行 | STOP + 刷盘 30%，主轮不发前进 |
-| d 从 0.40 增到 >0.42，再回到 0.40，再降到 <0.38 | 第五路依次关、+30%、关、-30%；38–42 cm 范围内均关闭 |
+| 已进入 32–36 cm 且夹角在 ±10° 内 | 刷盘 30%，主轮按航向误差纠偏；第五路关闭 |
+| d 从 0.34 增到 >0.36，再回到 0.34，再降到 <0.32 | 第五路依次关、+30%、关、-30%；32–36 cm 范围内均关闭 |
 | 夹角超过 +10° / -10° | 刷盘关；四个主电机 LEFT / RIGHT 25%、BOTH 持续纠偏，没有脉冲/中位等待 |
 | 误差在 3° 到 10° 之间 | 继续 LEFT / RIGHT 纠偏，同时开启刷盘 30% |
 | 误差恢复到 ±3° 内，包括等号 | 主轮 STOP，刷盘保持 30% |
@@ -162,7 +163,7 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 | 新鲜扫描暂时未拟合到左墙 | `WAIT_WALL`、全部输出关闭，最多等待 1.5 秒；恢复后自动继续纠偏/刷洗 |
 | 丢墙超过 1.5 秒 | `PAUSED`，`reason` 包含感知原因，需 cancel/start |
 | 可见左墙被遮挡，仅剩后方短墙 | 在恢复窗口内保持墙关联约束，禁止将短墙重标为左墙继续纠偏 |
-| 地图前缘净空达到 ≤0.50 m | STOPPED、主轮/刷盘/第五路全部关闭；不出现第二边任务 |
+| 当前边投影达到 `edge_stop_m` | `EDGE_STOP`、主轮/刷盘/第五路全部关闭；不出现第二边任务 |
 | 停止雷达或定位 | PAUSED；反馈恢复不自动续跑 |
 | 地图位姿更新或跳变 | 接受更新，重新计算前墙距离；不做额外地图墙身份验证 |
 
@@ -216,4 +217,4 @@ ros2 bag record -o single_side_trial \
   /pool_cleaning/status /pool_cleaning/command_preview /f1/control_state
 ```
 
-记录实际墙距、夹角、30% 刷盘是否能推进、第五路双向纠偏是否振荡、纠偏次数、停车触发位置和最终滑行距离。刷尖原几何距中心 0.33 m，因此中心墙距 0.40 m 不保证刷毛接触；本版不自动向接触压缩目标推进。
+记录选中的边、实际墙距、夹角、靠墙和入口调整时间、30% 刷盘是否能推进、第五路双向纠偏是否振荡、纠偏次数、`EDGE_STOP` 触发位置和最终滑行距离。刷尖约距中心 0.33 m，34 cm 作为名义中心值；实际接触压缩仍需实船测量。

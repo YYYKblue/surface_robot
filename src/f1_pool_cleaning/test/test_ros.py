@@ -14,6 +14,7 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from f1_interfaces.msg import ActuatorCommand, WallObservation
+from f1_interfaces.srv import SetEdge
 from f1_pool_cleaning.ros_support import stamp, to_observation_message
 from f1_pool_cleaning.controller_node import PoolController
 from f1_pool_cleaning.demo import sample
@@ -46,7 +47,7 @@ class Harness:
         self.sequence, self.session, self.enabled = 0, "test-perception", True
         self.pose_offset = 0.
         self.wall_valid = True
-        self.along, self.distance, self.angle = .8, .4, 0.
+        self.along, self.distance, self.angle = .8, .34, 0.
         self.timer = self.peer.create_timer(.02, self.publish)
 
     def messages(self):
@@ -106,9 +107,9 @@ def test_real_ros_brush_preview_and_stream_watchdog(harness):
     h.wait(lambda: any(m.brush_enabled for m in h.commands))
     assert all(not m.token and m.direction == 0 and not m.thrust_enabled for m in h.commands)
     h.wait(lambda: bool(h.statuses))
-    h.wait(lambda: any(s["left_wall_distance_cm"] == 40. for s in h.statuses))
-    distance_status = next(s for s in h.statuses if s["left_wall_distance_cm"] == 40.)
-    assert distance_status["wall_distance_m"] == pytest.approx(.4)
+    h.wait(lambda: any(s["left_wall_distance_cm"] == 34. for s in h.statuses))
+    distance_status = next(s for s in h.statuses if s["left_wall_distance_cm"] == 34.)
+    assert distance_status["wall_distance_m"] == pytest.approx(.34)
     assert all(not s["output_enabled"] and not s["lease_held"] for s in h.statuses)
     publishers = h.peer.get_publisher_names_and_types_by_node("pool_controller", "/")
     assert not any(name == "/f1/actuator_command" for name, _ in publishers)
@@ -127,6 +128,39 @@ def test_perception_restart_latches_pause(harness):
     h.session = "restarted-perception"
     h.wait(lambda: h.controller.mission.phase == "PAUSED")
     assert "perception restarted" in h.controller.mission.reason
+
+
+def test_stage2_uses_map_pose_to_select_edge_and_enter_wall_band():
+    h = Harness([Parameter("edge_task_enabled", value=True)])
+    try:
+        h.distance = .34
+        h.start()
+        h.wait(lambda: any(m.brush_enabled for m in h.commands))
+        assert h.controller.selected_edge.id == "edge_0"
+        assert h.controller.mission.phase == "FOLLOW"
+        h.wait(lambda: any(s.get("current_edge_id") == "edge_0" and
+                           s.get("edge_progress_m") is not None and
+                           s.get("coverage_basis") == "left_brush_contact_centerline"
+                           for s in h.statuses))
+        h.distance = .31
+        h.wait(lambda: h.controller.mission.phase == "APPROACH_WALL"
+               and h.commands[-1].thrust_percent == -30.)
+    finally:
+        h.close()
+
+
+def test_stage2_set_edge_is_explicit_and_wrong_pose_cannot_start():
+    h = Harness([Parameter("edge_task_enabled", value=True)])
+    try:
+        h.wait(lambda: h.controller._feedback() is not None)
+        response = h.controller._set_edge(SetEdge.Request(edge_id="edge_1"), SetEdge.Response())
+        assert response.success and h.controller.selected_edge.id == "edge_1"
+        start = h.controller._start(None, Trigger.Response())
+        assert not start.success
+        assert "selected edge" in start.message or "heading" in start.message
+        assert not h.controller.mission.active
+    finally:
+        h.close()
 
 
 def test_map_jump_is_accepted_without_extra_startup_or_identity_gates(harness):
@@ -163,7 +197,7 @@ def test_ros_ten_degree_gate_and_continuous_correction_without_turn_clearance(ha
     assert all(m.direction_until.sec == 0 and m.direction_until.nanosec == 0 for m in commands)
     assert h.controller.mission.active
     # The next scan restores brush propulsion and reverses side correction.
-    h.angle, h.distance = 0., .37
+    h.angle, h.distance = 0., .31
     h.wait(lambda: h.commands[-1].direction == 0 and h.commands[-1].brush_enabled
            and h.commands[-1].thrust_percent == -30.)
 
@@ -287,7 +321,7 @@ class FakeBridge:
 def test_live_lease_continuous_yaw_and_signed_fifth_output():
     h = Harness([Parameter("output_enabled", value=True)])
     b = FakeBridge(h)
-    h.angle, h.distance = math.radians(12), .37
+    h.angle, h.distance = math.radians(12), .31
     try:
         h.wait(lambda: h.controller.lease.bridge is not None and h.controller.lease.acquire.service_is_ready())
         h.start()
@@ -298,7 +332,7 @@ def test_live_lease_continuous_yaw_and_signed_fifth_output():
                    for m in b.commands[-10:])
         h.angle, h.distance = math.radians(-12), .5
         h.wait(lambda: b.commands[-1].direction == 4 and b.commands[-1].thrust_percent == 30.)
-        h.angle, h.distance = math.radians(10), .4
+        h.angle, h.distance = math.radians(10), .34
         h.wait(lambda: b.commands[-1].brush_enabled and b.commands[-1].direction == 3
                and not b.commands[-1].thrust_enabled)
         h.controller._cancel(None, Trigger.Response())

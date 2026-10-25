@@ -45,8 +45,8 @@ def test_default_parallel_brush_propulsion_keeps_main_motors_neutral():
 def test_side_distance_correction_is_bidirectional_and_has_no_history():
     m = started()
     for i, (distance, expected) in enumerate([
-        (.42, 0), (.421, 30), (.42, 0), (.40, 0), (.38, 0),
-        (.379, -30), (.38, 0), (.40, 0), (.42, 0), (.421, 30)]):
+        (.36, 0), (.361, 30), (.36, 0), (.34, 0), (.32, 0),
+        (.319, -30), (.32, 0), (.34, 0), (.36, 0), (.361, 30)]):
         e = update(m, i * .05, distance=distance)
         assert e.side_left_percent == expected
         fields = command_fields(e, m.c)
@@ -223,7 +223,7 @@ def test_map_wall_identity_and_second_quality_gate_removed():
 
 @pytest.mark.parametrize("changes", [dict(fifth_left_sign=2), dict(wall_target_m=.32),
     dict(length_m=.5), dict(command_ttl_sec=.2), dict(side_percent=31.), dict(width_m=math.nan),
-    dict(side_on_distance_m=.38), dict(brush_percent=101.), dict(turn_speed_percent=50),
+    dict(side_on_distance_m=.34), dict(brush_percent=101.), dict(turn_speed_percent=50),
     dict(heading_deadband_rad=math.pi), dict(heading_correction_deadband_rad=math.radians(11)),
     dict(run_timeout_sec=-1.), dict(wall_recovery_sec=0.)])
 def test_invalid_configuration_rejected(changes):

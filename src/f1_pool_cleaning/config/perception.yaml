@@ -6,8 +6,9 @@ pool_perception:
     lidar_y_m: 0.0
     lidar_yaw_rad: 3.141592653589793
     geometry_confirmed: true
-    hull_length_m: 0.56
-    hull_width_m: 0.56
+    # Confirmed enclosing boat rectangle: 50 cm long by 45 cm wide.
+    hull_length_m: 0.50
+    hull_width_m: 0.45
     brush_x_m: 0.10
     brush_tip_y_m: 0.33
     brush_compression_m: 0.01
