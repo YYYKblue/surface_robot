@@ -148,10 +148,10 @@ class Mission:
         projection = self.edge.project(f.pose, self.c.brush_x_m, self.c.brush_tip_y_m)
         if projection.distance_to_segment_m > self.c.edge_select_max_distance_m:
             return False, "localized pose is too far from the selected edge"
+        if projection.left_offset_m <= 0.:
+            return False, "selected edge is not on the robot's left side"
         if projection.lateral_distance_m <= 0.:
             return False, "localized pose is outside the selected edge; wall would be on the right"
-        if abs(projection.heading_error_rad) > self.c.edge_heading_tolerance_rad:
-            return False, "boat heading does not match the selected edge direction"
         if projection.s_m > self.edge.stop_s_m:
             return False, "localized pose is past the selected edge stop point"
         self.halt("edge selected; adjusting wall distance", "APPROACH_WALL")
@@ -277,9 +277,6 @@ class Mission:
             return None
         if projection.lateral_distance_m <= 0.:
             self.halt("localized pose is outside the selected edge; wall would be on the right")
-            return None
-        if abs(projection.heading_error_rad) > self.c.edge_heading_tolerance_rad:
-            self.halt("boat heading left the selected edge direction")
             return None
         self.edge_projection = projection
         self.last_edge_s = projection.s_m

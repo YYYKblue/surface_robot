@@ -25,6 +25,10 @@ class PoseProjection:
     heading_error_rad: float
     distance_to_segment_m: float
     contact_s_m: float
+    # Offset of the nearest point on the map edge in the robot frame.
+    # Positive left_offset_m means the edge is on base_link +y.
+    left_offset_m: float = 0.
+    forward_offset_m: float = 0.
 
 
 @dataclass(frozen=True)
@@ -60,10 +64,14 @@ class EdgeSegment:
         distance = math.hypot(px - cx, py - cy)
         yaw = getattr(pose, "yaw", self.yaw_rad)
         c, sn = math.cos(yaw), math.sin(yaw)
+        edge_dx, edge_dy = cx - px, cy - py
+        left_offset = -sn * edge_dx + c * edge_dy
+        forward_offset = c * edge_dx + sn * edge_dy
         brush_x = px + c * brush_x_m - sn * brush_tip_y_m
         brush_y = py + sn * brush_x_m + c * brush_tip_y_m
         contact_s = (brush_x - self.start[0]) * tx + (brush_y - self.start[1]) * ty
-        return PoseProjection(s, lateral, wrap(self.yaw_rad - yaw), distance, contact_s)
+        return PoseProjection(s, lateral, wrap(self.yaw_rad - yaw), distance, contact_s,
+                              left_offset, forward_offset)
 
 
 class PoolModel:
@@ -170,8 +178,9 @@ class PoolModel:
                edge_id=None, brush_x_m=.10, brush_tip_y_m=.33):
         """Select the nearest feasible edge, or a requested edge.
 
-        A requested edge is still checked for distance and heading.  Near a
-        corner, a tie is deliberately rejected instead of guessed.
+        A requested edge is still checked for distance and left-side location.
+        Heading is corrected after the left edge is selected; it is not a
+        prerequisite for finding the nearest wall on base_link +y.
         """
         candidates = []
         diagnostics = []
@@ -181,20 +190,21 @@ class PoolModel:
             projection = edge.project(pose, brush_x_m, brush_tip_y_m)
             diagnostics.append(
                 f"{edge.id}: distance={projection.distance_to_segment_m:.2f}m, "
+                f"left={projection.left_offset_m:.2f}m, "
                 f"lateral={projection.lateral_distance_m:.2f}m, "
                 f"heading={math.degrees(projection.heading_error_rad):.1f}deg")
             if projection.distance_to_segment_m > max_distance_m:
+                continue
+            if projection.left_offset_m <= 0.:
                 continue
             # Canonical clockwise edges have the pool interior on the right.
             # A pose outside the boundary would put this wall on the boat's
             # right, which is unsupported by the single left-side brush.
             if projection.lateral_distance_m <= 0.:
                 continue
-            if abs(projection.heading_error_rad) > heading_tolerance_rad:
-                continue
             candidates.append((projection.distance_to_segment_m, edge, projection))
         if not candidates:
-            return None, None, ("no edge matches localized position and heading; "
+            return None, None, ("no edge matches the robot's left side; "
                                 + "; ".join(diagnostics))
         candidates.sort(key=lambda item: item[0])
         if not edge_id and len(candidates) > 1:

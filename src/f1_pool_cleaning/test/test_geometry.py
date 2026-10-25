@@ -36,6 +36,17 @@ def test_pose_selects_nearest_edge_and_projects_left_wall_distance():
     assert projection.heading_error_rad == pytest.approx(0.)
 
 
+def test_left_edge_selection_does_not_require_heading_alignment_before_approach():
+    c = Config().validate()
+    pool = PoolModel.rectangle(c)
+    pose = Pose(NOW, *c.map_xy(.8, c.width_m - .34), c.axis_yaw_rad + math.radians(30.))
+    edge, projection, reason = pool.select(pose)
+    assert reason == "edge selected"
+    assert edge.id == "edge_0"
+    assert projection.left_offset_m > 0.
+    assert abs(math.degrees(projection.heading_error_rad)) == pytest.approx(30.)
+
+
 def test_outside_pose_cannot_select_a_right_wall_as_a_left_edge():
     c = Config().validate()
     pool = PoolModel.rectangle(c)

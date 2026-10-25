@@ -43,7 +43,7 @@ class PoolController(Node):
         self.edge_distance_tolerance_m = self._declare_readonly(
             "edge_target_distance_tolerance_m", .20)
         self.edge_angle_tolerance_rad = self._declare_readonly(
-            "edge_target_angle_tolerance_rad", math.radians(35.))
+            "edge_target_angle_tolerance_rad", math.radians(70.))
         self.boundary_order = self._declare_readonly("boundary_order", "clockwise")
         # ROS 2 cannot infer the type of an empty array parameter.  A single
         # zero is the typed "unset" sentinel; real configurations provide
