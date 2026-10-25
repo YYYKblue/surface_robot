@@ -442,10 +442,12 @@ class PoolController(Node):
                       hull_length_m=2 * self.config.hull_half_length_m,
                       hull_width_m=2 * self.config.hull_half_width_m,
                       front_stop_m=self.config.front_stop_m,
-                      front_distance_source=("edge_projection" if edge else
-                                             "map_short_wall_in_heading_direction"),
-                      map_front_clearance_m=(None if edge else
-                                             self.mission.front_remaining(f.pose) if f else None),
+                      front_distance_source=("edge_endpoint_center_distance" if edge else
+                                             "map_short_wall_center_distance"),
+                      map_front_clearance_m=(
+                          None if not f else
+                          (edge.length_m - projection.s_m if edge and projection else
+                           self.mission.front_remaining(f.pose))),
                       current_edge_id=edge.id if edge else "",
                       edge_count=len(self.pool.edges),
                       edge_progress_m=None if projection is None else projection.s_m,

@@ -214,7 +214,7 @@ def test_ros_map_endpoint_closes_all_outputs(harness):
     h.start()
     h.wait(lambda: any(m.thrust_enabled and m.brush_enabled for m in h.commands))
     c = h.controller.config
-    endpoint = c.length_m - c.hull_half_length_m - c.front_stop_m
+    endpoint = c.length_m - c.front_stop_m
     # Feed a sequence of updated positions until the front threshold is reached.
     while h.along < endpoint:
         h.along = min(endpoint + .001, h.along + .15)

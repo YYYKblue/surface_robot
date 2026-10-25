@@ -20,7 +20,7 @@ def run_demo():
     mission = Mission(c)
     assert mission.start(sample(c, now), now)[0]
     history = [mission.phase]
-    for i in range(80):
+    for i in range(110):
         now += 50_000_000
         # Script feedback independently of commands; no assumed propulsion model.
         angle = math.radians(12) if 5 <= i < 18 else 0.

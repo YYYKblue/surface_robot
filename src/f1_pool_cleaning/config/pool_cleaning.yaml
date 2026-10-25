@@ -28,7 +28,8 @@ pool_controller:
     brush_x_m: 0.10
     brush_tip_y_m: 0.33
     brush_compression_m: 0.01
-    edge_select_max_distance_m: 0.75
+    # Allow rough placement up to 85 cm from the selected left-side wall.
+    edge_select_max_distance_m: 0.85
     # Initial wall association may be up to 70 degrees off; heading is
     # corrected before the brush gate opens.
     edge_heading_tolerance_rad: 1.2217304763960306

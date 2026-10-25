@@ -108,10 +108,10 @@ def test_old_wall_distance_envelope_does_not_block_brush(distance, side):
 def test_map_stopping_with_blind_bow_and_no_local_velocity():
     m = started()
     assert update(m).brush_percent == 30  # front_observed=False is intentional.
-    old_stop_zone = m.c.length_m - m.c.hull_half_length_m - .70
+    old_stop_zone = m.c.length_m - .70
     assert update(m, .03, along=old_stop_zone).brush_percent == 30
-    assert m.phase == "FOLLOW"  # 70 cm no longer triggers the old 80 cm stop.
-    x = m.c.length_m - m.c.hull_half_length_m - m.c.front_stop_m
+    assert m.phase == "FOLLOW"  # 70 cm centre distance is outside the stop zone.
+    x = m.c.length_m - m.c.front_stop_m
     assert update(m, .05, along=x - .001).brush_percent == 30
     e = update(m, .10, along=x + 1e-9)
     assert m.phase == "STOPPED"
@@ -124,7 +124,7 @@ def test_map_bow_clearance_accounts_for_heading_and_stops_on_pose_only():
     m = started()
     update(m)
     now = NOW + 50_000_000
-    x = m.c.length_m - m.c.hull_half_length_m - m.c.front_stop_m - .01
+    x = m.c.length_m - m.c.front_stop_m + .01
     f = sample(m.c, now, along=x, angle=.1)
     assert m.front_remaining(f.pose) < m.c.front_stop_m
     f = replace(f, wall=replace(f.wall, stamp_ns=NOW))
@@ -132,8 +132,8 @@ def test_map_bow_clearance_accounts_for_heading_and_stops_on_pose_only():
     assert m.phase == "STOPPED"
 
 
-@pytest.mark.parametrize("clearance,stopped", [(0., True), (.499, True), (.5, True),
-                                              (.501, False), (.7, False), (.8, False)])
+@pytest.mark.parametrize("clearance,stopped", [(0., True), (.249, True), (.25, True),
+                                              (.251, False), (.5, False), (.8, False)])
 def test_available_front_observation_uses_fifty_cm_stop_threshold(clearance, stopped):
     m = started()
     f = sample(m.c, NOW, front_observed=True)
@@ -162,14 +162,14 @@ def test_negative_map_direction_stops_at_short_wall_ahead():
     f = sample(m.c, NOW, along=1.5)
     f = replace(f, pose=replace(f.pose, yaw=m.c.axis_yaw_rad + math.pi))
     assert m.start(f, NOW)[0]
-    x, y = m.c.map_xy(m.c.hull_half_length_m + m.c.front_stop_m - 1e-9, .5)
+    x, y = m.c.map_xy(m.c.front_stop_m - 1e-9, .5)
     f = replace(f, pose=replace(f.pose, x=x, y=y))
     assert m.update(f, NOW).brush_percent == 0 and m.phase == "STOPPED"
 
 
 def test_start_inside_front_stop_zone_never_enables_outputs():
     m = Mission()
-    x = m.c.length_m - m.c.hull_half_length_m - m.c.front_stop_m
+    x = m.c.length_m - m.c.front_stop_m
     assert not m.start(sample(m.c, NOW, along=x + 1e-9), NOW)[0]
     assert m.phase == "IDLE" and m.last_effort is None
 
@@ -320,7 +320,7 @@ def test_front_endpoint_still_stops_while_waiting_for_wall_on_pose_only():
     m = started()
     m.update(lost_wall(m, NOW), NOW)
     now = NOW + 50_000_000
-    x = m.c.length_m - m.c.hull_half_length_m - m.c.front_stop_m + 1e-9
+    x = m.c.length_m - m.c.front_stop_m + 1e-9
     f = lost_wall(m, now, along=x)
     f = replace(f, wall=replace(f.wall, stamp_ns=NOW))
     e = m.update(f, now)

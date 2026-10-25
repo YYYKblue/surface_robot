@@ -79,7 +79,7 @@ bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano start
 
 没有 `LOCALIZATION_READY` 时 `/pool_cleaning/start` 会拒绝申请任务租约。定位跳变、TF/雷达过期或轨迹结束会关闭输出并进入 `PAUSED`；检查原因后调用 `cancel`，重新标定初始位姿，再次 `start`。
 
-`start` 返回后可再次运行 `status`，检查 `lease_held=true`、`current_edge_id` 和实际阶段。`APPROACH_WALL` 表示第五路正在把中心墙距调整到 32–36 cm；`APPROACH_EDGE` 表示墙距稳定后正在驶向当前边入口；`FOLLOW`/`CORRECT_HEADING` 是沿边清洗阶段；`EDGE_STOP` 表示已到达当前边的地图终点。阶段 2 的端点判断使用当前边投影和船体包络，旧兼容模式的 `map_front_clearance_m` 仍保留用于诊断。
+`start` 返回后可再次运行 `status`，检查 `lease_held=true`、`current_edge_id` 和实际阶段。`APPROACH_WALL` 表示第五路正在把中心墙距调整到 32–36 cm；`APPROACH_EDGE` 表示墙距稳定后正在驶向当前边入口；`FOLLOW`/`CORRECT_HEADING` 是沿边清洗阶段；`EDGE_STOP` 表示船中心到当前边前方墙约 0.50 m，已关闭输出。阶段 2 的端点判断使用当前边投影的船中心沿程距离；`map_front_clearance_m` 表示兼容模式的船中心到前墙距离。
 
 暂停、取消仍在终端 B 执行：
 
@@ -177,7 +177,7 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 
 ## 5. 单边实机测试
 
-预览核对后，退出预览控制器，保持定位与感知来源一致。地图无法发现盲区新增障碍；本轮需要人工观察前方并保留遥控接管。0.50 m 只是关闭输出阈值，需记录之后的惯性滑行。
+预览核对后，退出预览控制器，保持定位与感知来源一致。地图无法发现盲区新增障碍；本轮需要人工观察前方并保留遥控接管。0.50 m 是船中心到前方墙的关闭输出阈值，需记录之后的惯性滑行。
 
 单独终端启动唯一 bridge（串口路径按已有 bridge 配置；direction_confirmed 表示主轮 LEFT/RIGHT 硬件映射已经核对）：
 

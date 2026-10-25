@@ -21,7 +21,9 @@ pool_perception:
     association_timeout_sec: 2.0
     # Blind bow leaves a short visible left-wall segment while yawing inward.
     min_support_m: 0.30
-    stopping_distance_m: 0.50
+    # Laser front clearance is measured from the 25 cm hull front envelope;
+    # 25 cm clearance corresponds to the controller's 50 cm centre distance.
+    stopping_distance_m: 0.25
     front_slow_distance_m: 1.0
     # Controller uses wall distance/angle and map endpoint distance only.
     # Hull and turn-sweep flags remain diagnostic; they do not gate this task.

@@ -197,6 +197,12 @@ class PoolModel:
                 continue
             if projection.left_offset_m <= 0.:
                 continue
+            # A wall can be found before exact alignment, but a nearly
+            # perpendicular front/back edge is not a usable left-side brush
+            # edge.  The broad gate leaves room for the heading correction
+            # phase while rejecting the adjacent corner edge.
+            if abs(projection.heading_error_rad) > heading_tolerance_rad:
+                continue
             # Canonical clockwise edges have the pool interior on the right.
             # A pose outside the boundary would put this wall on the boat's
             # right, which is unsupported by the single left-side brush.

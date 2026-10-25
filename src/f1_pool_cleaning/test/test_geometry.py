@@ -72,11 +72,27 @@ def test_edge_mission_uses_new_wall_band_and_stops_at_edge_endpoint():
     assert mission.phase == "APPROACH_WALL"
     assert effort.side_left_percent == -c.side_percent and effort.brush_percent == 0.
 
+    before_stop = NOW + 75_000_000
+    effort = mission.update(sample(c, before_stop,
+                                   along=pool.edges[0].length_m - c.front_stop_m - .01,
+                                   distance=.34), before_stop)
+    assert mission.phase == "FOLLOW"
+    assert effort.brush_percent == c.brush_percent
+
     stop_now = NOW + 100_000_000
-    effort = mission.update(sample(c, stop_now, along=pool.edges[0].stop_s_m + .01,
+    effort = mission.update(sample(c, stop_now,
+                                   along=pool.edges[0].length_m - c.front_stop_m + .01,
                                    distance=.34), stop_now)
     assert mission.phase == "EDGE_STOP"
     assert effort.direction == 0 and effort.brush_percent == 0 and effort.side_left_percent == 0
+
+
+def test_front_stop_distance_is_measured_from_boat_centre():
+    c = Config().validate()
+    mission = Mission(c)
+    front_wall_x = c.length_m
+    pose = Pose(NOW, *c.map_xy(front_wall_x - c.front_stop_m, .5), c.axis_yaw_rad)
+    assert mission.front_remaining(pose) == pytest.approx(c.front_stop_m)
 
 
 def test_edge_coverage_is_left_brush_contact_centerline_only():

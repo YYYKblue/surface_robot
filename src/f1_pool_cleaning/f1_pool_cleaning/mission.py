@@ -95,12 +95,11 @@ class Mission:
     def front_remaining(self, pose):
         x, _ = self.c.pool_xy(pose.x, pose.y)
         yaw = wrap(pose.yaw - self.c.axis_yaw_rad)
-        # Use the short wall ahead of the boat, for either long-wall direction.
-        # A consistent 180-degree map relocalization therefore gives the same
-        # clearance without a manually rotated "current side" configuration.
-        extent = self.c.hull_half_length_m * abs(math.cos(yaw)) + self.c.hull_half_width_m * abs(math.sin(yaw))
+        # Measure the stop distance from the boat centre. The stage-2
+        # requirement is centre-to-front-wall distance, rather than clearance
+        # from the hull's front envelope.
         centre_distance = self.c.length_m - x if math.cos(yaw) >= 0 else x
-        return centre_distance - extent
+        return centre_distance
 
     def error(self, f, now, allow_invalid_wall=False):
         c = self.c
@@ -152,8 +151,8 @@ class Mission:
             return False, "selected edge is not on the robot's left side"
         if projection.lateral_distance_m <= 0.:
             return False, "localized pose is outside the selected edge; wall would be on the right"
-        if projection.s_m > self.edge.stop_s_m:
-            return False, "localized pose is past the selected edge stop point"
+        if self.edge.length_m - projection.s_m < self.c.front_stop_m:
+            return False, "localized pose is already inside the front-wall stopping zone"
         self.halt("edge selected; adjusting wall distance", "APPROACH_WALL")
         self.started_ns = self.last_update_ns = now
         self.last_scan = -1
@@ -165,9 +164,11 @@ class Mission:
         return True, f"edge {self.edge.id} started"
 
     def _visible_front_stop(self, w):
-        # Available positive evidence remains useful even in map endpoint mode.
+        # Perception reports clearance from the hull front envelope. Convert it
+        # to the same centre-to-front-wall distance used by the map stop.
         return (w.front_observed and math.isfinite(w.front_fraction) and w.front_fraction >= .85
-                and math.isfinite(w.front_clearance) and w.front_clearance <= self.c.front_stop_m)
+                and math.isfinite(w.front_clearance)
+                and w.front_clearance + self.c.hull_half_length_m <= self.c.front_stop_m)
 
     def update(self, f, now):
         if not self.active:
@@ -282,8 +283,9 @@ class Mission:
         self.last_edge_s = projection.s_m
         self.last_update_ns = now
 
-        if projection.s_m >= self.edge.stop_s_m:
-            self.halt("edge stop point reached; outputs off", "EDGE_STOP")
+        front_center_distance = self.edge.length_m - projection.s_m
+        if front_center_distance <= self.c.front_stop_m:
+            self.halt("front wall centre distance reached; outputs off", "EDGE_STOP")
             self.last_effort = Effort(now, now + round(self.c.command_ttl_sec * 1e9))
             return self.last_effort
 

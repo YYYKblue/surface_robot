@@ -19,6 +19,7 @@ class Config:
     wall_target_m: float = .34
     side_on_distance_m: float = .36
     side_off_distance_m: float = .32
+    # Stop when the boat centre is about 50 cm from the front wall.
     front_stop_m: float = .50
     heading_deadband_rad: float = math.radians(10.)
     heading_correction_deadband_rad: float = math.radians(3.)
@@ -40,8 +41,9 @@ class Config:
     brush_tip_y_m: float = .33
     brush_compression_m: float = .01
     # Stage-2 map-edge approach limits.
-    edge_select_max_distance_m: float = .75
-    edge_heading_tolerance_rad: float = math.radians(35.)
+    edge_select_max_distance_m: float = .85
+    # Broad initial association gate; precise heading is corrected before brush-on.
+    edge_heading_tolerance_rad: float = math.radians(70.)
     edge_approach_timeout_sec: float = 12.
     edge_progress_jump_m: float = .35
     corner_exclusion_m: float = .30
