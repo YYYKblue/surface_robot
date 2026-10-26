@@ -36,9 +36,6 @@ pool_controller:
     edge_progress_jump_m: 0.35
     corner_exclusion_m: 0.30
     endpoint_margin_m: 0.30
-    # Start the corner transfer early enough for the full hull envelope when
-    # the boat reaches the next wall with a residual heading error.
-    transfer_boundary_margin_m: 0.05
     # Map-frame boundary in the canonical clockwise route.  The four edges
     # therefore all keep the single brush on the boat's left.
     boundary_order: clockwise

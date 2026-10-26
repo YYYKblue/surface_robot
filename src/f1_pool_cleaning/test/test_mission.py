@@ -210,7 +210,7 @@ def test_rectangle_transfer_stops_at_thirty_cm_and_combines_reverse_right_push()
     assert effort.brush_percent == c.brush_percent
 
 
-def test_rectangle_transfer_stops_early_for_heading_error_at_next_wall():
+def test_transfer_does_not_pause_on_static_boundary_clearance():
     c = Config().validate()
     pool = PoolModel.rectangle(c)
     m = Mission(c)
@@ -218,16 +218,22 @@ def test_rectangle_transfer_stops_early_for_heading_error_at_next_wall():
     now = NOW
     assert m.start(sample(c, now, along=.8, angle=math.radians(40)), now)[0]
 
-    # At 40 degrees, a 30 cm centre threshold is too late for the hull
-    # envelope.  The corner-envelope trigger must stop before that threshold.
     now += 100_000_000
-    endpoint = sample(c, now, along=pool.edges[0].length_m - .35,
+    endpoint = sample(c, now, along=pool.edges[0].length_m - c.front_stop_m + .01,
                       angle=math.radians(40))
-    effort = m.update(endpoint, now)
+    # This pose is intentionally outside the old static envelope check.  The
+    # transfer sequence still proceeds so the vehicle can push inward first.
+    assert m.pool.pose_boundary_clearance(
+        endpoint.pose, c.hull_half_length_m, c.hull_half_width_m,
+        c.brush_x_m, c.brush_tip_y_m) < 0.
+    assert m.update(endpoint, now).direction == 0
     assert m.phase == "EDGE_STOP"
-    assert m.completed_edges == ["edge_0"]
-    assert "corner envelope clearance" in m.reason
-    assert effort.direction == 0 and effort.brush_percent == 0
+
+    now += 100_000_000
+    endpoint = replace(endpoint, pose=replace(endpoint.pose, stamp_ns=now),
+                       wall=replace(endpoint.wall, stamp_ns=now))
+    assert m.update(endpoint, now).direction == 0
+    assert m.phase == "MOVE_INWARD"
 
 
 def test_rectangle_transfer_turn_timeout_pauses_without_auto_resume():
