@@ -28,7 +28,7 @@
 
 换边阶段保留转移数据新鲜度、通信超时、执行器命令期限、遥控接管和取消/暂停关闭输出；转角使用连续地图航向反馈，不用固定时间代替 90°完成判断。地图边身份与左墙目标关联由 `EdgeTarget` 恢复，防止换边后误认相邻墙。
 
-默认无固定运行时长上限。启动门控在 `LOCALIZATION_CHECK` 中完成定位检查和地图选边，直边状态序列为 `APPROACH_WALL → APPROACH_EDGE → FOLLOW ↔ CORRECT_HEADING/WAIT_WALL → EDGE_STOP`，换边状态序列为 `VERIFY_STOP → MOVE_INWARD → VERIFY_STOP → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`；临时丢墙为 `WAIT_WALL`。`wall_recovery_sec` 默认 1.5 秒；持续丢墙、反馈过期、定位退化或通信异常进入 `PAUSED`。手动暂停、取消和过期数据不会因反馈恢复而自动续跑；暂停后必须 `cancel` 再 `start`。
+默认无固定运行时长上限。启动门控在 `LOCALIZATION_CHECK` 中完成定位检查和地图选边，直边状态序列为 `APPROACH_WALL → APPROACH_EDGE → FOLLOW ↔ CORRECT_HEADING/WAIT_WALL → EDGE_STOP`，换边状态序列为 `EDGE_STOP → MOVE_INWARD → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`；端点和后退右推之间各保留一个停止指令周期，不等待物理停稳。临时丢墙为 `WAIT_WALL`。`wall_recovery_sec` 默认 1.5 秒；持续丢墙、反馈过期、定位退化或通信异常进入 `PAUSED`。手动暂停、取消和过期数据不会因反馈恢复而自动续跑；暂停后必须 `cancel` 再 `start`。
 
 任务启动时，操作者只需将船粗略放在 `edge_0` 附近并在 RViz2 发布大致初始位姿。当前配置将 `default_edge_id` 固定为 `edge_0`；控制器仍会检查位姿距离、左侧关系和边走廊，靠墙阶段关闭滚刷并使用第五路调整到 32–36 cm，同时纠正航向，航向稳定后再用滚刷沿边推进到入口。位姿不在 `edge_0` 可用范围、墙位于右侧或目标墙不匹配时拒绝启动。每条边到达 30 cm 端点后自动换到下一条边，第四条边完成后进入 `COMPLETE`。
 

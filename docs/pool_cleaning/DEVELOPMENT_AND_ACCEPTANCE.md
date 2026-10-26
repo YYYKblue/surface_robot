@@ -107,7 +107,6 @@ IDLE
   → APPROACH_EDGE
   → FOLLOW / CORRECT_HEADING / WAIT_WALL
   → EDGE_STOP
-  → VERIFY_STOP
   → MOVE_INWARD
   → TURN_TO_NEXT_EDGE
   → APPROACH_NEXT_EDGE
@@ -215,12 +214,11 @@ IDLE
 **标准流程**：
 
 1. `FOLLOW_EDGE` 到达出口区（船中心距前方墙 0.30 m），关刷并停止推进。
-2. `VERIFY_STOP` 使用连续位姿变化或速度估计确认船体已停止；下发 STOP 不等于物理停稳。
-3. `MOVE_INWARD` 同时发出 `REVERSE` 和向右侧推，默认持续 0.5 s，使船离开当前角部。
-4. 再次停止并确认雷达、地图和转移区域有效。
-5. `TURN_TO_NEXT_EDGE` 按目标边方向转动；使用连续展开角度和局部位姿判断完成，不能用固定秒数代替角度反馈。
-6. `APPROACH_NEXT_EDGE` 接近下一边，重新建立目标墙关联。
-7. 目标墙距、墙角和位置稳定后进入下一次 `FOLLOW_EDGE`。
+2. `MOVE_INWARD` 在一个停止指令周期后，同时发出 `REVERSE` 和向右侧推，默认持续 0.5 s，使船离开当前角部。
+3. 后退右推结束后发送一个停止指令周期，并确认地图位姿和静态边界包络有效。
+4. `TURN_TO_NEXT_EDGE` 按目标边方向转动；使用连续展开角度和局部位姿判断完成，不能用固定秒数代替角度反馈。
+5. `APPROACH_NEXT_EDGE` 接近下一边，重新建立目标墙关联。
+6. 目标墙距、墙角和位置稳定后进入下一次 `FOLLOW_EDGE`。
 
 转移过程必须使用完整船体、刷座和刷头的扫掠包络。盲区、未知回波或定位退化不能当成自由空间。当前单边控制最多涉及小角度诊断，不能直接复用于 90° 或 180° 转向。
 

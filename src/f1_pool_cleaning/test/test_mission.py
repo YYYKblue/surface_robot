@@ -164,12 +164,6 @@ def test_rectangle_transfer_stops_at_thirty_cm_and_combines_reverse_right_push()
     endpoint = replace(endpoint, pose=replace(endpoint.pose, stamp_ns=now),
                        wall=replace(endpoint.wall, stamp_ns=now))
     assert m.update(endpoint, now).direction == 0
-    assert m.phase == "VERIFY_STOP"
-
-    now += 250_000_000
-    endpoint = replace(endpoint, pose=replace(endpoint.pose, stamp_ns=now),
-                       wall=replace(endpoint.wall, stamp_ns=now))
-    assert m.update(endpoint, now).direction == 0
     assert m.phase == "MOVE_INWARD"
 
     now += 100_000_000
@@ -193,12 +187,6 @@ def test_rectangle_transfer_stops_at_thirty_cm_and_combines_reverse_right_push()
                          x=endpoint.pose.x - .20 * tx - .20 * nx,
                          y=endpoint.pose.y - .20 * ty - .20 * ny)
     endpoint = replace(endpoint, pose=moved_pose,
-                       wall=replace(endpoint.wall, stamp_ns=now))
-    assert m.update(endpoint, now).direction == 0
-    assert m.phase == "VERIFY_STOP" and m.transfer_verify_stage == "TURN"
-
-    now += 250_000_000
-    endpoint = replace(endpoint, pose=replace(endpoint.pose, stamp_ns=now),
                        wall=replace(endpoint.wall, stamp_ns=now))
     assert m.update(endpoint, now).direction == 0
     assert m.phase == "TURN_TO_NEXT_EDGE"
@@ -227,8 +215,8 @@ def test_rectangle_transfer_turn_timeout_pauses_without_auto_resume():
     m.start(sample(c, now, along=.8), now)
     endpoint = sample(c, now, along=pool.edges[0].length_m - c.front_stop_m + .01)
     m.update(endpoint, now)
-    # Reach TURN_TO_NEXT_EDGE with stationary feedback.
-    for delta in (.25, .25, .10, .55, .15, .10):
+    # Reach TURN_TO_NEXT_EDGE without waiting for a physical stop.
+    for delta in (.10, .10, .55):
         now += round(delta * 1e9)
         endpoint = replace(endpoint, pose=replace(endpoint.pose, stamp_ns=now),
                            wall=replace(endpoint.wall, stamp_ns=now))

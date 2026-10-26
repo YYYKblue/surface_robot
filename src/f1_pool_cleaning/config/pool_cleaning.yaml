@@ -58,9 +58,6 @@ pool_controller:
     # 90-degree right turn.  These values are bounded motion parameters, not
     # a substitute for turn-angle feedback.
     transfer_move_duration_sec: 0.50
-    transfer_stop_confirm_sec: 0.20
-    transfer_stop_position_tolerance_m: 0.03
-    transfer_stop_heading_tolerance_rad: 0.08726646259971647
     transfer_timeout_sec: 8.0
     transfer_turn_timeout_sec: 4.0
     transfer_turn_tolerance_rad: 0.08726646259971647

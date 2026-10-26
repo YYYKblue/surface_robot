@@ -79,7 +79,7 @@ bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano start
 
 没有 `LOCALIZATION_READY` 时 `/pool_cleaning/start` 会拒绝申请任务租约。定位跳变、TF/雷达过期或轨迹结束会关闭输出并进入 `PAUSED`；检查原因后调用 `cancel`，重新标定初始位姿，再次 `start`。
 
-`start` 返回后可再次运行 `status`，检查 `lease_held=true`、`current_edge_id` 和实际阶段。`APPROACH_WALL` 表示第五路正在把中心墙距调整到 32–36 cm；`APPROACH_EDGE` 表示墙距稳定后正在驶向当前边入口；`FOLLOW`/`CORRECT_HEADING` 是沿边清洗阶段；`EDGE_STOP` 表示船中心到当前边前方墙约 0.30 m，已关闭输出；随后依次进入 `VERIFY_STOP`、`MOVE_INWARD`、`TURN_TO_NEXT_EDGE` 和 `APPROACH_NEXT_EDGE`。端点判断使用当前边投影的船中心沿程距离。
+`start` 返回后可再次运行 `status`，检查 `lease_held=true`、`current_edge_id` 和实际阶段。`APPROACH_WALL` 表示第五路正在把中心墙距调整到 32–36 cm；`APPROACH_EDGE` 表示墙距稳定后正在驶向当前边入口；`FOLLOW`/`CORRECT_HEADING` 是沿边清洗阶段；`EDGE_STOP` 表示船中心到当前边前方墙约 0.30 m，已关闭输出；随后依次进入 `MOVE_INWARD`、`TURN_TO_NEXT_EDGE` 和 `APPROACH_NEXT_EDGE`。端点判断使用当前边投影的船中心沿程距离，不等待物理停稳。
 
 暂停、取消仍在终端 B 执行：
 

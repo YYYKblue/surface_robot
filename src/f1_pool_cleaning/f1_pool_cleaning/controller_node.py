@@ -163,7 +163,7 @@ class PoolController(Node):
         msg.generation = self.edge_generation
         msg.edge_id = self.selected_edge.id if self.selected_edge else ""
         transfer_without_wall = self.mission.phase in (
-            "EDGE_STOP", "VERIFY_STOP", "MOVE_INWARD", "TURN_TO_NEXT_EDGE", "COMPLETE")
+            "EDGE_STOP", "MOVE_INWARD", "TURN_TO_NEXT_EDGE", "COMPLETE")
         msg.valid = (bool(self.selected_edge and self.pose and not transfer_without_wall)
                      if valid is None else bool(valid))
         msg.reason = reason or ("waiting for map pose" if not self.pose else "")
@@ -371,7 +371,7 @@ class PoolController(Node):
         if self.use_map_tf:
             self._read_tf_pose()
         if (self.edge_task_enabled and self.selected_edge is not None
-                and self.mission.phase in ("EDGE_STOP", "VERIFY_STOP", "MOVE_INWARD", "TURN_TO_NEXT_EDGE")):
+                and self.mission.phase in ("EDGE_STOP", "MOVE_INWARD", "TURN_TO_NEXT_EDGE")):
             # Break the old wall association as soon as a transfer begins;
             # transfer motion is driven by map pose, not a remembered wall fit.
             self._publish_edge_target(valid=False, reason=self.mission.reason)
@@ -506,7 +506,10 @@ class PoolController(Node):
                                                     time.monotonic() - self.localization_status_received),
                       localization_snapshot=self.localization_snapshot,
                       speed_feedback_available=False,
-                      stopped_verified=self.mission.stopped_verified,
+                      # Kept for status-schema compatibility; simplified
+                      # transfer no longer performs physical stop verification.
+                      stopped_verified=False,
+                      stop_confirmation_available=False,
                       automatic_transfer_available=True,
                       transfer_next_edge=(None if self.mission.transfer_next_edge is None
                                           else self.mission.transfer_next_edge.id),

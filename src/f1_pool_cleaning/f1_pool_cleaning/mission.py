@@ -47,8 +47,8 @@ class Mission:
 
     WALL_PHASES = ("APPROACH_WALL", "APPROACH_EDGE", "FOLLOW",
                    "CORRECT_HEADING", "WAIT_WALL")
-    TRANSFER_PHASES = ("EDGE_STOP", "VERIFY_STOP", "MOVE_INWARD",
-                       "TURN_TO_NEXT_EDGE", "APPROACH_NEXT_EDGE")
+    TRANSFER_PHASES = ("EDGE_STOP", "MOVE_INWARD", "TURN_TO_NEXT_EDGE",
+                       "APPROACH_NEXT_EDGE")
 
     def __init__(self, config=None):
         self.c = (config or Config()).validate()
@@ -75,9 +75,6 @@ class Mission:
         self.transfer_next_edge = None
         self.transfer_started_ns = None
         self.transfer_action_started_ns = None
-        self.transfer_verify_started_ns = None
-        self.transfer_verify_stage = "MOVE"
-        self.transfer_stop_anchor = None
         self.transfer_turn_target_yaw = None
         self.transfer_turn_started_ns = None
 
@@ -93,12 +90,6 @@ class Mission:
     def wall_required(self):
         return self.phase in self.WALL_PHASES or self.phase == "APPROACH_NEXT_EDGE"
 
-    @property
-    def stopped_verified(self):
-        return (self.phase in ("MOVE_INWARD", "TURN_TO_NEXT_EDGE",
-                               "APPROACH_NEXT_EDGE")
-                and self.transfer_verify_stage == "TURN")
-
     def _reset_edge_progress(self):
         self.edge_projection = None
         self.last_edge_s = self.last_contact_s = None
@@ -112,8 +103,6 @@ class Mission:
         self.transfer_next_edge = None
         self.transfer_started_ns = None
         self.transfer_action_started_ns = None
-        self.transfer_verify_started_ns = None
-        self.transfer_stop_anchor = None
         self.transfer_turn_target_yaw = None
         self.transfer_turn_started_ns = None
         self._reset_edge_progress()
@@ -234,21 +223,6 @@ class Mission:
     def _stop_effort(self, now, pose=None, wall=None):
         return Effort(now, self._deadline(now, pose, wall))
 
-    def _stable_stop(self, pose, now):
-        if self.transfer_stop_anchor is None:
-            self.transfer_stop_anchor = pose
-            self.transfer_verify_started_ns = now
-            return False
-        distance = math.hypot(pose.x - self.transfer_stop_anchor.x,
-                              pose.y - self.transfer_stop_anchor.y)
-        yaw_change = abs(wrap(pose.yaw - self.transfer_stop_anchor.yaw))
-        if (distance > self.c.transfer_stop_position_tolerance_m
-                or yaw_change > self.c.transfer_stop_heading_tolerance_rad):
-            self.transfer_stop_anchor = pose
-            self.transfer_verify_started_ns = now
-            return False
-        return now - self.transfer_verify_started_ns >= round(self.c.transfer_stop_confirm_sec * 1e9)
-
     def _mark_edge_completed(self):
         if self.edge is None:
             return
@@ -266,9 +240,6 @@ class Mission:
             return
         self.transfer_next_edge = next_edge
         self.transfer_started_ns = now
-        self.transfer_verify_stage = "MOVE"
-        self.transfer_stop_anchor = f.pose
-        self.transfer_verify_started_ns = now
         self.transfer_action_started_ns = None
         self.transfer_turn_target_yaw = next_edge.yaw_rad
         self.transfer_turn_started_ns = None
@@ -283,8 +254,6 @@ class Mission:
         self.transfer_next_edge = None
         self.transfer_started_ns = None
         self.transfer_action_started_ns = None
-        self.transfer_verify_started_ns = None
-        self.transfer_stop_anchor = None
         self.transfer_turn_target_yaw = None
         self.transfer_turn_started_ns = None
         self._reset_edge_progress()
@@ -394,39 +363,20 @@ class Mission:
             self.halt(f"transfer envelope crossed pool boundary ({clearance:.3f} m)")
             return None
         if self.phase == "EDGE_STOP":
-            self.phase = "VERIFY_STOP"
-            self.transfer_stop_anchor = pose
-            self.transfer_verify_started_ns = now
-            self.reason = "verifying physical stop before edge transfer"
+            self.phase = "MOVE_INWARD"
+            self.transfer_action_started_ns = now
+            self.reason = ("moving inward: reverse and right push "
+                           f"for {self.c.transfer_move_duration_sec:.2f}s")
             self.last_update_ns = now
-            self.last_effort = self._stop_effort(now, pose)
-            return self.last_effort
-        if self.phase == "VERIFY_STOP":
-            self.last_update_ns = now
-            if not self._stable_stop(pose, now):
-                self.last_effort = self._stop_effort(now, pose)
-                return self.last_effort
-            if self.transfer_verify_stage == "MOVE":
-                self.phase = "MOVE_INWARD"
-                self.transfer_action_started_ns = now
-                self.reason = ("moving inward: reverse and right push "
-                               f"for {self.c.transfer_move_duration_sec:.2f}s")
-                self.last_effort = self._stop_effort(now, pose)
-                return self.last_effort
-            self.phase = "TURN_TO_NEXT_EDGE"
-            self.transfer_turn_started_ns = now
-            self.reason = f"turning right toward {self.transfer_next_edge.id}"
             self.last_effort = self._stop_effort(now, pose)
             return self.last_effort
         if self.phase == "MOVE_INWARD":
             self.last_update_ns = now
             elapsed = now - self.transfer_action_started_ns
             if elapsed >= round(self.c.transfer_move_duration_sec * 1e9):
-                self.phase = "VERIFY_STOP"
-                self.transfer_verify_stage = "TURN"
-                self.transfer_stop_anchor = pose
-                self.transfer_verify_started_ns = now
-                self.reason = "inward motion complete; verifying stop before turn"
+                self.phase = "TURN_TO_NEXT_EDGE"
+                self.transfer_turn_started_ns = now
+                self.reason = f"turning right toward {self.transfer_next_edge.id}"
                 self.last_effort = self._stop_effort(now, pose)
                 return self.last_effort
             self.last_effort = Effort(
