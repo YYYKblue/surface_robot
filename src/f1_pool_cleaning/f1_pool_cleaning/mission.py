@@ -351,7 +351,8 @@ class Mission:
         if now < self.last_update_ns:
             self.halt("clock reversed during edge transfer")
             return None
-        if (self.transfer_started_ns is not None
+        if (self.c.transfer_timeout_sec > 0
+                and self.transfer_started_ns is not None
                 and now - self.transfer_started_ns >= round(self.c.transfer_timeout_sec * 1e9)):
             self.halt("edge transfer timeout")
             return None
@@ -390,7 +391,12 @@ class Mission:
             if abs(error) <= self.c.transfer_turn_tolerance_rad:
                 self._finish_transfer_to_next_edge(pose, now)
                 return self.last_effort
-            if now - self.transfer_turn_started_ns >= round(self.c.transfer_turn_timeout_sec * 1e9):
+            # The turn-only watchdog is optional.  A zero value deliberately
+            # leaves completion to heading feedback, allowing
+            # APPROACH_NEXT_EDGE to recover a rough turn.
+            if (self.c.transfer_turn_timeout_sec > 0
+                    and now - self.transfer_turn_started_ns >= round(
+                        self.c.transfer_turn_timeout_sec * 1e9)):
                 self.halt("right turn timeout")
                 return None
             # Canonical pool edges are clockwise; a positive error means the

@@ -28,7 +28,7 @@
 
 换边阶段保留转移数据新鲜度、通信超时、执行器命令期限、遥控接管和取消/暂停关闭输出；转角使用连续地图航向反馈，不用固定时间代替 90°完成判断。地图边身份与左墙目标关联由 `EdgeTarget` 恢复，防止换边后误认相邻墙。
 
-默认无固定运行时长上限。启动门控在 `LOCALIZATION_CHECK` 中完成定位检查和地图选边，直边状态序列为 `APPROACH_WALL → APPROACH_EDGE → FOLLOW ↔ CORRECT_HEADING/WAIT_WALL → EDGE_STOP`，换边状态序列为 `EDGE_STOP → MOVE_INWARD → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`；端点和后退右推之间各保留一个停止指令周期，不等待物理停稳。临时丢墙为 `WAIT_WALL`。`wall_recovery_sec` 默认 1.5 秒；持续丢墙、反馈过期、定位退化或通信异常进入 `PAUSED`。手动暂停、取消和过期数据不会因反馈恢复而自动续跑；暂停后必须 `cancel` 再 `start`。
+默认无固定运行时长上限。启动门控在 `LOCALIZATION_CHECK` 中完成定位检查和地图选边，直边状态序列为 `APPROACH_WALL → APPROACH_EDGE → FOLLOW ↔ CORRECT_HEADING/WAIT_WALL → EDGE_STOP`，换边状态序列为 `EDGE_STOP → MOVE_INWARD → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`；端点和后退右推之间各保留一个停止指令周期，不等待物理停稳。转向目标航向误差放宽为 ±20°，转向和整段换边的时间超时默认关闭。临时丢墙为 `WAIT_WALL`。`wall_recovery_sec` 默认 1.5 秒；持续丢墙、反馈过期、定位退化或通信异常进入 `PAUSED`。手动暂停、取消和过期数据不会因反馈恢复而自动续跑；暂停后必须 `cancel` 再 `start`。
 
 任务启动时，操作者只需将船粗略放在 `edge_0` 附近并在 RViz2 发布大致初始位姿。当前配置将 `default_edge_id` 固定为 `edge_0`；控制器仍会检查位姿距离、左侧关系和边走廊，靠墙阶段关闭滚刷并使用第五路调整到 32–36 cm，同时纠正航向，航向稳定后再用滚刷沿边推进到入口。位姿不在 `edge_0` 可用范围、墙位于右侧或目标墙不匹配时拒绝启动。每条边到达 30 cm 端点后自动换到下一条边，第四条边完成后进入 `COMPLETE`。
 
@@ -53,7 +53,7 @@
 
 - `perception.py` / `perception_node.py`：墙线拟合、关联和空间观测；`perception_config.py` 只含感知与几何参数。
 - `geometry.py`：矩形/有序边界、顺时针左墙边段、投影和边选择。
-- `mission.py` / `config.py`：边段状态机、靠墙/入口调整、停稳、后退右推、右转和四边任务参数。
+- `mission.py` / `config.py`：边段状态机、靠墙/入口调整、端点停止、后退右推、右转和四边任务参数。
 - `controller_node.py` / `lease.py`：任务服务、状态、预览与 bridge 租约输出。
 - `ros_support.py` / `runner.py`：公共消息转换、时间戳和节点退出处理。
 - `localization.py` / `localization_node.py`：RViz 初始位姿、Cartographer 轨迹生命周期和定位就绪门控。
@@ -96,7 +96,7 @@ colcon test-result --test-result-base build/f1_pool_cleaning --verbose
 
 演示和测试使用合成反馈、localhost DDS 和模拟 bridge，不连接串口或实机。
 
-阶段 3 本地验证重点：边界几何、目标墙关联、30 cm 端点停车、停稳确认、0.5 s 后退右推、右转航向反馈和四边编排。实船仍必须先完成无刷单动作和重复转移试验，不能把仿真轨迹当作清洁效果证据。具体分项与复测说明见[开发与验收文档](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)。
+阶段 3 本地验证重点：边界几何、目标墙关联、30 cm 端点停车、0.5 s 后退右推、±20° 粗略右转反馈和四边编排。实船仍必须先完成无刷单动作和重复转移试验，不能把仿真轨迹当作清洁效果证据。具体分项与复测说明见[开发与验收文档](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)。
 
 ## 启动
 

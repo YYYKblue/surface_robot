@@ -193,7 +193,11 @@ def test_rectangle_transfer_stops_at_thirty_cm_and_combines_reverse_right_push()
 
     now += 100_000_000
     endpoint = replace(endpoint, pose=replace(endpoint.pose, stamp_ns=now,
-                                               yaw=pool.edges[1].yaw_rad),
+                                               # A rough turn inside the new
+                                               # +/-20 degree transfer band is
+                                               # sufficient; wall reacquisition
+                                               # handles the final alignment.
+                                               yaw=pool.edges[1].yaw_rad + math.radians(15)),
                        wall=replace(endpoint.wall, stamp_ns=now))
     assert m.update(endpoint, now).direction == 0
     assert m.phase == "APPROACH_NEXT_EDGE"
@@ -227,6 +231,32 @@ def test_rectangle_transfer_turn_timeout_pauses_without_auto_resume():
                        wall=replace(endpoint.wall, stamp_ns=now))
     assert m.update(endpoint, now) is None
     assert m.phase == "PAUSED"
+
+
+def test_rectangle_transfer_default_has_no_overall_time_timeout():
+    c = Config().validate()
+    pool = PoolModel.rectangle(c)
+    m = Mission(c)
+    m.configure_edge(pool, pool.edges[0])
+    now = NOW
+    m.start(sample(c, now, along=.8), now)
+    endpoint = sample(c, now, along=pool.edges[0].length_m - c.front_stop_m + .01)
+    m.update(endpoint, now)
+    for delta in (.10, .55):
+        now += round(delta * 1e9)
+        endpoint = replace(endpoint, pose=replace(endpoint.pose, stamp_ns=now),
+                           wall=replace(endpoint.wall, stamp_ns=now))
+        m.update(endpoint, now)
+    assert m.phase == "TURN_TO_NEXT_EDGE"
+
+    # A zero transfer_timeout_sec keeps the turn feedback loop alive even
+    # after the former eight-second overall watchdog would have fired.
+    now += 8_500_000_000
+    endpoint = replace(endpoint, pose=replace(endpoint.pose, stamp_ns=now),
+                       wall=replace(endpoint.wall, stamp_ns=now))
+    effort = m.update(endpoint, now)
+    assert m.phase == "TURN_TO_NEXT_EDGE"
+    assert effort.direction == 4
 
 
 def test_rectangle_route_completes_all_four_edges_in_clockwise_order():

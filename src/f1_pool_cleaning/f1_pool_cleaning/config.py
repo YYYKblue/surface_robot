@@ -51,17 +51,21 @@ class Config:
     # Stage-3 transfer motion.  The reverse and right-side push are issued
     # together for this short, explicitly bounded interval.
     transfer_move_duration_sec: float = .50
-    transfer_timeout_sec: float = 8.0
-    transfer_turn_timeout_sec: float = 4.0
-    transfer_turn_tolerance_rad: float = math.radians(5.)
+    # Zero disables the overall edge-transfer timeout.  Pose freshness and
+    # boundary checks remain active while a transfer is running.
+    transfer_timeout_sec: float = 0.0
+    transfer_turn_timeout_sec: float = 0.0
+    transfer_turn_tolerance_rad: float = math.radians(20.)
 
     def validate(self):
-        signed = ("origin_x_m", "origin_y_m", "axis_yaw_rad", "run_timeout_sec")
+        zero_allowed = ("origin_x_m", "origin_y_m", "axis_yaw_rad",
+                        "run_timeout_sec", "transfer_timeout_sec",
+                        "transfer_turn_timeout_sec")
         for field in fields(self):
             v = getattr(self, field.name)
             if isinstance(v, (int, float)) and not math.isfinite(v):
                 raise ValueError(f"{field.name} must be finite")
-            if isinstance(v, float) and field.name not in signed and v <= 0:
+            if isinstance(v, float) and field.name not in zero_allowed and v <= 0:
                 raise ValueError(f"{field.name} must be positive")
         if not self.base_frame or not self.map_frame:
             raise ValueError("frames must be nonempty")
@@ -82,8 +86,8 @@ class Config:
                 or self.edge_progress_jump_m <= 0
                 or self.corner_exclusion_m < 0 or self.endpoint_margin_m <= 0
                 or self.transfer_move_duration_sec <= 0
-                or self.transfer_timeout_sec <= 0
-                or self.transfer_turn_timeout_sec <= 0
+                or self.transfer_timeout_sec < 0
+                or self.transfer_turn_timeout_sec < 0
                 or not 0 < self.transfer_turn_tolerance_rad < math.pi / 2
                 or self.brush_x_m < -self.hull_half_length_m
                 or abs(self.brush_tip_y_m) <= self.hull_half_width_m
