@@ -108,7 +108,7 @@ class PoolModel:
 
     @classmethod
     def from_boundary(cls, points, *, boundary_order="clockwise", wall_target_m=.34,
-                      corner_exclusion_m=.30, endpoint_margin_m=.50, frame="map"):
+                      corner_exclusion_m=.30, endpoint_margin_m=.30, frame="map"):
         points = [tuple(float(v) for v in p) for p in points]
         if len(points) < 3 or any(not _finite_point(p) for p in points):
             raise ValueError("boundary needs at least three finite [x, y] points")
@@ -220,3 +220,35 @@ class PoolModel:
         if projection.s_m > edge.stop_s_m:
             return None, None, "localized pose is past the safe start/stop window"
         return edge, projection, "edge selected"
+
+    def next_edge(self, edge):
+        """Return the next canonical clockwise edge, or ``None`` at the end."""
+        if edge is None or self.by_id.get(edge.id) is not edge:
+            return None
+        index = self.edges.index(edge)
+        return self.edges[index + 1] if index + 1 < len(self.edges) else None
+
+    def pose_boundary_clearance(self, pose, hull_half_length, hull_half_width,
+                                brush_x_m=None, brush_tip_y_m=None):
+        """Return the minimum signed boundary clearance of a pose envelope.
+
+        The canonical clockwise boundary has the pool interior on each edge's
+        right side.  Checking all hull corners and the brush contact point is a
+        conservative static boundary gate for transfer motion; it does not
+        claim that unseen dynamic obstacles are free space.
+        """
+        yaw = getattr(pose, "yaw", 0.)
+        c, s = math.cos(yaw), math.sin(yaw)
+        local_points = [(sx * hull_half_length, sy * hull_half_width)
+                        for sx in (-1., 1.) for sy in (-1., 1.)]
+        if brush_x_m is not None and brush_tip_y_m is not None:
+            local_points.append((brush_x_m, brush_tip_y_m))
+        points = [(pose.x + c * x - s * y, pose.y + s * x + c * y)
+                  for x, y in local_points]
+        clearance = math.inf
+        for px, py in points:
+            for edge in self.edges:
+                dx, dy = px - edge.start[0], py - edge.start[1]
+                clearance = min(clearance, -(dx * edge.left_normal[0]
+                                               + dy * edge.left_normal[1]))
+        return clearance

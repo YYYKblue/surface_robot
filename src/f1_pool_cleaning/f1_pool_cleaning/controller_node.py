@@ -1,4 +1,4 @@
-"""Single-side ROS adapter with isolated preview and optional bridge lease."""
+"""Rectangle edge-task ROS adapter with isolated preview and optional lease."""
 from dataclasses import fields
 import json
 import math
@@ -162,7 +162,10 @@ class PoolController(Node):
         msg.task_id = self.edge_task_id
         msg.generation = self.edge_generation
         msg.edge_id = self.selected_edge.id if self.selected_edge else ""
-        msg.valid = bool(self.selected_edge and self.pose) if valid is None else bool(valid)
+        transfer_without_wall = self.mission.phase in (
+            "EDGE_STOP", "VERIFY_STOP", "MOVE_INWARD", "TURN_TO_NEXT_EDGE", "COMPLETE")
+        msg.valid = (bool(self.selected_edge and self.pose and not transfer_without_wall)
+                     if valid is None else bool(valid))
         msg.reason = reason or ("waiting for map pose" if not self.pose else "")
         msg.distance_tolerance_m = self.edge_distance_tolerance_m
         msg.tangent_tolerance_rad = self.edge_angle_tolerance_rad
@@ -214,6 +217,16 @@ class PoolController(Node):
         self._set_selected_edge(edge, reason)
         return True, reason
 
+    def _sync_mission_edge(self):
+        """Publish a new wall target after the mission finishes a right turn."""
+        if not self.edge_task_enabled or self.mission.edge is None:
+            return
+        if self.selected_edge is self.mission.edge:
+            return
+        self.selected_edge = self.mission.edge
+        self.edge_generation += 1
+        self._publish_edge_target(valid=False, reason="edge transfer completed; resetting wall association")
+
     def _halt(self, reason, phase="PAUSED"):
         self.mission.halt(reason, phase)
         if self.edge_task_enabled and hasattr(self, "edge_target_pub") and self.selected_edge is not None:
@@ -223,6 +236,8 @@ class PoolController(Node):
 
     def _invalidate(self, name, reason):
         setattr(self, name, None)
+        if name == "wall" and not self.mission.wall_required:
+            return
         if self.mission.active or self.mission.phase == "ACQUIRING":
             self._halt(reason)
 
@@ -282,11 +297,16 @@ class PoolController(Node):
         self._accept_pose(Pose(stamp_ns(tf.header.stamp), t.x, t.y, yaw))
 
     def _feedback(self):
-        return Feedback(self.wall, self.pose) if self.wall is not None and self.pose is not None else None
+        return Feedback(self.wall, self.pose) if self.pose is not None else None
 
-    def _stream_error(self):
+    def _stream_error(self, require_wall=None):
+        if require_wall is None:
+            require_wall = self.mission.wall_required
         now = time.monotonic()
-        for name, max_age in (("wall", self.config.wall_max_age_sec), ("pose", self.config.pose_max_age_sec)):
+        streams = [("pose", self.config.pose_max_age_sec)]
+        if require_wall:
+            streams.insert(0, ("wall", self.config.wall_max_age_sec))
+        for name, max_age in streams:
             if name not in self.received or now - self.received[name] >= max_age:
                 return name + " receive stream stopped"
         return ""
@@ -294,6 +314,8 @@ class PoolController(Node):
     def _start(self, request, response):
         if self.use_map_tf:
             self._read_tf_pose()
+        if self.mission.phase in ("CANCELLED", "COMPLETE"):
+            self.selected_edge = None
         error = ("clock fault latched; restart controller" if self.clock_fault else
                  self._localization_error() or self._stream_error())
         if error:
@@ -328,6 +350,10 @@ class PoolController(Node):
         if self.edge_task_enabled:
             self.edge_generation += 1
             self._publish_edge_target(valid=False, reason="task cancelled; edge association reset")
+            self.selected_edge = None
+            self.mission.pool = None
+            self.mission.edge = None
+            self.mission.edge_projection = None
         response.success, response.message = True, "cancelled"
         return response
 
@@ -344,6 +370,11 @@ class PoolController(Node):
         self.clock_pair = now, mono
         if self.use_map_tf:
             self._read_tf_pose()
+        if (self.edge_task_enabled and self.selected_edge is not None
+                and self.mission.phase in ("EDGE_STOP", "VERIFY_STOP", "MOVE_INWARD", "TURN_TO_NEXT_EDGE")):
+            # Break the old wall association as soon as a transfer begins;
+            # transfer motion is driven by map pose, not a remembered wall fit.
+            self._publish_edge_target(valid=False, reason=self.mission.reason)
         if self.edge_task_enabled and self.selected_edge is not None and not self.mission.active:
             # Keep the selected map edge available while idle/paused so the
             # perception node can refresh a valid wall association before a
@@ -358,7 +389,7 @@ class PoolController(Node):
                 return
         if not self.mission.active and self.mission.phase != "ACQUIRING":
             return
-        error = self._stream_error()
+        error = self._stream_error(require_wall=self.mission.wall_required)
         if error:
             self._halt(error)
             return
@@ -369,6 +400,7 @@ class PoolController(Node):
         if self.mission.phase == "ACQUIRING":
             return
         effort = self.mission.update(self._feedback(), now)
+        self._sync_mission_edge()
         if effort:
             self._publish(effort)
         if not self.mission.active:
@@ -406,6 +438,10 @@ class PoolController(Node):
         projection = self.mission.edge_projection
         cleaned = ([list(interval) for interval in self.mission.cleaned_intervals]
                    if self.mission.edge_active else [])
+        cleaned_by_edge = {
+            edge_id: [list(interval) for interval in intervals]
+            for edge_id, intervals in self.mission.cleaned_by_edge.items()
+        }
         uncovered = []
         if edge and cleaned:
             cursor = edge.clean_start_s_m
@@ -469,8 +505,14 @@ class PoolController(Node):
                       localization_status_age_sec=(None if not self.localization_status_received else
                                                     time.monotonic() - self.localization_status_received),
                       localization_snapshot=self.localization_snapshot,
-                      speed_feedback_available=False, stopped_verified=False,
-                      automatic_transfer_available=False, coverage_available=bool(edge))
+                      speed_feedback_available=False,
+                      stopped_verified=self.mission.stopped_verified,
+                      automatic_transfer_available=True,
+                      transfer_next_edge=(None if self.mission.transfer_next_edge is None
+                                          else self.mission.transfer_next_edge.id),
+                      completed_edges=list(self.mission.completed_edges),
+                      cleaned_intervals_by_edge=cleaned_by_edge,
+                      coverage_available=bool(edge))
         self.status_pub.publish(String(data=json.dumps(status, ensure_ascii=False, allow_nan=False)))
 
     def destroy_node(self):

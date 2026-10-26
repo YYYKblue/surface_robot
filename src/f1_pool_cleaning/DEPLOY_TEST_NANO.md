@@ -1,6 +1,6 @@
-# Nano：阶段 2 地图选边与左侧滚刷测试
+# Nano：阶段 3 矩形四边换边与左侧滚刷测试
 
-更新：2026-10-25。阶段 2 使用冻结地图定位，当前配置固定从 `edge_0`（第一条长边）启动，并要求该边位于机器人 `base_link +y` 左侧。船体按长 50 cm、宽 45 cm 建模，左侧唯一滚刷的稳定中心墙距为 32–36 cm，目标 34 cm。粗略放船并在 RViz2 发布大致初始位姿后，Cartographer 稳定输出 `map → base_link`，控制器检查 `edge_0` 可用后先关闭滚刷靠墙并纠正航向，再调整到边入口；当前边到达安全终点后停车，不自动换边。
+更新：2026-10-25。阶段 3 使用冻结地图定位，默认从 `edge_0`（第一条长边）启动，并按顺时针完成四条边。船体按长 50 cm、宽 45 cm 建模，左侧唯一滚刷的稳定中心墙距为 32–36 cm，目标 34 cm。粗略放船并在 RViz2 发布大致初始位姿后，Cartographer 稳定输出 `map → base_link`，控制器检查 `edge_0` 可用后先关闭滚刷靠墙并纠正航向，再调整到边入口；边端点中心距前墙 30 cm 后，关闭滚刷并进入停稳、0.5 s 后退右推和右转流程。
 
 ## 1. 同步和构建
 
@@ -79,7 +79,7 @@ bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano start
 
 没有 `LOCALIZATION_READY` 时 `/pool_cleaning/start` 会拒绝申请任务租约。定位跳变、TF/雷达过期或轨迹结束会关闭输出并进入 `PAUSED`；检查原因后调用 `cancel`，重新标定初始位姿，再次 `start`。
 
-`start` 返回后可再次运行 `status`，检查 `lease_held=true`、`current_edge_id` 和实际阶段。`APPROACH_WALL` 表示第五路正在把中心墙距调整到 32–36 cm；`APPROACH_EDGE` 表示墙距稳定后正在驶向当前边入口；`FOLLOW`/`CORRECT_HEADING` 是沿边清洗阶段；`EDGE_STOP` 表示船中心到当前边前方墙约 0.50 m，已关闭输出。阶段 2 的端点判断使用当前边投影的船中心沿程距离；`map_front_clearance_m` 表示兼容模式的船中心到前墙距离。
+`start` 返回后可再次运行 `status`，检查 `lease_held=true`、`current_edge_id` 和实际阶段。`APPROACH_WALL` 表示第五路正在把中心墙距调整到 32–36 cm；`APPROACH_EDGE` 表示墙距稳定后正在驶向当前边入口；`FOLLOW`/`CORRECT_HEADING` 是沿边清洗阶段；`EDGE_STOP` 表示船中心到当前边前方墙约 0.30 m，已关闭输出；随后依次进入 `VERIFY_STOP`、`MOVE_INWARD`、`TURN_TO_NEXT_EDGE` 和 `APPROACH_NEXT_EDGE`。端点判断使用当前边投影的船中心沿程距离。
 
 暂停、取消仍在终端 B 执行：
 
@@ -163,7 +163,7 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 | 新鲜扫描暂时未拟合到左墙 | `WAIT_WALL`、全部输出关闭，最多等待 1.5 秒；恢复后自动继续纠偏/刷洗 |
 | 丢墙超过 1.5 秒 | `PAUSED`，`reason` 包含感知原因，需 cancel/start |
 | 可见左墙被遮挡，仅剩后方短墙 | 在恢复窗口内保持墙关联约束，禁止将短墙重标为左墙继续纠偏 |
-| 当前边投影达到 `edge_stop_m` | `EDGE_STOP`、主轮/刷盘/第五路全部关闭；不出现第二边任务 |
+| 当前边投影达到 `edge_stop_m` | `EDGE_STOP`，随后执行停稳、后退右推和右转；状态切换到下一条边 |
 | 停止雷达或定位 | PAUSED；反馈恢复不自动续跑 |
 | 地图位姿更新或跳变 | 接受更新，重新计算前墙距离；不做额外地图墙身份验证 |
 
@@ -177,7 +177,7 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 
 ## 5. 单边实机测试
 
-预览核对后，退出预览控制器，保持定位与感知来源一致。地图无法发现盲区新增障碍；本轮需要人工观察前方并保留遥控接管。0.50 m 是船中心到前方墙的关闭输出阈值，需记录之后的惯性滑行。
+预览核对后，退出预览控制器，保持定位与感知来源一致。地图无法发现盲区新增障碍；本轮需要人工观察前方并保留遥控接管。0.30 m 是船中心到前方墙的换边触发阈值，需记录之后的停稳漂移和 0.5 s 后退右推位移。
 
 单独终端启动唯一 bridge（串口路径按已有 bridge 配置；direction_confirmed 表示主轮 LEFT/RIGHT 硬件映射已经核对）：
 

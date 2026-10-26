@@ -35,7 +35,7 @@ pool_controller:
     edge_heading_tolerance_rad: 1.2217304763960306
     edge_progress_jump_m: 0.35
     corner_exclusion_m: 0.30
-    endpoint_margin_m: 0.50
+    endpoint_margin_m: 0.30
     # Map-frame boundary in the canonical clockwise route.  The four edges
     # therefore all keep the single brush on the boat's left.
     boundary_order: clockwise
@@ -44,7 +44,7 @@ pool_controller:
                   1.846641449817, -0.749627029637,
                   -0.980281688636, -0.184242626451]
     # Always start from the first long edge. The pose must still be near edge_0
-    # and the wall must remain on base_link +y; this does not enable edge transfer.
+    # and the wall must remain on base_link +y; completed edges advance in order.
     default_edge_id: "edge_0"
     # Wider than the 32--36 cm control band: map edge identity must survive
     # rough initial placement before the fifth thruster closes the gap.
@@ -52,7 +52,18 @@ pool_controller:
     # Permit the same rough heading error used by map edge selection; the
     # local wall fit still rejects unrelated perpendicular corner walls.
     edge_target_angle_tolerance_rad: 1.2217304763960306
-    front_stop_m: 0.50
+    # Common endpoint trigger for all four edges: boat centre to front wall.
+    front_stop_m: 0.30
+    # Reverse and right-side push are issued together for 0.5 s before each
+    # 90-degree right turn.  These values are bounded motion parameters, not
+    # a substitute for turn-angle feedback.
+    transfer_move_duration_sec: 0.50
+    transfer_stop_confirm_sec: 0.20
+    transfer_stop_position_tolerance_m: 0.03
+    transfer_stop_heading_tolerance_rad: 0.08726646259971647
+    transfer_timeout_sec: 8.0
+    transfer_turn_timeout_sec: 4.0
+    transfer_turn_tolerance_rad: 0.08726646259971647
     # User confirmed positive -> left, 2026-10-23.
     fifth_left_sign: 1
     side_percent: 30.0

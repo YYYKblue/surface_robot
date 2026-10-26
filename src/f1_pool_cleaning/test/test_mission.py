@@ -6,11 +6,12 @@ import pytest
 import yaml
 
 from f1_pool_cleaning.perception_config import PerceptionConfig
-from f1_pool_cleaning.perception import Perception
+from f1_pool_cleaning.perception import Perception, Observation
 from f1_pool_cleaning.synthetic import pool_scan
 from f1_pool_cleaning.config import Config
+from f1_pool_cleaning.geometry import PoolModel
 from f1_pool_cleaning.demo import sample, run_demo
-from f1_pool_cleaning.mission import Mission, command_fields, Effort
+from f1_pool_cleaning.mission import Mission, Feedback, Pose, command_fields, Effort
 
 NOW = 1_000_000_000
 
@@ -24,6 +25,18 @@ def started(config=None):
 def update(m, elapsed=0., **kwargs):
     now = NOW + round(elapsed * 1e9)
     return m.update(sample(m.c, now, **kwargs), now)
+
+
+def edge_feedback(config, edge, stamp_ns, along, yaw=None):
+    """Synthetic left-wall feedback for any canonical rectangle edge."""
+    tangent_x, tangent_y = edge.tangent
+    normal_x, normal_y = edge.left_normal
+    x = edge.start[0] + along * tangent_x - config.wall_target_m * normal_x
+    y = edge.start[1] + along * tangent_y - config.wall_target_m * normal_y
+    yaw = edge.yaw_rad if yaw is None else yaw
+    wall = Observation(stamp_ns, valid=True, distance=config.wall_target_m,
+                       angle=0., support=1., inliers=40, ratio=.95)
+    return Feedback(wall, Pose(stamp_ns, x, y, yaw))
 
 
 def test_single_side_demo_stops_without_transfer():
@@ -132,9 +145,150 @@ def test_map_bow_clearance_accounts_for_heading_and_stops_on_pose_only():
     assert m.phase == "STOPPED"
 
 
-@pytest.mark.parametrize("clearance,stopped", [(0., True), (.249, True), (.25, True),
-                                              (.251, False), (.5, False), (.8, False)])
-def test_available_front_observation_uses_fifty_cm_stop_threshold(clearance, stopped):
+def test_rectangle_transfer_stops_at_thirty_cm_and_combines_reverse_right_push():
+    c = Config().validate()
+    pool = PoolModel.rectangle(c)
+    m = Mission(c)
+    assert m.configure_edge(pool, pool.edges[0])[0]
+    now = NOW
+    assert m.start(sample(c, now, along=.8), now)[0]
+
+    now += 100_000_000
+    endpoint = sample(c, now, along=pool.edges[0].length_m - c.front_stop_m + .01)
+    effort = m.update(endpoint, now)
+    assert m.phase == "EDGE_STOP"
+    assert m.completed_edges == ["edge_0"]
+    assert effort.direction == 0 and effort.brush_percent == 0 and effort.side_left_percent == 0
+
+    now += 250_000_000
+    endpoint = replace(endpoint, pose=replace(endpoint.pose, stamp_ns=now),
+                       wall=replace(endpoint.wall, stamp_ns=now))
+    assert m.update(endpoint, now).direction == 0
+    assert m.phase == "VERIFY_STOP"
+
+    now += 250_000_000
+    endpoint = replace(endpoint, pose=replace(endpoint.pose, stamp_ns=now),
+                       wall=replace(endpoint.wall, stamp_ns=now))
+    assert m.update(endpoint, now).direction == 0
+    assert m.phase == "MOVE_INWARD"
+
+    now += 100_000_000
+    endpoint = replace(endpoint, pose=replace(endpoint.pose, stamp_ns=now),
+                       wall=replace(endpoint.wall, stamp_ns=now))
+    effort = m.update(endpoint, now)
+    assert m.phase == "MOVE_INWARD"
+    assert effort.direction == 2
+    assert effort.side_left_percent == -c.side_percent
+    assert effort.brush_percent == 0
+    fields = command_fields(effort, c)
+    assert fields["direction"] == 2
+    assert fields["thrust_enabled"] and fields["thrust_percent"] == -c.side_percent
+    assert not fields["brush_enabled"]
+
+    now += round((c.transfer_move_duration_sec + .05) * 1e9)
+    tx, ty = pool.edges[0].tangent
+    nx, ny = pool.edges[0].left_normal
+    moved_pose = replace(endpoint.pose,
+                         stamp_ns=now,
+                         x=endpoint.pose.x - .20 * tx - .20 * nx,
+                         y=endpoint.pose.y - .20 * ty - .20 * ny)
+    endpoint = replace(endpoint, pose=moved_pose,
+                       wall=replace(endpoint.wall, stamp_ns=now))
+    assert m.update(endpoint, now).direction == 0
+    assert m.phase == "VERIFY_STOP" and m.transfer_verify_stage == "TURN"
+
+    now += 250_000_000
+    endpoint = replace(endpoint, pose=replace(endpoint.pose, stamp_ns=now),
+                       wall=replace(endpoint.wall, stamp_ns=now))
+    assert m.update(endpoint, now).direction == 0
+    assert m.phase == "TURN_TO_NEXT_EDGE"
+
+    now += 100_000_000
+    endpoint = replace(endpoint, pose=replace(endpoint.pose, stamp_ns=now,
+                                               yaw=pool.edges[1].yaw_rad),
+                       wall=replace(endpoint.wall, stamp_ns=now))
+    assert m.update(endpoint, now).direction == 0
+    assert m.phase == "APPROACH_NEXT_EDGE"
+    assert m.edge.id == "edge_1"
+
+    now += 100_000_000
+    next_feedback = edge_feedback(c, pool.edges[1], now, .5)
+    effort = m.update(next_feedback, now)
+    assert m.phase == "FOLLOW"
+    assert effort.brush_percent == c.brush_percent
+
+
+def test_rectangle_transfer_turn_timeout_pauses_without_auto_resume():
+    c = Config(transfer_turn_timeout_sec=.2).validate()
+    pool = PoolModel.rectangle(c)
+    m = Mission(c)
+    m.configure_edge(pool, pool.edges[0])
+    now = NOW
+    m.start(sample(c, now, along=.8), now)
+    endpoint = sample(c, now, along=pool.edges[0].length_m - c.front_stop_m + .01)
+    m.update(endpoint, now)
+    # Reach TURN_TO_NEXT_EDGE with stationary feedback.
+    for delta in (.25, .25, .10, .55, .15, .10):
+        now += round(delta * 1e9)
+        endpoint = replace(endpoint, pose=replace(endpoint.pose, stamp_ns=now),
+                           wall=replace(endpoint.wall, stamp_ns=now))
+        m.update(endpoint, now)
+    assert m.phase == "TURN_TO_NEXT_EDGE"
+    now += 250_000_000
+    endpoint = replace(endpoint, pose=replace(endpoint.pose, stamp_ns=now),
+                       wall=replace(endpoint.wall, stamp_ns=now))
+    assert m.update(endpoint, now) is None
+    assert m.phase == "PAUSED"
+
+
+def test_rectangle_route_completes_all_four_edges_in_clockwise_order():
+    c = Config().validate()
+    pool = PoolModel.rectangle(c)
+    m = Mission(c)
+    now = NOW
+    assert m.configure_edge(pool, pool.edges[0])[0]
+    assert m.start(edge_feedback(c, pool.edges[0], now, .8), now)[0]
+    m.update(edge_feedback(c, pool.edges[0], now, .8), now)
+
+    for index in range(4):
+        edge = m.edge
+        now += 100_000_000
+        endpoint = edge_feedback(c, edge, now, edge.length_m - c.front_stop_m + .01)
+        m.update(endpoint, now)
+        for delta in (.25, .25, .10):
+            now += round(delta * 1e9)
+            endpoint = edge_feedback(c, edge, now, edge.length_m - c.front_stop_m + .01)
+            m.update(endpoint, now)
+        now += 550_000_000
+        tx, ty = edge.tangent
+        nx, ny = edge.left_normal
+        moved = replace(endpoint.pose, stamp_ns=now,
+                        x=endpoint.pose.x - .20 * tx - .20 * nx,
+                        y=endpoint.pose.y - .20 * ty - .20 * ny)
+        endpoint = replace(endpoint, pose=moved,
+                           wall=replace(endpoint.wall, stamp_ns=now))
+        m.update(endpoint, now)
+        now += 250_000_000
+        endpoint = replace(endpoint, pose=replace(endpoint.pose, stamp_ns=now),
+                           wall=replace(endpoint.wall, stamp_ns=now))
+        m.update(endpoint, now)
+        if index < 3:
+            now += 100_000_000
+            turned = replace(endpoint,
+                             pose=replace(endpoint.pose, stamp_ns=now,
+                                           yaw=pool.edges[index + 1].yaw_rad),
+                             wall=replace(endpoint.wall, stamp_ns=now))
+            m.update(turned, now)
+            now += 100_000_000
+            m.update(edge_feedback(c, m.edge, now, .5), now)
+
+    assert m.phase == "COMPLETE"
+    assert m.completed_edges == ["edge_0", "edge_1", "edge_2", "edge_3"]
+
+
+@pytest.mark.parametrize("clearance,stopped", [(0., True), (.049, True), (.05, True),
+                                              (.051, False), (.2, False), (.8, False)])
+def test_available_front_observation_uses_thirty_cm_stop_threshold(clearance, stopped):
     m = started()
     f = sample(m.c, NOW, front_observed=True)
     e = m.update(replace(f, wall=replace(f.wall, front_clearance=clearance)), NOW)

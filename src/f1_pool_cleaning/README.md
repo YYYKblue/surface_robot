@@ -1,10 +1,10 @@
 # f1_pool_cleaning：泳池沿边清洗
 
-2026-10-25 阶段 2：沿用阶段 1 的 Cartographer 固定地图定位，默认固定从 `edge_0`（第一条长边）启动；先靠墙和纠正航向，再进行直边刷墙。当前仍只使用船左侧单个滚刷，不自动换边。船体按 50 cm × 45 cm 矩形建模，稳定刷墙区间为船中心到左墙 32–36 cm，目标中心值 34 cm。
+2026-10-25 阶段 3：沿用阶段 1 的 Cartographer 固定地图定位，默认从 `edge_0`（第一条长边）启动；完成直边刷墙后自动按 `edge_0 → edge_1 → edge_2 → edge_3` 换边。船体按 50 cm × 45 cm 矩形建模，稳定刷墙区间为船中心到左墙 32–36 cm，目标中心值 34 cm。
 
 阶段 1 的软件流程已经具备：定位启动默认不创建新轨迹；操作者在 RViz2 的 `map` 坐标系使用 `2D Pose Estimate` 后，管理器通过 Cartographer `/start_trajectory` 创建带初始位姿的纯定位轨迹。启动入口同时运行栅格地图节点发布 `/map`，管理器检查轨迹状态、`map → base_link` TF 新鲜度、地图边界、雷达有效率和扫描/地图重合，并在稳定窗口后发布 `/pool_cleaning/localization_status` 的 `LOCALIZATION_READY`。当前记录为正常流程验证通过；异常场景和重复验收证据仍需按开发验收文档补齐。
 
-当前执行器参数：滚刷 30%，第五电机双向推力 ±30%，滚刷角度门控 ±10°，四主电机从偏角超过 ±3° 就开始纠偏，开刷与纠偏可以同时进行。中心墙距 32–36 cm 时第五路关闭并允许滚刷工作；超出该区间时先侧推调整。
+当前执行器参数：滚刷 30%，第五电机双向推力 ±30%，滚刷角度门控 ±10°，四主电机从偏角超过 ±3° 就开始纠偏，开刷与纠偏可以同时进行。中心墙距 32–36 cm 时第五路关闭并允许滚刷工作；超出该区间时先侧推调整。换边时滚刷关闭，`REVERSE` 与向右侧推同时持续 0.5 s。
 
 大偏角丢墙修复：本任务的墙线识别范围从约 ±34.4° 扩大到 ±70°，相邻有效观测的角度变化容差从约 11.5° 调整为 30°。这是感知识别范围，滚刷门控仍为 ±10°。运行中收到新鲜但未拟合到墙的扫描时进入 `WAIT_WALL`，全部输出关闭，保持任务与租约，最多等待 1.5 秒；墙线恢复后自动继续纠偏或刷洗。超过等待时间进入 `PAUSED`。初次 start 仍需有效墙线；取得租约的瞬间若短暂丢墙，同样进入等待恢复。
 
@@ -20,40 +20,40 @@
 | 中心到左墙 **>36 cm** | 第五电机向左推，默认 **+30%** |
 | 中心到左墙 **<32 cm** | 第五电机向右推，默认 **-30%** |
 | 中心墙距 **32–36 cm**，包括边界 | 第五电机关闭；不保留上一次推力 |
-| 船中心到前墙 **≤50 cm** | 滚刷、主电机、第五电机全部关闭，进入 `STOPPED` |
+| 船中心到前墙 **≤30 cm** | 滚刷、主电机、第五电机全部关闭，进入换边停稳流程 |
 
 `ψ = WallObservation.tangent_rad` 是左墙切线相对船头的夹角；正误差发 LEFT，负误差发 RIGHT。每个新墙观测都重新计算航向与侧推，纠偏时第五电机仍工作。超出 ±10° 也可以启动任务，先纠偏再开滚刷。
 
 船头转向左墙时，正确左墙观测应为负角度，控制器应发 RIGHT（`direction=4`）。`CORRECT_HEADING` 现在可以同时开启滚刷：角度在 3° 到 10° 之间时两者同时工作。左右指令与实船转向的对应关系仍需用现场 CTRL 和实际动作确认，软件方向表本身不能证明电机接线与安装正确。
 
-阶段 2 仍不启用转移扫掠验证、刷毛压缩闭环、刚性最小墙距门控、定位协方差门槛或固定 PWM/时间替代反馈；地图边身份与左墙目标关联已经由 `EdgeTarget` 恢复，防止丢墙后误认相邻墙。墙线提取仍输出实际有效性；只有有效墙线才能发运动输出，短暂拟合失败可等待恢复。保留数据新鲜度、通信超时、执行器命令期限、遥控接管、取消/暂停关闭输出。
+换边阶段保留转移数据新鲜度、通信超时、执行器命令期限、遥控接管和取消/暂停关闭输出；转角使用连续地图航向反馈，不用固定时间代替 90°完成判断。地图边身份与左墙目标关联由 `EdgeTarget` 恢复，防止换边后误认相邻墙。
 
-默认无固定运行时长上限。阶段 2 的启动门控在 `LOCALIZATION_CHECK` 中完成定位检查和地图选边，随后状态序列为 `APPROACH_WALL → APPROACH_EDGE → FOLLOW ↔ CORRECT_HEADING/WAIT_WALL → EDGE_STOP`；临时丢墙为 `WAIT_WALL`。`wall_recovery_sec` 默认 1.5 秒；持续丢墙、反馈过期、定位退化或通信异常进入 `PAUSED`。手动暂停、取消和过期数据不会因反馈恢复而自动续跑；暂停后必须 `cancel` 再 `start`。
+默认无固定运行时长上限。启动门控在 `LOCALIZATION_CHECK` 中完成定位检查和地图选边，直边状态序列为 `APPROACH_WALL → APPROACH_EDGE → FOLLOW ↔ CORRECT_HEADING/WAIT_WALL → EDGE_STOP`，换边状态序列为 `VERIFY_STOP → MOVE_INWARD → VERIFY_STOP → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`；临时丢墙为 `WAIT_WALL`。`wall_recovery_sec` 默认 1.5 秒；持续丢墙、反馈过期、定位退化或通信异常进入 `PAUSED`。手动暂停、取消和过期数据不会因反馈恢复而自动续跑；暂停后必须 `cancel` 再 `start`。
 
-阶段 2 启动时，操作者只需将船粗略放在 `edge_0` 附近并在 RViz2 发布大致初始位姿。当前配置将 `default_edge_id` 固定为 `edge_0`；控制器仍会检查位姿距离、左侧关系和边走廊，靠墙阶段关闭滚刷并使用第五路调整到 32–36 cm，同时纠正航向，航向稳定后再用滚刷沿边推进到入口。位姿不在 `edge_0` 可用范围、墙位于右侧或目标墙不匹配时拒绝启动。阶段 2 到达当前边端点后停车，不自动转移到下一条边。
+任务启动时，操作者只需将船粗略放在 `edge_0` 附近并在 RViz2 发布大致初始位姿。当前配置将 `default_edge_id` 固定为 `edge_0`；控制器仍会检查位姿距离、左侧关系和边走廊，靠墙阶段关闭滚刷并使用第五路调整到 32–36 cm，同时纠正航向，航向稳定后再用滚刷沿边推进到入口。位姿不在 `edge_0` 可用范围、墙位于右侧或目标墙不匹配时拒绝启动。每条边到达 30 cm 端点后自动换到下一条边，第四条边完成后进入 `COMPLETE`。
 
 ## 前墙距离
 
 现有雷达安装有船头盲区，因此仍用已有冻结地图的 `map → base_link` 位姿计算前墙距离；这版没有改雷达外参。默认地图矩形长约 2.883 m、宽约 1.520 m，参数来自 `20261021_145054` 地图。
 
-前墙距离仍保留给旧单边兼容模式；阶段 2 的端点判断改用当前 `EdgeSegment` 的地图投影。令池坐标为 `x`、船头与长轴夹角为 `yaw`：
+前墙距离统一用于四条边的端点判断；当前边使用 `EdgeSegment` 的地图投影。令池坐标为 `x`、船头与长轴夹角为 `yaw`：
 
 ```text
 朝长轴正向：船中心到前墙距离 = length - x
 朝长轴反向：船中心到前墙距离 = x
 ```
 
-船体位姿随矩形地图一致旋转 180° 时，计算出的前墙中心距离相同。有效前方雷达观测给出的是船体前缘净空，控制器会加回船长半尺寸后再与 50 cm 中心距离阈值比较；`front_observed=false` 不阻止启动，不会把未知距离当成零。
+船体位姿随矩形地图一致旋转 180° 时，计算出的前墙中心距离相同。有效前方雷达观测给出的是船体前缘净空，控制器会加回船长半尺寸后再与 30 cm 中心距离阈值比较；`front_observed=false` 不阻止启动，不会把未知距离当成零。
 
-50 cm 指 **base_link 中心到前方墙**。阶段 2 的刷墙目标是 **base_link 中心到左墙 32–36 cm**；左侧刷尖约 33 cm，34 cm 作为名义中心值。地图距离仍依赖真实定位精度，不能发现雷达盲区新增障碍。
+30 cm 指 **base_link 中心到前方墙**。刷墙目标是 **base_link 中心到左墙 32–36 cm**；左侧刷尖约 33 cm，34 cm 作为名义中心值。到达边端点后同时发出 `REVERSE` 和向右侧推 0.5 s，再使用地图航向反馈完成右转。地图距离仍依赖真实定位精度，不能发现雷达盲区新增障碍。
 
 ## 包内职责与接口
 
-后续四边和多边形开发按[开发与验收文档](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)执行。当前本包一次只执行一条地图边，提供边选择、靠墙/入口调整、沿边控制和单边覆盖区间，不提供自动换边或全池完成状态。
+后续四边和多边形开发按[开发与验收文档](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)执行。当前本包执行矩形四条地图边，提供边选择、靠墙/入口调整、沿边控制、自动换边和按边覆盖区间记录。
 
 - `perception.py` / `perception_node.py`：墙线拟合、关联和空间观测；`perception_config.py` 只含感知与几何参数。
 - `geometry.py`：矩形/有序边界、顺时针左墙边段、投影和边选择。
-- `mission.py` / `config.py`：单边段状态机、靠墙/入口调整和控制参数，尚未扩展自动换边。
+- `mission.py` / `config.py`：边段状态机、靠墙/入口调整、停稳、后退右推、右转和四边任务参数。
 - `controller_node.py` / `lease.py`：任务服务、状态、预览与 bridge 租约输出。
 - `ros_support.py` / `runner.py`：公共消息转换、时间戳和节点退出处理。
 - `localization.py` / `localization_node.py`：RViz 初始位姿、Cartographer 轨迹生命周期和定位就绪门控。
@@ -96,7 +96,7 @@ colcon test-result --test-result-base build/f1_pool_cleaning --verbose
 
 演示和测试使用合成反馈、localhost DDS 和模拟 bridge，不连接串口或实机。
 
-阶段 2 本地验证重点：边界几何、地图边选择、目标墙关联、32–36 cm 墙距控制、粗放置后的入口调整和 `EDGE_STOP`。实船仍必须先完成无刷靠墙、单边和重复动作试验，不能把仿真轨迹当作清洁效果证据。具体分项与复测说明见[开发与验收文档](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)。
+阶段 3 本地验证重点：边界几何、目标墙关联、30 cm 端点停车、停稳确认、0.5 s 后退右推、右转航向反馈和四边编排。实船仍必须先完成无刷单动作和重复转移试验，不能把仿真轨迹当作清洁效果证据。具体分项与复测说明见[开发与验收文档](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)。
 
 ## 启动
 
@@ -143,6 +143,6 @@ ros2 service call /pool_cleaning/cancel std_srvs/srv/Trigger '{}'
 
 状态还包含 `wall_angle_deg`、`wall_valid`、`wall_reason`、`heading_band_deg`、`map_front_clearance_m`、刷盘/侧推请求及租约状态；`localization_ready`、`localization_state`、`localization_reason` 来自定位管理器。`wall_reason` 保留感知的拒绝原因，持续丢墙暂停时 `reason` 也会带出该原因。查看单条完整状态：`ros2 topic echo /pool_cleaning/status --once --full-length`。预览 token 始终为空。`STOPPED` 只表示输出已关闭，不代表船体已经停稳。
 
-阶段 2 状态还包含 `current_edge_id`、`edge_progress_m`、`edge_entry_m`、`edge_stop_m`、`cleaned_intervals` 和 `uncovered_intervals`。覆盖区间的统计基准是 `left_brush_contact_centerline`，只能表示左侧滚刷接触中心线的连续轨迹，不代表全池面积完成。
+阶段 3 状态还包含 `current_edge_id`、`transfer_next_edge`、`completed_edges`、`edge_progress_m`、`edge_entry_m`、`edge_stop_m`、`cleaned_intervals` 和按边覆盖记录。覆盖区间的统计基准是 `left_brush_contact_centerline`，只能表示左侧滚刷接触中心线的连续轨迹，不代表全池面积完成。
 
 请使用本包更新后的默认配置。历史诊断目录中的 `rectangle_current_side.yaml` 仍保存当时的 ±3°、8 秒限制，不是本版测试参数。

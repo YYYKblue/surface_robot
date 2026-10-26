@@ -19,8 +19,9 @@ class Config:
     wall_target_m: float = .34
     side_on_distance_m: float = .36
     side_off_distance_m: float = .32
-    # Stop when the boat centre is about 50 cm from the front wall.
-    front_stop_m: float = .50
+    # Stop when the boat centre is about 30 cm from the front wall.  This is
+    # the common endpoint trigger for every rectangle edge.
+    front_stop_m: float = .30
     heading_deadband_rad: float = math.radians(10.)
     heading_correction_deadband_rad: float = math.radians(3.)
     pose_max_age_sec: float = .25
@@ -40,13 +41,22 @@ class Config:
     brush_x_m: float = .10
     brush_tip_y_m: float = .33
     brush_compression_m: float = .01
-    # Stage-2 map-edge approach limits.
+    # Map-edge approach and transfer limits.
     edge_select_max_distance_m: float = .85
     # Broad initial association gate; precise heading is corrected before brush-on.
     edge_heading_tolerance_rad: float = math.radians(70.)
     edge_progress_jump_m: float = .35
     corner_exclusion_m: float = .30
-    endpoint_margin_m: float = .50
+    endpoint_margin_m: float = .30
+    # Stage-3 transfer motion.  The reverse and right-side push are issued
+    # together for this short, explicitly bounded interval.
+    transfer_move_duration_sec: float = .50
+    transfer_stop_confirm_sec: float = .20
+    transfer_stop_position_tolerance_m: float = .03
+    transfer_stop_heading_tolerance_rad: float = math.radians(5.)
+    transfer_timeout_sec: float = 8.0
+    transfer_turn_timeout_sec: float = 4.0
+    transfer_turn_tolerance_rad: float = math.radians(5.)
 
     def validate(self):
         signed = ("origin_x_m", "origin_y_m", "axis_yaw_rad", "run_timeout_sec")
@@ -74,6 +84,13 @@ class Config:
                 or not 0 < self.edge_heading_tolerance_rad < math.pi / 2
                 or self.edge_progress_jump_m <= 0
                 or self.corner_exclusion_m < 0 or self.endpoint_margin_m <= 0
+                or self.transfer_move_duration_sec <= 0
+                or self.transfer_stop_confirm_sec <= 0
+                or self.transfer_stop_position_tolerance_m <= 0
+                or not 0 < self.transfer_stop_heading_tolerance_rad < math.pi / 2
+                or self.transfer_timeout_sec <= 0
+                or self.transfer_turn_timeout_sec <= 0
+                or not 0 < self.transfer_turn_tolerance_rad < math.pi / 2
                 or self.brush_x_m < -self.hull_half_length_m
                 or abs(self.brush_tip_y_m) <= self.hull_half_width_m
                 or self.brush_compression_m < 0):
