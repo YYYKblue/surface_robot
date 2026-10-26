@@ -228,15 +228,9 @@ class PoolModel:
         index = self.edges.index(edge)
         return self.edges[index + 1] if index + 1 < len(self.edges) else None
 
-    def pose_boundary_clearance(self, pose, hull_half_length, hull_half_width,
-                                brush_x_m=None, brush_tip_y_m=None):
-        """Return the minimum signed boundary clearance of a pose envelope.
-
-        The canonical clockwise boundary has the pool interior on each edge's
-        right side.  Checking all hull corners and the brush contact point is a
-        conservative static boundary gate for transfer motion; it does not
-        claim that unseen dynamic obstacles are free space.
-        """
+    def pose_edge_clearance(self, pose, edge, hull_half_length, hull_half_width,
+                            brush_x_m=None, brush_tip_y_m=None):
+        """Return the signed clearance of a pose envelope from one boundary edge."""
         yaw = getattr(pose, "yaw", 0.)
         c, s = math.cos(yaw), math.sin(yaw)
         local_points = [(sx * hull_half_length, sy * hull_half_width)
@@ -247,8 +241,20 @@ class PoolModel:
                   for x, y in local_points]
         clearance = math.inf
         for px, py in points:
-            for edge in self.edges:
-                dx, dy = px - edge.start[0], py - edge.start[1]
-                clearance = min(clearance, -(dx * edge.left_normal[0]
-                                               + dy * edge.left_normal[1]))
+            dx, dy = px - edge.start[0], py - edge.start[1]
+            clearance = min(clearance, -(dx * edge.left_normal[0]
+                                           + dy * edge.left_normal[1]))
         return clearance
+
+    def pose_boundary_clearance(self, pose, hull_half_length, hull_half_width,
+                                brush_x_m=None, brush_tip_y_m=None):
+        """Return the minimum signed boundary clearance of a pose envelope.
+
+        The canonical clockwise boundary has the pool interior to each edge's
+        right side.  Checking all hull corners and the brush contact point is a
+        conservative static boundary gate for transfer motion; it does not
+        claim that unseen dynamic obstacles are free space.
+        """
+        return min(self.pose_edge_clearance(
+            pose, edge, hull_half_length, hull_half_width,
+            brush_x_m, brush_tip_y_m) for edge in self.edges)

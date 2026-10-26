@@ -230,7 +230,7 @@ class Mission:
         if self.edge.id not in self.completed_edges:
             self.completed_edges.append(self.edge.id)
 
-    def _begin_transfer(self, f, now):
+    def _begin_transfer(self, f, now, boundary_triggered=False, boundary_clearance=None):
         next_edge = self.pool.next_edge(self.edge)
         self._mark_edge_completed()
         if next_edge is None:
@@ -244,8 +244,12 @@ class Mission:
         self.transfer_turn_target_yaw = next_edge.yaw_rad
         self.transfer_turn_started_ns = None
         self.phase = "EDGE_STOP"
-        self.reason = (f"{self.edge.id} stopped at {self.c.front_stop_m:.2f} m; "
-                       f"preparing transfer to {next_edge.id}")
+        if boundary_triggered:
+            self.reason = (f"{self.edge.id} reached corner envelope clearance "
+                           f"{boundary_clearance:.3f} m; preparing transfer to {next_edge.id}")
+        else:
+            self.reason = (f"{self.edge.id} stopped at {self.c.front_stop_m:.2f} m; "
+                           f"preparing transfer to {next_edge.id}")
         self.last_effort = self._stop_effort(now, f.pose)
 
     def _finish_transfer_to_next_edge(self, pose, now):
@@ -437,8 +441,15 @@ class Mission:
         self.last_update_ns = now
 
         front_center_distance = self.edge.length_m - projection.s_m
-        if front_center_distance <= self.c.front_stop_m:
-            self._begin_transfer(f, now)
+        next_boundary_edge = self.pool.edges[(self.pool.edges.index(self.edge) + 1)
+                                             % len(self.pool.edges)]
+        next_boundary_clearance = self.pool.pose_edge_clearance(
+            f.pose, next_boundary_edge, self.c.hull_half_length_m,
+            self.c.hull_half_width_m, self.c.brush_x_m, self.c.brush_tip_y_m)
+        boundary_triggered = next_boundary_clearance <= self.c.transfer_boundary_margin_m
+        if front_center_distance <= self.c.front_stop_m or boundary_triggered:
+            self._begin_transfer(f, now, boundary_triggered,
+                                 next_boundary_clearance)
             return self.last_effort
 
         if f.wall is None or f.wall.stamp_ns <= self.last_scan:

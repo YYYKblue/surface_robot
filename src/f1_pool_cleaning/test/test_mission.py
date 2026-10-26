@@ -210,6 +210,26 @@ def test_rectangle_transfer_stops_at_thirty_cm_and_combines_reverse_right_push()
     assert effort.brush_percent == c.brush_percent
 
 
+def test_rectangle_transfer_stops_early_for_heading_error_at_next_wall():
+    c = Config().validate()
+    pool = PoolModel.rectangle(c)
+    m = Mission(c)
+    assert m.configure_edge(pool, pool.edges[0])[0]
+    now = NOW
+    assert m.start(sample(c, now, along=.8, angle=math.radians(40)), now)[0]
+
+    # At 40 degrees, a 30 cm centre threshold is too late for the hull
+    # envelope.  The corner-envelope trigger must stop before that threshold.
+    now += 100_000_000
+    endpoint = sample(c, now, along=pool.edges[0].length_m - .35,
+                      angle=math.radians(40))
+    effort = m.update(endpoint, now)
+    assert m.phase == "EDGE_STOP"
+    assert m.completed_edges == ["edge_0"]
+    assert "corner envelope clearance" in m.reason
+    assert effort.direction == 0 and effort.brush_percent == 0
+
+
 def test_rectangle_transfer_turn_timeout_pauses_without_auto_resume():
     c = Config(transfer_turn_timeout_sec=.2).validate()
     pool = PoolModel.rectangle(c)

@@ -48,6 +48,10 @@ class Config:
     edge_progress_jump_m: float = .35
     corner_exclusion_m: float = .30
     endpoint_margin_m: float = .30
+    # Begin a corner transfer before the next wall reaches the hull envelope.
+    # This is evaluated against the next edge and does not use the current
+    # wall's brush clearance.
+    transfer_boundary_margin_m: float = .05
     # Stage-3 transfer motion.  The reverse and right-side push are issued
     # together for this short, explicitly bounded interval.
     transfer_move_duration_sec: float = .50
@@ -85,6 +89,7 @@ class Config:
                 or not 0 < self.edge_heading_tolerance_rad < math.pi / 2
                 or self.edge_progress_jump_m <= 0
                 or self.corner_exclusion_m < 0 or self.endpoint_margin_m <= 0
+                or self.transfer_boundary_margin_m <= 0
                 or self.transfer_move_duration_sec <= 0
                 or self.transfer_timeout_sec < 0
                 or self.transfer_turn_timeout_sec < 0
