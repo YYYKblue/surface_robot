@@ -34,7 +34,8 @@ colcon build --symlink-install --packages-up-to f1_operator_gateway
 source install/local_setup.bash
 
 ros2 launch f1_nano_bridge bridge.launch.py \
-  serial_enabled:=true motion_enabled:=true direction_confirmed:=true
+  serial_enabled:=true motion_enabled:=true direction_confirmed:=true \
+  allow_fifth_thruster:=true
 ros2 launch f1_operator_gateway operator_gateway.launch.py bind_address:=0.0.0.0
 ```
 
@@ -44,6 +45,7 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py bind_address:=0.0.0.0
 
 - App 发送最新手动输入，不发送 token，也不调用 ROS 服务。
 - 网关只保留一个活动操作端；第二个连接不能发送手动指令。
+- `allow_fifth_thruster` 默认在 `config/bridge.yaml` 中启用，因此 Qt App 可使用第五电推的 `-100%` 到 `100%` 输入；如需硬件锁定可改为 `false`。
 - App 停止发送输入、WebSocket 断开或网关退出时，网关释放内部会话。
 - 重连后不会恢复上一次动作；必须重新产生新输入。
 - RC 接管、epoch 改变、串口错误、CTRL/ACK 超时和原始命令过期仍会停止输出。

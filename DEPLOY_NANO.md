@@ -126,7 +126,7 @@ CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
   --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 ```
 
-同时限制包间和包内并行度，减小 Nano 编译时的内存占用。成功时应看到 `4 packages finished`，且没有 failed/aborted。失败时保留输出，先定位首个报错；只有编译成功后才加载本工作空间环境。
+同时限制包间和包内并行度，减小 Nano 编译时的内存占用。成功时应看到 `5 packages finished`，且没有 failed/aborted。失败时保留输出，先定位首个报错；只有编译成功后才加载本工作空间环境。
 
 ## 6. Nano：检查安装结果
 

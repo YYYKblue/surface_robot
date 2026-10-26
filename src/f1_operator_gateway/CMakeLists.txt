@@ -13,6 +13,7 @@ install(FILES README.md DESTINATION share/${PROJECT_NAME})
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(protocol test/test_protocol.py)
+  ament_add_pytest_test(node_intent test/test_node_intent.py)
 endif()
 
 ament_package()

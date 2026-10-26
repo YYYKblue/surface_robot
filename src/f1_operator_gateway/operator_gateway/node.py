@@ -7,6 +7,7 @@ import json
 import math
 import queue
 import time
+from dataclasses import replace
 
 import rclpy
 from nav_msgs.msg import OccupancyGrid
@@ -189,6 +190,14 @@ class OperatorGateway(Node):
     def _input(self, client_id, value: ManualInput):
         if value.sequence <= self.last_app_seq:
             return
+        if value.thrust_enabled and self.control_state.get("allow_fifth_thruster") is not True:
+            self.hub.send(client_id, {
+                "type": "reply", "op": "manual_input", "success": False,
+                "message": "Nano 未确认第五电推已启用（allow_fifth_thruster=true）",
+            })
+            # Do not forward an unsupported fifth-motor field. Keep the
+            # chassis command alive so the rest of the controls still work.
+            value = replace(value, thrust_enabled=False, thrust_percent=0)
         self.last_input, self.last_input_at = value, time.monotonic()
         if not self.token and self._needs_control(value):
             self._acquire_if_ready()

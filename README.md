@@ -48,7 +48,8 @@ source /opt/ros/humble/setup.bash
 source /home/nvidia/surface_ws/install/local_setup.bash
 
 ros2 launch f1_nano_bridge bridge.launch.py \
-  serial_enabled:=true motion_enabled:=true direction_confirmed:=true
+  serial_enabled:=true motion_enabled:=true direction_confirmed:=true \
+  allow_fifth_thruster:=true
 ros2 launch f1_operator_gateway operator_gateway.launch.py bind_address:=0.0.0.0
 ```
 

@@ -6,6 +6,8 @@ nano_bridge:
     motion_enabled: false
     firmware_profile: f1_direction_gear_v2
     direction_confirmed: false
-    allow_fifth_thruster: false
+    # The Qt App can use the signed -100..100 fifth-thruster command.
+    # Set false when this actuator must be physically locked out.
+    allow_fifth_thruster: true
     imu_frame_id: imu_link
     use_sim_time: false
