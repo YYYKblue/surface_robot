@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>f1_l_cleaning</name>
+  <version>0.1.0</version>
+  <description>Two-wall open L cleaning route using the shared pool controller.</description>
+  <maintainer email="bboss@example.com">bboss</maintainer>
+  <license>Proprietary</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <exec_depend>f1_pool_cleaning</exec_depend>
+  <exec_depend>f1_nano_bridge</exec_depend>
+  <exec_depend>f1_mapping_bringup</exec_depend>
+  <exec_depend>f1_interfaces</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>python3-yaml</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

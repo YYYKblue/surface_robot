@@ -1,0 +1,21 @@
+l_perception:
+  ros__parameters:
+    scan_frame: pavo2s_frame
+    base_frame: base_link
+    lidar_x_m: -0.2143195
+    lidar_y_m: 0.0
+    lidar_yaw_rad: 3.141592653589793
+    geometry_confirmed: true
+    hull_length_m: 0.50
+    hull_width_m: 0.45
+    brush_x_m: 0.10
+    brush_tip_y_m: 0.33
+    brush_compression_m: 0.01
+    brush_max_compression_m: 0.015
+    max_wall_angle_rad: 1.2217304763960306
+    association_angle_rad: 0.5235987755982988
+    association_timeout_sec: 2.0
+    min_support_m: 0.30
+    stopping_distance_m: 0.25
+    front_slow_distance_m: 1.0
+    turn_sweep_rad: 0.20

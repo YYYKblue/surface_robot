@@ -1,0 +1,49 @@
+l_controller:
+  ros__parameters:
+    output_enabled: false
+    edge_task_enabled: true
+    use_map_tf: true
+    require_localization_ready: true
+    localization_status_max_age_sec: 0.60
+    map_frame: map
+    base_frame: base_link
+    # Open A -> B -> C; map lidar_20261026_170703, resolution 0.05 m.
+    # Fitted wall points, not surveyed positions. Never close C -> A.
+    # A: right end of lower wall; B: lower-left corner; C: upper end of left wall.
+    route_xy: [-1.801431, 0.681948, -10.462431, -0.786552, -11.917931, 10.962448]
+    default_edge_id: edge_0
+    # Coarse map bounds only; edge progress comes from route_xy.
+    origin_x_m: -14.0
+    origin_y_m: -2.5
+    axis_yaw_rad: 0.0
+    length_m: 15.0
+    width_m: 16.0
+    wall_target_m: 0.34
+    side_on_distance_m: 0.36
+    side_off_distance_m: 0.32
+    hull_half_length_m: 0.25
+    hull_half_width_m: 0.225
+    brush_x_m: 0.10
+    brush_tip_y_m: 0.33
+    brush_compression_m: 0.01
+    edge_select_max_distance_m: 0.85
+    edge_heading_tolerance_rad: 1.2217304763960306
+    edge_target_distance_tolerance_m: 0.20
+    edge_target_angle_tolerance_rad: 1.2217304763960306
+    edge_progress_jump_m: 0.35
+    corner_exclusion_m: 0.30
+    endpoint_margin_m: 0.30
+    front_stop_m: 0.30
+    # Reuse simultaneous reverse + right push, then feedback-based right turn.
+    transfer_move_duration_sec: 0.50
+    transfer_timeout_sec: 0.0
+    transfer_turn_timeout_sec: 0.0
+    transfer_turn_tolerance_rad: 0.3490658503988659
+    fifth_left_sign: 1
+    side_percent: 30.0
+    brush_percent: 30.0
+    heading_deadband_rad: 0.17453292519943295
+    heading_correction_deadband_rad: 0.05235987755982989
+    turn_speed_percent: 25
+    run_timeout_sec: 0.0
+    wall_recovery_sec: 1.5

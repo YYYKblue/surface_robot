@@ -29,6 +29,7 @@ def nodes(context):
     occupancy_grid = executable(
         cartographer_lib, ("cartographer_occupancy_grid_node", "occupancy_grid_node"))
     parameters = [{"use_sim_time": value("use_sim_time") == "true"}]
+    localization_config = value("localization_config")
     result = []
     if value("publish_lidar_tf") == "true":
         mounting = load_lidar_planar_transform(value("lidar_extrinsics_file"))
@@ -50,15 +51,28 @@ def nodes(context):
                    "-publish_period_sec", value("occupancy_grid_publish_period_sec")]))
     # The manager starts a trajectory only after a valid RViz initial pose. It
     # also publishes the readiness gate consumed by the cleaning controller.
+    manager_parameters = [*parameters, {
+        "map_frame": "map", "base_frame": "base_link",
+        "configuration_directory": str(share / "config"),
+        "configuration_basename": "pool_localization.lua",
+        "reference_trajectory_id": int(value("reference_trajectory_id")),
+        "scan_topic": value("scan_topic"),
+    }]
+    if localization_config:
+        manager_parameters.append(localization_config)
+    manager_remappings = []
+    if value("cleaning_prefix"):
+        prefix = value("cleaning_prefix").strip("/")
+        if not prefix or "/" in prefix:
+            raise ValueError("cleaning_prefix must be one nonempty ROS name segment")
+        manager_remappings = [
+            (f"/pool_cleaning/{name}", f"/{prefix}/{name}")
+            for name in ("localization_status", "localization_ready",
+                         "set_initial_pose", "relocalize")]
     result.append(Node(package="f1_pool_cleaning", executable="pool_localization",
         name="pool_localization_manager", output="screen", parameters=[
-            *parameters,
-            {"map_frame": "map", "base_frame": "base_link",
-             "configuration_directory": str(share / "config"),
-             "configuration_basename": "pool_localization.lua",
-             "reference_trajectory_id": int(value("reference_trajectory_id")),
-             "scan_topic": value("scan_topic")},
-        ]))
+            *manager_parameters,
+        ], remappings=manager_remappings))
     if value("start_rviz") == "true":
         result.append(Node(package="rviz2", executable="rviz2", name="pool_rviz2",
                             output="screen", arguments=["-d", value("rviz_config")]))
@@ -72,6 +86,10 @@ def generate_launch_description():
         DeclareLaunchArgument("start_trajectory", default_value="false", choices=["true", "false"],
                               description="Compatibility mode; stage 1 starts after /initialpose"),
         DeclareLaunchArgument("reference_trajectory_id", default_value="0"),
+        DeclareLaunchArgument("localization_config", default_value="",
+                              description="Optional map-specific LocalizationConfig YAML"),
+        DeclareLaunchArgument("cleaning_prefix", default_value="",
+                              description="Remap the localization manager's cleaning gate under this prefix"),
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),
         DeclareLaunchArgument("occupancy_grid_resolution", default_value="0.05"),
         DeclareLaunchArgument("occupancy_grid_publish_period_sec", default_value="1.0"),

@@ -235,7 +235,7 @@ class Mission:
         self._mark_edge_completed()
         if next_edge is None:
             self.phase = "COMPLETE"
-            self.reason = "all rectangle edges completed"
+            self.reason = "all configured edges completed"
             self.last_effort = self._stop_effort(now, f.pose)
             return
         self.transfer_next_edge = next_edge

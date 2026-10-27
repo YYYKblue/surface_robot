@@ -23,15 +23,18 @@ from .lease import Lease
 
 
 class PoolController(Node):
+    NODE_NAME = "pool_controller"
+    EDGE_TASK_DEFAULT = False
+
     def __init__(self, **kwargs):
-        super().__init__("pool_controller", **kwargs)
+        super().__init__(self.NODE_NAME, **kwargs)
         for name, default in (("output_enabled", False), ("use_map_tf", False),
                               ("require_localization_ready", False),
                               ("localization_status_max_age_sec", .60)):
             self.declare_parameter(name, default, ParameterDescriptor(read_only=True))
         self.live = self.get_parameter("output_enabled").value
         self.use_map_tf = self.get_parameter("use_map_tf").value
-        self.edge_task_enabled = self._declare_readonly("edge_task_enabled", False)
+        self.edge_task_enabled = self._declare_readonly("edge_task_enabled", self.EDGE_TASK_DEFAULT)
         self.require_localization_ready = (self.use_map_tf and
                                             self.get_parameter("require_localization_ready").value)
         self.localization_status_max_age_sec = self.get_parameter("localization_status_max_age_sec").value

@@ -159,6 +159,46 @@ class PoolModel:
         return cls(edges, frame=frame)
 
     @classmethod
+    def from_polyline(cls, points, *, wall_target_m=.34, corner_exclusion_m=.30,
+                      endpoint_margin_m=.30, frame="map"):
+        """Build an open route, preserving the supplied direction and endpoints.
+
+        Unlike ``from_boundary``, this never closes or reorders the route.
+        The caller must choose a direction that keeps the wall on the left.
+        """
+        points = [tuple(float(v) for v in p) for p in points]
+        if len(points) < 2 or any(not _finite_point(p) for p in points):
+            raise ValueError("polyline needs at least two finite [x, y] points")
+        if len(set(points)) != len(points):
+            raise ValueError("open polyline must not repeat or close its vertices")
+        if (not all(math.isfinite(v) for v in
+                    (wall_target_m, corner_exclusion_m, endpoint_margin_m))
+                or wall_target_m <= 0 or corner_exclusion_m < 0
+                or endpoint_margin_m <= 0):
+            raise ValueError("invalid polyline wall distance or endpoint margins")
+        segments = list(zip(points, points[1:]))
+        for i, (a, b) in enumerate(segments):
+            for j in range(i + 2, len(segments)):
+                if cls._segments_cross(a, b, *segments[j]):
+                    raise ValueError("polyline self-intersects")
+        edges = []
+        margin = max(corner_exclusion_m, endpoint_margin_m)
+        for index, (start, end) in enumerate(segments):
+            vx, vy = end[0] - start[0], end[1] - start[1]
+            length = math.hypot(vx, vy)
+            if length <= max(1e-6, 2 * margin):
+                raise ValueError(f"edge_{index} is too short for configured endpoint margins")
+            tx, ty = vx / length, vy / length
+            edges.append(EdgeSegment(
+                id=f"edge_{index}", start=start, end=end, length_m=length,
+                tangent=(tx, ty), left_normal=(-ty, tx), yaw_rad=math.atan2(ty, tx),
+                entry_s_m=margin, clean_start_s_m=corner_exclusion_m,
+                clean_end_s_m=length - corner_exclusion_m, stop_s_m=length - margin,
+                wall_target_m=wall_target_m, corner_exclusion_m=corner_exclusion_m,
+                endpoint_margin_m=endpoint_margin_m))
+        return cls(edges, frame=frame)
+
+    @classmethod
     def rectangle(cls, config, **kwargs):
         """Build the legacy map rectangle in the canonical clockwise route.
 
