@@ -122,7 +122,10 @@ class OperatorGateway(Node):
                                          1 - 2 * (orientation.y * orientation.y + orientation.z * orientation.z))},
             "data": data, "revision": self.map_revision,
         }
-        self.hub.broadcast({"type": "map", **self.map_data})
+        # Keep the map payload nested like telemetry.  The Qt app also accepts
+        # the old flattened form so an app and gateway can be upgraded in
+        # either order.
+        self.hub.broadcast({"type": "map", "map": self.map_data})
 
     def _scan(self, message):
         ranges = []
@@ -172,7 +175,7 @@ class OperatorGateway(Node):
         if packet["op"] == "hello":
             self.hub.send(client_id, {"type": "hello", "protocol": "f1-operator-v1", "telemetry_hz": 10})
             if self.map_data:
-                self.hub.send(client_id, {"type": "map", **self.map_data})
+                self.hub.send(client_id, {"type": "map", "map": self.map_data})
             return
         if packet["op"] in ("manual_input", "manual_stop", "task"):
             if self.active_client not in (None, client_id):
