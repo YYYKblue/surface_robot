@@ -10,11 +10,11 @@
 | `f1_nano_bridge` | F103 串口、控制状态、ACK、IMU 和 ROS 执行器接口 |
 | `f1_operator_gateway` | Qt App 的 WebSocket 控制与遥测网关 |
 | `f1_mapping_bringup` | Cartographer 2D 纯雷达建图 |
-| `f1_pool_cleaning` | 当前单边沿墙清洗任务 |
+| `f1_pool_cleaning` | 矩形水池四边自动清洁一周任务 |
 
 旧 Windows UI、旧 ZMQ 网关、`f1-ui-v2` 协议及其测试已经删除。硬件桥仍保留内部 ROS 控制会话和固件超时保护，但这些机制不暴露给 App。
 
-清洗任务的后续开发、阶段门槛和实船验收顺序见[沿边清洗开发与验收文档](docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)。
+当前 `f1_pool_cleaning` 已实现矩形水池自动清洁一周：从 `edge_0` 启动，按顺时针完成 `edge_0 → edge_1 → edge_2 → edge_3`，自动完成三次换边，最后进入 `COMPLETE`，并按边记录完成列表和滚刷接触中心线覆盖区间。定位、输出门控、暂停和取消仍按[沿边清洗开发与验收文档](docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)执行；实船清洁效果与重复验收证据单独归档。
 
 ## 新 App 链路
 

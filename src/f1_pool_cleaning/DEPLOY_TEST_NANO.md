@@ -1,6 +1,6 @@
-# Nano：阶段 3 矩形四边换边与左侧滚刷测试
+# Nano：阶段 4 矩形四边自动清洁一周部署与验收
 
-更新：2026-10-25。阶段 3 使用冻结地图定位，默认从 `edge_0`（第一条长边）启动，并按顺时针完成四条边。船体按长 50 cm、宽 45 cm 建模，左侧唯一滚刷的稳定中心墙距为 32–36 cm，目标 34 cm。粗略放船并在 RViz2 发布大致初始位姿后，Cartographer 稳定输出 `map → base_link`，控制器检查 `edge_0` 可用后先关闭滚刷靠墙并纠正航向，再调整到边入口；边端点中心距前墙 30 cm 后，关闭滚刷并进入停止指令、0.5 s 后退右推和右转流程。转向误差允许 ±20°，转向和整段换边时间超时默认关闭，不再使用换边船体安全包络暂停。
+更新：2026-10-26。阶段 4 使用冻结地图定位，默认从 `edge_0`（第一条长边）启动，并按顺时针完成四条边，自动完成三次换边后进入 `COMPLETE`。船体按长 50 cm、宽 45 cm 建模，左侧唯一滚刷的稳定中心墙距为 32–36 cm，目标 34 cm。粗略放船并在 RViz2 发布大致初始位姿后，Cartographer 稳定输出 `map → base_link`，控制器检查 `edge_0` 可用后先关闭滚刷靠墙并纠正航向，再调整到边入口；边端点中心距前墙 30 cm 后，关闭滚刷并进入停止指令、0.5 s 后退右推和右转流程。转向误差允许 ±20°，转向和整段换边时间超时默认关闭。本文同时覆盖无输出预览、单次换边和矩形一周实机记录；当前代码完成不等于已归档实船清洁效果证据。
 
 ## 1. 同步和构建
 
@@ -121,7 +121,7 @@ ros2 service call /pool_cleaning/set_initial_pose f1_interfaces/srv/SetInitialPo
 
 源地图和参数矩形必须匹配。当前长宽是约 2.883 × 1.520 m 的墙带估计；换地图后需重新给出 origin/axis/length/width。可沿任意一侧长墙、朝池坐标 +x 或 -x 行驶，按船头方向选前方短墙，左墙仍以实时雷达观测为准。
 
-## 4. 无输出预览验收
+## 4. 无输出预览与矩形一周验收
 
 终端 C：
 
@@ -164,6 +164,7 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 | 丢墙超过 1.5 秒 | `PAUSED`，`reason` 包含感知原因，需 cancel/start |
 | 可见左墙被遮挡，仅剩后方短墙 | 在恢复窗口内保持墙关联约束，禁止将短墙重标为左墙继续纠偏 |
 | 当前边投影达到 `edge_stop_m` | `EDGE_STOP`，随后执行一个停止指令周期、后退右推和右转；状态切换到下一条边 |
+| 依次完成 `edge_0`、`edge_1`、`edge_2`、`edge_3` | 最后一条边完成后进入 `COMPLETE`，`completed_edges` 包含四条边，所有输出关闭 |
 | 停止雷达或定位 | PAUSED；反馈恢复不自动续跑 |
 | 地图位姿更新或跳变 | 接受更新，重新计算前墙距离；不做额外地图墙身份验证 |
 
@@ -175,9 +176,9 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 
 当前默认 `association_timeout_sec=2.0` 长于 `wall_recovery_sec=1.5`。自定义参数时，应保持墙关联有效期大于恢复窗口与扫描时效之和，避免任务仍在等待恢复时墙身份先被清除。
 
-## 5. 单边实机测试
+## 5. 矩形一周实机测试
 
-预览核对后，退出预览控制器，保持定位与感知来源一致。地图无法发现盲区新增障碍；本轮需要人工观察前方并保留遥控接管。0.30 m 是船中心到前方墙的换边触发阈值，需记录之后的漂移和 0.5 s 后退右推位移。
+预览核对后，退出预览控制器，保持定位与感知来源一致。地图无法发现盲区新增障碍；本轮需要人工观察前方并保留遥控接管。0.30 m 是船中心到前方墙的换边触发阈值，需记录每个转移的漂移、0.5 s 后退右推位移和最终 `COMPLETE` 状态。首次现场验证建议先关闭刷盘完成一周，再按同一路线开启刷盘。
 
 单独终端启动唯一 bridge（串口路径按已有 bridge 配置；direction_confirmed 表示主轮 LEFT/RIGHT 硬件映射已经核对）：
 
@@ -194,7 +195,7 @@ ros2 launch f1_pool_cleaning pool_cleaning.launch.py output_enabled:=true
 ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 ```
 
-start 返回 acquire requested 仅表示已请求租约；看 status 的 `lease_held` 与 phase 确认实际启动。第五路按墙距输出 +30% / 0 / -30%，刷盘默认 30%。默认 `run_timeout_sec=0`，没有固定时长上限；阶段 2 也不再用固定的靠墙/入口时长限制任务，速度和边长由反馈与地图进度决定。`brush_percent` 改变推进效果也改变刷洗强度，本版不闭环控制速度。
+start 返回 acquire requested 仅表示已请求租约；看 status 的 `lease_held` 与 phase 确认实际启动。第五路按墙距输出 +30% / 0 / -30%，刷盘默认 30%。默认 `run_timeout_sec=0`，没有固定时长上限；靠墙、入口、边端点和换边均由反馈与地图进度决定。`brush_percent` 改变推进效果也改变刷洗强度，本版不闭环控制速度。
 
 使用本次默认配置；不要套用历史 `diagnostics/single_side_remote_20261023/rectangle_current_side.yaml`，该文件仍保存旧 ±3° 与 8 秒限制。
 
@@ -209,12 +210,14 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 
 遥控接管、bridge 租约撤销、串口状态失效或进程退出会停止本控制器输出。Nano 的 STOP 不能覆盖已经接管的遥控输入。
 
-录制一次完整单边：
+录制一次完整矩形一周：
 
 ```bash
-ros2 bag record -o single_side_trial \
+ros2 bag record -o rectangle_one_loop_trial \
   /pavo2_scan /tf /tf_static /pool_cleaning/wall_observation \
   /pool_cleaning/status /pool_cleaning/command_preview /f1/control_state
 ```
 
-记录选中的边、实际墙距、夹角、靠墙和入口调整时间、30% 刷盘是否能推进、第五路双向纠偏是否振荡、纠偏次数、`EDGE_STOP` 触发位置和最终滑行距离。刷尖约距中心 0.33 m，34 cm 作为名义中心值；实际接触压缩仍需实船测量。
+记录 `edge_0` 到 `edge_3` 的实际墙距、夹角、靠墙和入口调整时间、30% 刷盘是否能推进、第五路双向纠偏是否振荡、每次 `EDGE_STOP` 触发位置、后退右推位移、转向误差、每条边的 `cleaned_intervals`、最终 `completed_edges` 和未覆盖原因。刷尖约距中心 0.33 m，34 cm 作为名义中心值；实际接触压缩仍需实船测量。
+
+一周任务的现场记录至少应包含：起始初始位姿与地图版本、四条边的起止轨迹、三次换边的停止原因和漂移、暂停/取消/遥控接管记录、刷盘开关状态，以及最终状态中的 `phase=COMPLETE`、`completed_edges` 和按边覆盖区间。角部留白和短边有效清洗长度应单独标注，不能只凭最终 `COMPLETE` 声明全池面积已覆盖。

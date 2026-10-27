@@ -1,6 +1,6 @@
 # Nano 从零部署 surface_ws
 
-更新：2026-10-24。适用于 Nano 上旧 ROS 工作空间已全部删除的情况。直接创建新目录，不执行旧目录改名、迁移或清理命令。若已有旧清洗包，先按 [清洗包合并说明](src/f1_pool_cleaning/MIGRATION.md) 升级，再使用本文当前包列表。
+更新：2026-10-26。适用于 Nano 上旧 ROS 工作空间已全部删除的情况。当前 `f1_pool_cleaning` 已支持矩形水池四边自动清洁一周；具体启动和验收见[矩形四边部署与验收步骤](src/f1_pool_cleaning/DEPLOY_TEST_NANO.md)。直接创建新目录，不执行旧目录改名、迁移或清理命令。若已有旧清洗包，先按 [清洗包合并说明](src/f1_pool_cleaning/MIGRATION.md) 升级，再使用本文当前包列表。
 
 | 项目 | 统一约定 |
 | --- | --- |

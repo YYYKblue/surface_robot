@@ -1,8 +1,10 @@
 # 已建地图内的两条长边刷洗方案
 
 > 历史记录：两个清洗包现已合并为 `f1_pool_cleaning`；下文旧包名、命令与测试数量保留当时含义。当前操作见 [合并说明](../../src/f1_pool_cleaning/MIGRATION.md)。
+>
+> 更新（2026-10-26）：本文是早期“两条长边、人工换边/180°掉头”设计，已被当前矩形四边自动清洁一周流程替代。不要按本文的 `WAIT_MANUAL_TRANSFER`、`TURN_180` 或“不得报告全池清洁完成”作为当前能力判断；当前状态见[开发与验收文档](../pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)。
 
-日期：2026-10-21。状态：地图分析与开发设计；已新增独立功能包 [f1_rectangle_cleaning](../../src/f1_pool_cleaning/README.md)，提供两条长边状态机和侧推组合指令的无输出预览。实机输出、固定地图定位输入链路及自动换边尚未实现或部署。
+日期：2026-10-21。历史状态：地图分析与开发设计；当时的独立功能包（现已合并为 [`f1_pool_cleaning`](../../src/f1_pool_cleaning/README.md)）只提供两条长边状态机和侧推组合指令的无输出预览，实机输出、固定地图定位输入链路及自动换边尚未实现或部署。
 本方案依据用户新思路：人工将船放到与长墙近似平行的位置，主轮纵向前进，第五推进器横向贴墙，接近短边时停车，再换到另一条长边。
 
 2026-10-21 后续选择：采用纯雷达反馈，本矩形任务不引入 IMU 航向控制。Nano 部署与首轮感知验证见 [操作步骤](../../src/f1_pool_cleaning/DEPLOY_TEST_NANO.md)。
@@ -39,7 +41,7 @@ MPLCONFIGDIR=/tmp/f1-map-matplotlib /usr/bin/python3 tools/preview_long_wall_rou
 
 ## 路线与状态机
 
-下面列出目标自动任务；当前新包第一版在 STOP_A 后进入 WAIT_MANUAL_TRANSFER，需人工换边后显式确认，再进入 APPROACH_B。MOVE_INWARD/TURN_180 仍为待开发阶段，不通过时间推算模拟成“已实现”。
+下面列出当时的目标自动任务；当时的新包第一版在 STOP_A 后进入 WAIT_MANUAL_TRANSFER，需人工换边后显式确认，再进入 APPROACH_B。MOVE_INWARD/TURN_180 在该记录形成时仍为待开发阶段，不通过时间推算模拟成“已实现”。当前矩形四边自动一周流程已改由 `f1_pool_cleaning` 的 `EdgeSegment` 换边状态机负责。
 
 ![候选路线](long_wall_route.png)
 
@@ -91,4 +93,4 @@ https://google-cartographer-ros.readthedocs.io/en/latest/going_further.html#loca
 - 单独验证 MOVE_INWARD 和 TURN_180，检查完整路径与漂移，不从小角度纠偏测试直接推断大角度换向可用。
 - 接入第二条长边，最终才验证刷盘运行带来的负载、偏航和清洁效果。
 
-当前位置和地图尺寸足以开展上述软件开发；侧推离墙能力、方向编码和停止/转动反馈质量仍是实际自动换边前需要确认的数据。
+以上结论属于 2026-10-21 的历史计划；当前工作区已具备矩形四边自动一周的软件流程。侧推离墙能力、方向编码和停止/转动反馈质量仍是实船验收时需要确认的数据。

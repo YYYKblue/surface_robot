@@ -1,8 +1,8 @@
 # f1_pool_cleaning：泳池沿边清洗
 
-2026-10-25 阶段 3：沿用阶段 1 的 Cartographer 固定地图定位，默认从 `edge_0`（第一条长边）启动；完成直边刷墙后自动按 `edge_0 → edge_1 → edge_2 → edge_3` 换边。船体按 50 cm × 45 cm 矩形建模，稳定刷墙区间为船中心到左墙 32–36 cm，目标中心值 34 cm。
+2026-10-26 阶段 4：矩形水池自动清洁一周的软件功能已完成。任务沿用阶段 1 的 Cartographer 固定地图定位，默认从 `edge_0`（第一条长边）启动；完成直边刷墙后自动按 `edge_0 → edge_1 → edge_2 → edge_3` 换边，第四条边完成后进入 `COMPLETE`。船体按 50 cm × 45 cm 矩形建模，稳定刷墙区间为船中心到左墙 32–36 cm，目标中心值 34 cm。
 
-阶段 1 的软件流程已经具备：定位启动默认不创建新轨迹；操作者在 RViz2 的 `map` 坐标系使用 `2D Pose Estimate` 后，管理器通过 Cartographer `/start_trajectory` 创建带初始位姿的纯定位轨迹。启动入口同时运行栅格地图节点发布 `/map`，管理器检查轨迹状态、`map → base_link` TF 新鲜度、地图边界、雷达有效率和扫描/地图重合，并在稳定窗口后发布 `/pool_cleaning/localization_status` 的 `LOCALIZATION_READY`。当前记录为正常流程验证通过；异常场景和重复验收证据仍需按开发验收文档补齐。
+阶段 1 的软件流程已经具备：定位启动默认不创建新轨迹；操作者在 RViz2 的 `map` 坐标系使用 `2D Pose Estimate` 后，管理器通过 Cartographer `/start_trajectory` 创建带初始位姿的纯定位轨迹。启动入口同时运行栅格地图节点发布 `/map`，管理器检查轨迹状态、`map → base_link` TF 新鲜度、地图边界、雷达有效率和扫描/地图重合，并在稳定窗口后发布 `/pool_cleaning/localization_status` 的 `LOCALIZATION_READY`。阶段 2 的边选择、靠墙和入口调整，阶段 3 的自动换边，以及阶段 4 的四边编排和按边覆盖记录均已接入当前包。代码和本地测试已覆盖完整一周流程；实船清洁效果、地图误差和规定次数的现场重复证据仍需按开发验收文档归档。
 
 当前执行器参数：滚刷 30%，第五电机双向推力 ±30%，滚刷角度门控 ±10°，四主电机从偏角超过 ±3° 就开始纠偏，开刷与纠偏可以同时进行。中心墙距 32–36 cm 时第五路关闭并允许滚刷工作；超出该区间时先侧推调整。换边时滚刷关闭，`REVERSE` 与向右侧推同时持续 0.5 s。
 
@@ -49,7 +49,7 @@
 
 ## 包内职责与接口
 
-后续四边和多边形开发按[开发与验收文档](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)执行。当前本包执行矩形四条地图边，提供边选择、靠墙/入口调整、沿边控制、自动换边和按边覆盖区间记录。
+当前本包执行矩形四条地图边，提供边选择、靠墙/入口调整、沿边控制、自动换边、按边覆盖区间记录和一周结束状态报告。凸多边形与凹多边形仍按[开发与验收文档](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)中的后续阶段执行。
 
 - `perception.py` / `perception_node.py`：墙线拟合、关联和空间观测；`perception_config.py` 只含感知与几何参数。
 - `geometry.py`：矩形/有序边界、顺时针左墙边段、投影和边选择。
@@ -96,7 +96,7 @@ colcon test-result --test-result-base build/f1_pool_cleaning --verbose
 
 演示和测试使用合成反馈、localhost DDS 和模拟 bridge，不连接串口或实机。
 
-阶段 3 本地验证重点：边界几何、目标墙关联、30 cm 端点停车、0.5 s 后退右推、±20° 粗略右转反馈和四边编排。实船仍必须先完成无刷单动作和重复转移试验，不能把仿真轨迹当作清洁效果证据。具体分项与复测说明见[开发与验收文档](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)。
+阶段 4 本地验证重点：四条边的边界几何、目标墙关联、30 cm 端点停车、0.5 s 后退右推、±20° 粗略右转反馈、三次换边、`completed_edges` 和按边覆盖区间。实船仍必须记录无刷动作、四边轨迹、刷头接触和未覆盖区间；本地回放不能替代清洁效果证据。具体分项与复测说明见[开发与验收文档](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)。
 
 ## 启动
 
@@ -143,6 +143,6 @@ ros2 service call /pool_cleaning/cancel std_srvs/srv/Trigger '{}'
 
 状态还包含 `wall_angle_deg`、`wall_valid`、`wall_reason`、`heading_band_deg`、`map_front_clearance_m`、刷盘/侧推请求及租约状态；`localization_ready`、`localization_state`、`localization_reason` 来自定位管理器。`wall_reason` 保留感知的拒绝原因，持续丢墙暂停时 `reason` 也会带出该原因。查看单条完整状态：`ros2 topic echo /pool_cleaning/status --once --full-length`。预览 token 始终为空。`STOPPED` 只表示输出已关闭，不代表船体已经停稳。
 
-阶段 3 状态还包含 `current_edge_id`、`transfer_next_edge`、`completed_edges`、`edge_progress_m`、`edge_entry_m`、`edge_stop_m`、`cleaned_intervals` 和按边覆盖记录。覆盖区间的统计基准是 `left_brush_contact_centerline`，只能表示左侧滚刷接触中心线的连续轨迹，不代表全池面积完成。
+阶段 4 状态还包含 `current_edge_id`、`transfer_next_edge`、`completed_edges`、`edge_progress_m`、`edge_entry_m`、`edge_stop_m`、`cleaned_intervals` 和按边覆盖记录。第四条边结束时 `phase=COMPLETE`，`completed_edges` 应为 `edge_0` 至 `edge_3`。覆盖区间的统计基准是 `left_brush_contact_centerline`，表示左侧滚刷接触中心线的连续轨迹；它用于核对一周任务的边段覆盖，不能单独等同于池底面积覆盖率。
 
 请使用本包更新后的默认配置。历史诊断目录中的 `rectangle_current_side.yaml` 仍保存当时的 ±3°、8 秒限制，不是本版测试参数。
