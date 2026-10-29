@@ -40,6 +40,14 @@ Qt App ←→ WebSocket :8765 ←→ 网关 → f1_nano_bridge ←→ F103
 | 矩形四边 | `f1_pool_cleaning pool_bringup.launch.py` | `/pool_cleaning/*` | `lidar_20261021_145054.pbstream` |
 | 大 L 两段墙 | `f1_l_cleaning l_bringup.launch.py` | `/l_cleaning/*` | `lidar_20261026_170703.pbstream` |
 
+**换地图只需换地图路径。** 两个入口都只接受一个 `map:=` 参数（`.pbstream`，或同目录同名 `.yaml`）：
+
+- 池尺寸、朝向、四边边界和 L 的两段路线由地图自动推导，不再写进 YAML；
+- 定位门限使用地图实际空闲水域的范围，不再使用手写矩形；
+- 推导失败、地图不是单一封闭池（矩形任务）或不含唯一顺时针墙角（大 L）时启动即报错，不会退回旧地图的数值。
+
+用 `ros2 run f1_pool_cleaning map_profile <地图>` 可离线查看某张地图能推导出什么。船体尺寸、刷盘几何和清洗策略（目标墙距、停车距离、边距）仍按船配置，不随地图变化。
+
 矩形路线为 `edge_0 → edge_1 → edge_2 → edge_3`，三次换边后完成；大 L 为 `edge_0 → edge_1`，一次右转后结束，不返回起点。两种任务都保持墙在船左侧，共享 `/f1/*` 硬件接口；现场一次启动一套任务、一个 bridge 和一套定位。
 
 App 网关默认连接矩形任务，未提供任务类型选择或初始位姿操作。大 L 可通过 ROS 服务操作，或按[网关说明](src/f1_operator_gateway/README.md#连接大-l-任务)显式重映射。App 的 `manual_stop`、断线和输入超时只停止网关持有的手动会话；自动任务应使用自己的 `pause` / `cancel` 服务。
@@ -79,16 +87,16 @@ ros2 launch f1_mapping_bringup lidar_mapping.launch.py
 已有匹配地图时，选择一种清洗任务启动。下面均为预览模式，不启用串口和硬件输出；`start_rviz:=true` 需要图形桌面。
 
 ```bash
-# 矩形任务；显式填写实际地图路径。
+# 矩形任务；map:= 指向本次要用的地图，其余参数由地图推导。
 ros2 launch f1_pool_cleaning pool_bringup.launch.py \
-  load_state_filename:=/home/nvidia/surface_ws/maps/20261021_145054/lidar_20261021_145054.pbstream \
+  map:=/home/nvidia/surface_ws/maps/lidar_20261021_145054.pbstream \
   start_rviz:=true
 ```
 
 ```bash
 # 大 L 任务；与上面的矩形入口择一运行。
 ros2 launch f1_l_cleaning l_bringup.launch.py \
-  load_state_filename:=/home/nvidia/surface_ws/maps/lidar_20261026_170703.pbstream \
+  map:=/home/nvidia/surface_ws/maps/lidar_20261026_170703.pbstream \
   start_rviz:=true
 ```
 

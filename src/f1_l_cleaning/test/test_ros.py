@@ -5,11 +5,22 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from std_srvs.srv import Trigger
 from f1_interfaces.srv import SetEdge
+from f1_pool_cleaning.demo import SYNTHETIC_GEOMETRY
 from f1_pool_cleaning.mission import Pose
 from f1_pool_cleaning.perception import Observation
 from f1_pool_cleaning.ros_support import to_observation_message
 
 from f1_l_cleaning.controller_node import LController
+
+
+ROUTE = [-1.801431, .681948, -10.462431, -.786552, -11.917931, 10.962448]
+
+
+def controller_parameters(extra=None):
+    """Map-derived geometry plus the open route, without a map file."""
+    values = {**SYNTHETIC_GEOMETRY, "route_xy": ROUTE}
+    values.update(extra or {})
+    return [Parameter(name, value=value) for name, value in values.items()]
 
 
 @pytest.fixture(autouse=True)
@@ -29,11 +40,9 @@ def test_l_controller_owns_two_edges_under_isolated_names():
     try:
         route = [-1.801431, .681948, -10.462431, -.786552,
                  -11.917931, 10.962448]
-        controller = LController(parameter_overrides=[
-            rclpy.parameter.Parameter("route_xy", value=route),
-            rclpy.parameter.Parameter("use_map_tf", value=False),
-            rclpy.parameter.Parameter("require_localization_ready", value=False),
-        ])
+        assert route == ROUTE
+        controller = LController(parameter_overrides=controller_parameters(
+            {"use_map_tf": False, "require_localization_ready": False}))
         assert len(controller.pool.edges) == 2
         assert not controller.live
         peer = Node("l_adapter_probe")
@@ -51,9 +60,8 @@ def test_l_controller_owns_two_edges_under_isolated_names():
 
 
 def test_turn_discards_cached_wall_and_rejects_queued_pre_turn_scans(route_parameters):
-    node = LController(parameter_overrides=[Parameter(k, value=v) for k, v in {
-        **route_parameters, "use_map_tf": False, "require_localization_ready": False,
-    }.items()])
+    node = LController(parameter_overrides=controller_parameters({
+        **route_parameters, "use_map_tf": False, "require_localization_ready": False}))
     try:
         node.timer.cancel()
         now = node.get_clock().now().nanoseconds
@@ -80,7 +88,7 @@ def test_turn_discards_cached_wall_and_rejects_queued_pre_turn_scans(route_param
 
 
 def test_cannot_skip_first_wall_or_start_without_localization(route_parameters):
-    node = LController(parameter_overrides=[Parameter(k, value=v) for k, v in route_parameters.items()])
+    node = LController(parameter_overrides=controller_parameters(route_parameters))
     try:
         response = node._set_edge(SetEdge.Request(edge_id="edge_1"), SetEdge.Response())
         assert not response.success and node.selected_edge is None
@@ -91,12 +99,11 @@ def test_cannot_skip_first_wall_or_start_without_localization(route_parameters):
         node.destroy_node()
 
 
-def test_localization_launch_applies_large_map_bounds_and_l_topics(tmp_path):
+def test_localization_launch_requires_a_map_and_applies_l_topics(tmp_path):
     # Execute the shared launch factory with the L overrides, then instantiate
-    # the manager with those exact parameters. No Cartographer or hardware starts.
+    # the manager with its parameters. No Cartographer or hardware starts.
     import importlib.util
     from pathlib import Path
-    import yaml
     from ament_index_python.packages import get_package_share_directory
     from launch import LaunchContext
     from f1_pool_cleaning.localization_node import LocalizationManager
@@ -107,16 +114,24 @@ def test_localization_launch_applies_large_map_bounds_and_l_topics(tmp_path):
     spec.loader.exec_module(launch)
     # The factory must reject a missing map before creating any nodes.
     context = LaunchContext()
+    context.launch_configurations["map"] = ""
     context.launch_configurations["load_state_filename"] = "/missing/reference.pbstream"
-    with pytest.raises(ValueError, match="existing reference-map"):
+    with pytest.raises(ValueError, match="reference-map"):
         launch.nodes(context)
-    params_file = Path(__file__).resolve().parents[1] / "config/localization.yaml"
-    params = yaml.safe_load(params_file.read_text())["pool_localization_manager"]["ros__parameters"]
+    context.launch_configurations["map"] = "/missing/map.pbstream"
+    with pytest.raises(ValueError, match="pbstream not found"):
+        launch.nodes(context)
+    # The pose gate takes its bounds from map:=; an explicit override still
+    # wins, which is what a map-specific YAML used to provide.
     from f1_l_cleaning.topics import REMAPPINGS
-    manager = LocalizationManager(parameter_overrides=[Parameter(k, value=v) for k, v in params.items()],
+    overrides = [Parameter("map", value=""), Parameter("origin_x_m", value=-14.),
+                 Parameter("origin_y_m", value=-2.5), Parameter("axis_yaw_rad", value=0.),
+                 Parameter("length_m", value=15.), Parameter("width_m", value=16.)]
+    manager = LocalizationManager(parameter_overrides=overrides,
         cli_args=["--ros-args", *[a for old, new in REMAPPINGS for a in ("-r", f"{old}:={new}")]])
     try:
         assert manager.config.origin_x_m == -14.
+        assert manager.config.length_m == 15.
         assert manager.status_pub.topic_name == "/l_cleaning/localization_status"
         assert manager.ready_pub.topic_name == "/l_cleaning/localization_ready"
     finally:

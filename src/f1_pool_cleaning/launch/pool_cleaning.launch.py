@@ -12,6 +12,8 @@ def generate_launch_description():
     sim = ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)
     return LaunchDescription([
         DeclareLaunchArgument("config", default_value=str(share / "config/pool_cleaning.yaml")),
+        DeclareLaunchArgument("map", default_value="",
+                              description="Frozen map: .pbstream or the map .yaml beside it"),
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),
         DeclareLaunchArgument("map_pose_topic", default_value="/pool_cleaning/map_pose"),
         DeclareLaunchArgument("output_enabled", default_value="false", choices=["true", "false"]),
@@ -24,6 +26,7 @@ def generate_launch_description():
              remappings=[("/pavo2_scan", LaunchConfiguration("scan_topic"))]),
         Node(package="f1_pool_cleaning", executable="pool_controller", output="screen",
              parameters=[LaunchConfiguration("config"), {"use_sim_time": sim,
+                 "map": LaunchConfiguration("map"),
                  "output_enabled": ParameterValue(LaunchConfiguration("output_enabled"), value_type=bool),
                  "edge_task_enabled": ParameterValue(LaunchConfiguration("edge_task_enabled"), value_type=bool),
                  "use_map_tf": ParameterValue(LaunchConfiguration("use_map_tf"), value_type=bool),

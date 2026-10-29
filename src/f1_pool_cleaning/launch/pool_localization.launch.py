@@ -21,9 +21,22 @@ def executable(directory, candidates):
 def nodes(context):
     def value(name):
         return LaunchConfiguration(name).perform(context)
-    state = Path(value("load_state_filename"))
+    # ``map`` is the one map input: it names either the frozen .pbstream or the
+    # map .yaml beside it.  ``load_state_filename`` stays as a direct override
+    # for callers that already hold a .pbstream path.
+    map_path, state_arg = value("map").strip(), value("load_state_filename").strip()
+    if map_path:
+        from f1_pool_cleaning.map_profile import MapProfileError, resolve_pbstream
+        try:
+            state = resolve_pbstream(map_path)
+        except MapProfileError as exc:
+            raise ValueError(str(exc)) from exc
+    elif state_arg:
+        state = Path(state_arg)
+    else:
+        raise ValueError("set map:=<pbstream or map yaml> to load the reference map")
     if not state.is_file() or state.suffix != ".pbstream":
-        raise ValueError("load_state_filename must name the existing reference-map .pbstream")
+        raise ValueError("map must name the existing reference-map .pbstream")
     share = Path(get_package_share_directory("f1_pool_cleaning"))
     cartographer_lib = Path(get_package_prefix("cartographer_ros")) / "lib" / "cartographer_ros"
     occupancy_grid = executable(
@@ -57,6 +70,9 @@ def nodes(context):
         "configuration_basename": "pool_localization.lua",
         "reference_trajectory_id": int(value("reference_trajectory_id")),
         "scan_topic": value("scan_topic"),
+        # The manager derives its pose gate from the same map as the task.  The
+        # resolved .pbstream keeps a direct load_state_filename override working.
+        "map": map_path or str(state),
     }]
     if localization_config:
         manager_parameters.append(localization_config)
@@ -82,12 +98,15 @@ def nodes(context):
 def generate_launch_description():
     mapping = Path(get_package_share_directory("f1_mapping_bringup"))
     return LaunchDescription([
-        DeclareLaunchArgument("load_state_filename"),
+        DeclareLaunchArgument("map", default_value="",
+                              description="Frozen reference map: .pbstream or the map .yaml beside it"),
+        DeclareLaunchArgument("load_state_filename", default_value="",
+                              description="Direct .pbstream override; prefer map:="),
         DeclareLaunchArgument("start_trajectory", default_value="false", choices=["true", "false"],
                               description="Compatibility mode; stage 1 starts after /initialpose"),
         DeclareLaunchArgument("reference_trajectory_id", default_value="0"),
         DeclareLaunchArgument("localization_config", default_value="",
-                              description="Optional map-specific LocalizationConfig YAML"),
+                              description="Optional extra LocalizationConfig YAML overrides"),
         DeclareLaunchArgument("cleaning_prefix", default_value="",
                               description="Remap the localization manager's cleaning gate under this prefix"),
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),

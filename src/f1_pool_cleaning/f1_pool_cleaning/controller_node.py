@@ -1,5 +1,5 @@
 """Rectangle edge-task ROS adapter with isolated preview and optional lease."""
-from dataclasses import fields
+from dataclasses import fields, MISSING
 import json
 import math
 import time
@@ -25,6 +25,9 @@ from .lease import Lease
 class PoolController(Node):
     NODE_NAME = "pool_controller"
     EDGE_TASK_DEFAULT = False
+    # Which map-derived geometry this controller consumes: a closed rectangle
+    # boundary or an open L route.  The launch passes the map through unchanged.
+    MAP_PROFILE_KIND = "rectangle"
 
     def __init__(self, **kwargs):
         super().__init__(self.NODE_NAME, **kwargs)
@@ -38,10 +41,27 @@ class PoolController(Node):
         self.require_localization_ready = (self.use_map_tf and
                                             self.get_parameter("require_localization_ready").value)
         self.localization_status_max_age_sec = self.get_parameter("localization_status_max_age_sec").value
+        # ``map`` is the only map input.  When it is set, the geometry below is
+        # derived from that file; the launch passes the same path, so swapping
+        # maps never means re-deriving numbers by hand.
+        self.map_path = self._declare_readonly("map", "")
+        # Kept so subclasses can consume non-Config entries (the L route).
+        self.derived_geometry = self._map_geometry()
         values = {}
-        for field in fields(Config()):
-            self.declare_parameter(field.name, getattr(Config(), field.name), ParameterDescriptor(read_only=True))
+        for field in fields(Config):
+            # Map geometry has no default: it comes from map:= (or an explicit
+            # override).  NaN keeps the parameter typed while validation
+            # rejects a launch that supplied neither.
+            default = self.derived_geometry.get(field.name, math.nan if field.default is MISSING
+                                                else field.default)
+            self.declare_parameter(field.name, default, ParameterDescriptor(read_only=True))
             values[field.name] = self.get_parameter(field.name).value
+        missing = [name for name, value in values.items()
+                   if isinstance(value, float) and math.isnan(value)]
+        if missing:
+            self.destroy_node()
+            raise ValueError(
+                f"map geometry {missing} was not supplied; launch with map:=<pbstream or map yaml>")
         self.config = Config(**values).validate()
         self.edge_distance_tolerance_m = self._declare_readonly(
             "edge_target_distance_tolerance_m", .20)
@@ -49,9 +69,9 @@ class PoolController(Node):
             "edge_target_angle_tolerance_rad", math.radians(70.))
         self.boundary_order = self._declare_readonly("boundary_order", "clockwise")
         # ROS 2 cannot infer the type of an empty array parameter.  A single
-        # zero is the typed "unset" sentinel; real configurations provide
-        # paired map x/y values and are validated below.
-        self.boundary_xy = self._declare_readonly("boundary_xy", [0.0])
+        # zero is the typed "unset" sentinel; the map supplies the real corners.
+        self.boundary_xy = self._declare_readonly(
+            "boundary_xy", self.derived_geometry.get("boundary_xy") or [0.0])
         self.default_edge_id = self._declare_readonly("default_edge_id", "edge_0")
         self.pool = self._build_pool()
         if self.live and (self.get_parameter("use_sim_time").value or not self.config.fifth_left_sign):
@@ -107,6 +127,23 @@ class PoolController(Node):
         self.declare_parameter(name, default, ParameterDescriptor(read_only=True))
         return self.get_parameter(name).value
 
+    def _map_geometry(self):
+        """Map-derived parameter defaults, or ``{}`` when no map was given.
+
+        The derivation lives in :mod:`f1_pool_cleaning.map_profile`; this keeps
+        a controller run without ``map:=`` explicit about where its numbers
+        came from instead of quietly applying another map's geometry.
+        """
+        if not self.map_path:
+            return {}
+        from .map_profile import MapProfileError, require
+        try:
+            return require(self.map_path, self.MAP_PROFILE_KIND).overrides()
+        except MapProfileError as exc:
+            self.destroy_node()
+            raise ValueError(
+                f"map {self.map_path} cannot drive the {self.MAP_PROFILE_KIND} task: {exc}") from exc
+
     def _build_pool(self):
         values = list(self.boundary_xy or [])
         if len(values) > 1:
@@ -119,6 +156,9 @@ class PoolController(Node):
                 corner_exclusion_m=self.config.corner_exclusion_m,
                 endpoint_margin_m=self.config.endpoint_margin_m,
                 frame=self.config.map_frame)
+        # No explicit boundary: fall back to the rectangle implied by the map
+        # geometry parameters.  Those parameters are map-derived, so this stays
+        # consistent with the selected map rather than a built-in shape.
         return PoolModel.rectangle(
             self.config, corner_exclusion_m=self.config.corner_exclusion_m,
             endpoint_margin_m=self.config.endpoint_margin_m)

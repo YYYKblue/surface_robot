@@ -1,7 +1,7 @@
 from dataclasses import replace
 import math
 
-from f1_pool_cleaning.config import Config
+from f1_pool_cleaning.demo import synthetic_config
 from f1_pool_cleaning.geometry import PoolModel
 from f1_pool_cleaning.mission import Feedback, Mission, Pose, command_fields
 from f1_pool_cleaning.perception import Observation
@@ -26,7 +26,7 @@ def feedback(config, edge, stamp, along, yaw=None):
 
 
 def test_l_transfer_is_reverse_right_push_stop_right_turn_then_reacquire():
-    c = Config().validate()
+    c = synthetic_config().validate()
     route = build_l_route(ROUTE, c)
     mission = Mission(c)
     assert mission.configure_edge(route, route.edges[0])[0]
@@ -80,7 +80,7 @@ def test_l_transfer_is_reverse_right_push_stop_right_turn_then_reacquire():
 
 
 def test_l_mission_completes_after_second_edge_without_closing_the_route():
-    c = Config().validate()
+    c = synthetic_config().validate()
     route = build_l_route(ROUTE, c)
     mission = Mission(c)
     assert mission.configure_edge(route, route.edges[0])[0]

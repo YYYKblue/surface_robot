@@ -5,6 +5,7 @@ import pytest
 import yaml
 
 from f1_pool_cleaning.config import Config
+from f1_pool_cleaning.demo import SYNTHETIC_GEOMETRY
 
 
 PACKAGE = Path(__file__).resolve().parents[1]
@@ -18,4 +19,7 @@ def route_parameters():
 @pytest.fixture
 def route_config(route_parameters):
     names = {field.name for field in fields(Config)}
-    return Config(**{k: v for k, v in route_parameters.items() if k in names}).validate()
+    # l_cleaning.yaml no longer carries map geometry: the launch derives it
+    # from map:=.  Tests supply the synthetic demo rectangle instead.
+    values = {**SYNTHETIC_GEOMETRY, **{k: v for k, v in route_parameters.items() if k in names}}
+    return Config(**values).validate()

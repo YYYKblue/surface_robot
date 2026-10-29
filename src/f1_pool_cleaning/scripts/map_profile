@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""Derive and print the cleaning geometry implied by a saved map."""
+from f1_pool_cleaning.map_profile import main
+
+if __name__ == "__main__":
+    main()

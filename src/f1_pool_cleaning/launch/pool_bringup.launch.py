@@ -25,8 +25,11 @@ def generate_launch_description():
         return LaunchConfiguration(name)
 
     return LaunchDescription([
-        DeclareLaunchArgument("load_state_filename", default_value=str(
-            Path.home() / "surface_ws/maps/20261021_145054/lidar_20261021_145054.pbstream")),
+        # One map input drives everything: the frozen localization state, the
+        # closed-pool rectangle, the boundary route and the localization pose
+        # gate.  Point this at the new map and the numbers follow.
+        DeclareLaunchArgument("map", default_value="",
+                              description="Frozen map: .pbstream or the map .yaml beside it"),
         DeclareLaunchArgument("start_localization", default_value="true", choices=["true", "false"],
                               description="Set false when localization is already running"),
         DeclareLaunchArgument("start_bridge", default_value="true", choices=["true", "false"],
@@ -43,7 +46,7 @@ def generate_launch_description():
         DeclareLaunchArgument("reference_trajectory_id", default_value="0"),
         DeclareLaunchArgument("lidar_extrinsics_file", default_value=str(mapping / "config/lidar_planar.yaml")),
         include(share, "pool_localization.launch.py", {
-            "load_state_filename": config("load_state_filename"),
+            "map": config("map"),
             "start_trajectory": "false",
             "reference_trajectory_id": config("reference_trajectory_id"),
             "scan_topic": config("scan_topic"),
@@ -59,6 +62,7 @@ def generate_launch_description():
         }, IfCondition(config("start_bridge"))),
         include(share, "pool_cleaning.launch.py", {
             "config": config("config"),
+            "map": config("map"),
             "scan_topic": config("scan_topic"),
             "output_enabled": config("output_enabled"),
             "edge_task_enabled": config("edge_task_enabled"),

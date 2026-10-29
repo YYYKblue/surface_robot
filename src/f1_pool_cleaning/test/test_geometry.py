@@ -2,17 +2,16 @@ import math
 
 import pytest
 
-from f1_pool_cleaning.config import Config
+from f1_pool_cleaning.demo import sample, synthetic_config
 from f1_pool_cleaning.geometry import PoolModel
 from f1_pool_cleaning.mission import Mission, Pose
-from f1_pool_cleaning.demo import sample
 
 
 NOW = 1_000_000_000
 
 
 def test_rectangle_edges_are_clockwise_and_keep_wall_on_left():
-    c = Config().validate()
+    c = synthetic_config().validate()
     pool = PoolModel.rectangle(c)
     assert [edge.id for edge in pool.edges] == ["edge_0", "edge_1", "edge_2", "edge_3"]
     assert [round(math.degrees(edge.yaw_rad)) for edge in pool.edges] == [
@@ -25,7 +24,7 @@ def test_rectangle_edges_are_clockwise_and_keep_wall_on_left():
 
 
 def test_pose_selects_nearest_edge_and_projects_left_wall_distance():
-    c = Config().validate()
+    c = synthetic_config().validate()
     pool = PoolModel.rectangle(c)
     pose = Pose(NOW, *c.map_xy(.8, c.width_m - .34), c.axis_yaw_rad)
     edge, projection, reason = pool.select(pose)
@@ -37,7 +36,7 @@ def test_pose_selects_nearest_edge_and_projects_left_wall_distance():
 
 
 def test_left_edge_selection_does_not_require_heading_alignment_before_approach():
-    c = Config().validate()
+    c = synthetic_config().validate()
     pool = PoolModel.rectangle(c)
     pose = Pose(NOW, *c.map_xy(.8, c.width_m - .34), c.axis_yaw_rad + math.radians(30.))
     edge, projection, reason = pool.select(pose)
@@ -48,7 +47,7 @@ def test_left_edge_selection_does_not_require_heading_alignment_before_approach(
 
 
 def test_outside_pose_cannot_select_a_right_wall_as_a_left_edge():
-    c = Config().validate()
+    c = synthetic_config().validate()
     pool = PoolModel.rectangle(c)
     pose = Pose(NOW, *c.map_xy(.8, c.width_m + .10), c.axis_yaw_rad)
     edge, projection, reason = pool.select(pose)
@@ -57,7 +56,7 @@ def test_outside_pose_cannot_select_a_right_wall_as_a_left_edge():
 
 
 def test_edge_mission_uses_new_wall_band_and_stops_at_edge_endpoint():
-    c = Config().validate()
+    c = synthetic_config().validate()
     pool = PoolModel.rectangle(c)
     mission = Mission(c)
     ok, _ = mission.configure_edge(pool, pool.edges[0])
@@ -88,7 +87,7 @@ def test_edge_mission_uses_new_wall_band_and_stops_at_edge_endpoint():
 
 
 def test_edge_approach_does_not_stop_after_a_fixed_duration():
-    c = Config().validate()
+    c = synthetic_config().validate()
     pool = PoolModel.rectangle(c)
     mission = Mission(c)
     assert mission.configure_edge(pool, pool.edges[0])[0]
@@ -100,7 +99,7 @@ def test_edge_approach_does_not_stop_after_a_fixed_duration():
 
 
 def test_front_stop_distance_is_measured_from_boat_centre():
-    c = Config().validate()
+    c = synthetic_config().validate()
     mission = Mission(c)
     front_wall_x = c.length_m
     pose = Pose(NOW, *c.map_xy(front_wall_x - c.front_stop_m, .5), c.axis_yaw_rad)
@@ -108,7 +107,7 @@ def test_front_stop_distance_is_measured_from_boat_centre():
 
 
 def test_edge_coverage_is_left_brush_contact_centerline_only():
-    c = Config().validate()
+    c = synthetic_config().validate()
     pool = PoolModel.rectangle(c)
     mission = Mission(c)
     mission.configure_edge(pool, pool.edges[0])

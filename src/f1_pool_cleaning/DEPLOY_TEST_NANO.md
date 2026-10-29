@@ -107,7 +107,7 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 
 ```bash
 ros2 launch f1_pool_cleaning pool_localization.launch.py \
-  load_state_filename:=/home/nvidia/surface_ws/maps/20261021_145054/lidar_20261021_145054.pbstream
+  map:=/home/nvidia/surface_ws/maps/lidar_20261021_145054.pbstream
 ```
 
 此入口加载冻结地图、静态雷达 TF、`/map` 栅格地图节点和定位管理器，跟踪/发布坐标系均为 `base_link`，不启动清洗或串口。默认不会创建新的定位轨迹；在 RViz2 发布 `/initialpose` 后，管理器调用 Cartographer 的 `/start_trajectory`，使用 `reference_trajectory_id`（默认 0）作为冻结参考轨迹。若已有同一份 `base_link → pavo2s_frame` 静态 TF，增加 `publish_lidar_tf:=false` 避免重复。

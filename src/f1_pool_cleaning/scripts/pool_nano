@@ -31,8 +31,9 @@ export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
 
 case "$action" in
   bringup)
+    # Point MAP at the map for this pool; every derived number follows it.
     exec ros2 launch f1_pool_cleaning pool_bringup.launch.py \
-      "load_state_filename:=$pool_ws/maps/20261021_145054/lidar_20261021_145054.pbstream" \
+      "map:=${MAP:-$pool_ws/maps/lidar_20261021_145054.pbstream}" \
       output_enabled:=true "$@"
     ;;
   start|pause|cancel)

@@ -10,6 +10,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 from f1_interfaces.msg import ControlState
+from f1_pool_cleaning.synthetic_map import rectangle_map
 
 
 @pytest.mark.parametrize("start_bridge", [True, False])
@@ -17,6 +18,8 @@ def test_combined_preview_and_reuse_existing_nodes(monkeypatch, tmp_path, start_
     monkeypatch.setenv("ROS_DOMAIN_ID", "179")
     monkeypatch.setenv("ROS_LOCALHOST_ONLY", "1")
     monkeypatch.setenv("ROS_LOG_DIR", str(tmp_path / "ros_logs"))
+    # The map is the only geometry source; this launcher never derives by hand.
+    reference_map = rectangle_map(tmp_path)
     # A distinct target detects launch argument leakage between child launches.
     config = tmp_path / "cleaning.yaml"
     config.write_text("pool_controller:\n  ros__parameters:\n    wall_target_m: 0.345\n    side_off_distance_m: 0.325\n    side_on_distance_m: 0.365\n")
@@ -31,7 +34,7 @@ def test_combined_preview_and_reuse_existing_nodes(monkeypatch, tmp_path, start_
         process = subprocess.Popen([
             "ros2", "launch", "f1_pool_cleaning", "pool_bringup.launch.py",
             "start_localization:=false", f"start_bridge:={str(start_bridge).lower()}",
-            "load_state_filename:=/missing/map.pbstream", f"config:={config}",
+            f"map:={reference_map}", f"config:={config}",
         ], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             until = time.monotonic() + 15.

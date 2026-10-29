@@ -47,13 +47,15 @@ sudo apt-get install -y \
   openssh-server rsync build-essential cmake \
   python3-colcon-common-extensions python3-rosdep python3-pytest \
   python3-serial python3-websockets python3-yaml \
+  python3-opencv python3-numpy \
   ros-humble-cartographer-ros ros-humble-rmw-cyclonedds-cpp \
   ros-humble-ros2bag ros-humble-rosbag2-storage-default-plugins
 sudo systemctl enable --now ssh
 mkdir -p /home/nvidia/surface_ws/src
 ```
 
-Cartographer 使用系统安装的 `ros-humble-cartographer-ros`，无需另外创建依赖工作空间。其他消息包、RViz、构建与测试依赖在传完源码后由 rosdep 安装。Humble 的 Cartographer 发布信息见 [ROS Index](https://index.ros.org/p/cartographer_ros/)。
+`python3-opencv` 与 `python3-numpy` 只用于启动时从地图推导清洗几何（`map_profile`），
+不参与实时控制回路。Cartographer 使用系统安装的 `ros-humble-cartographer-ros`，无需另外创建依赖工作空间。其他消息包、RViz、构建与测试依赖在传完源码后由 rosdep 安装。Humble 的 Cartographer 发布信息见 [ROS Index](https://index.ros.org/p/cartographer_ros/)。
 
 如果提示找不到 `ros-humble-*`，先检查系统版本、ROS 软件源和 `apt-get update` 的错误，不继续编译。WebSocket 网关依赖 `python3-websockets`，不再安装或使用 ZMQ。
 
@@ -74,7 +76,7 @@ rsync -av --progress \
 
 源目录末尾的 `/` 表示传工作空间的目录内容，目标是 `/home/nvidia/surface_ws/`，源码会落入其 `src/`，不会变成 `surface_ws/surface_ws/src`。本命令同时传输 README、App 和部署文档；没有使用 `--delete`。本轮新建目录无需删除远端文件。
 
-`maps/` 被 Git 忽略且被上述同步命令排除，需要单独提供与任务参数匹配的地图。矩形入口默认读取 `maps/20261021_145054/lidar_20261021_145054.pbstream`，大 L 入口默认读取 `maps/lidar_20261026_170703.pbstream`；可用 `load_state_filename:=实际绝对路径` 覆盖。只有 `.pgm/.yaml` 不能替代固定地图定位所需的 `.pbstream`。地图传输示例见各任务文档。
+`maps/` 被 Git 忽略且被上述同步命令排除，需要单独提供地图。启动时用 `map:=实际绝对路径` 指定本次要用的地图，池尺寸、边界和 L 路线都会由它推导，不必再改 YAML；只传 `map:=xxx.yaml` 时，同名 `.pbstream` 必须存在，因为固定地图定位需要 Cartographer 状态而不只是栅格图。地图传输示例见各任务文档。
 
 不要直接复制 PC 的整个工作空间生成目录到 Nano。PC 的 `build/` 包含本机绝对路径、CMake 缓存和生成索引，`install/` 也包含本机生成的文件与链接。这里的排除规则只阻止本次传输，不会清理 Nano 上已经存在的生成目录。若曾误传，或遇到缓存/JSON 索引错误，按[第 10 节](#10-同步后-cmake-缓存或-json-索引报错)备份并重新生成。
 

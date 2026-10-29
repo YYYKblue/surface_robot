@@ -11,6 +11,8 @@ from .topics import REMAPPINGS
 class LController(PoolController):
     NODE_NAME = "l_controller"
     EDGE_TASK_DEFAULT = True
+    # The open L route is map-derived too; ``map:=`` alone selects it.
+    MAP_PROFILE_KIND = "route"
 
     def __init__(self, **kwargs):
         self._wall_after_turn_ns = 0
@@ -30,8 +32,11 @@ class LController(PoolController):
             raise ValueError("L cleaning must start from edge_0 (A -> B)")
         if list(self.boundary_xy) != [0.0]:
             raise ValueError("use route_xy for the open L, not a closed boundary_xy")
-        route_xy = self._declare_readonly("route_xy", [0.0])
-        return build_l_route(route_xy, self.config)
+        # map:= already filled route_xy from the map; an explicit parameter is
+        # still accepted for field overrides.
+        self.route_xy = self._declare_readonly(
+            "route_xy", self.derived_geometry.get("route_xy") or [0.0])
+        return build_l_route(self.route_xy, self.config)
 
     def _set_edge(self, request, response):
         if request.edge_id != "edge_0":

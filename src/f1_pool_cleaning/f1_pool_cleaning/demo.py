@@ -4,6 +4,18 @@ from f1_pool_cleaning.perception import Observation
 from .config import Config
 from .mission import Mission, Pose, Feedback
 
+# Scripted-exercise geometry only.  The runtime nodes derive their geometry
+# from ``map:=`` through :mod:`f1_pool_cleaning.map_profile`; this synthetic
+# rectangle exists so the offline demo and the unit tests stay map-free.  It is
+# deliberately not any deployed map's numbers.
+SYNTHETIC_GEOMETRY = dict(origin_x_m=-1.0, origin_y_m=-0.7, axis_yaw_rad=0.0,
+                          length_m=3.0, width_m=1.6)
+
+
+def synthetic_config(**overrides):
+    """``Config`` with the synthetic demo rectangle, plus explicit overrides."""
+    return Config(**{**SYNTHETIC_GEOMETRY, **overrides})
+
 
 def sample(c, now, along=.8, distance=None, angle=0., front_observed=False):
     distance = c.wall_target_m if distance is None else distance
@@ -15,8 +27,8 @@ def sample(c, now, along=.8, distance=None, angle=0., front_observed=False):
     return Feedback(wall, Pose(now, x, y, c.axis_yaw_rad - angle))
 
 
-def run_demo():
-    c, now = Config(), 1_000_000_000
+def run_demo(config=None):
+    c, now = (config or synthetic_config()), 1_000_000_000
     mission = Mission(c)
     assert mission.start(sample(c, now), now)[0]
     history = [mission.phase]

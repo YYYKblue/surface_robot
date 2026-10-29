@@ -71,6 +71,16 @@ def occupied_map_overlap(points, resolution, width, height, data,
 
 @dataclass(frozen=True)
 class LocalizationConfig:
+    # Coarse pose gate covering the mapped free water.  These five values come
+    # from the selected map (see :mod:`f1_pool_cleaning.map_profile`), so they
+    # carry no defaults: a hand-written rectangle from another map would
+    # silently accept or reject the wrong poses.
+    origin_x_m: float
+    origin_y_m: float
+    axis_yaw_rad: float
+    length_m: float
+    width_m: float
+
     map_frame: str = "map"
     base_frame: str = "base_link"
     pose_max_age_sec: float = .50
@@ -84,11 +94,6 @@ class LocalizationConfig:
     scan_map_match_radius_m: float = .15
     initial_pose_timeout_sec: float = 5.0
     status_max_age_sec: float = .60
-    origin_x_m: float = -0.9802816886364385
-    origin_y_m: float = -0.18424262645062695
-    axis_yaw_rad: float = -0.19739548348805863
-    length_m: float = 2.8829072052510294
-    width_m: float = 1.5199000413306079
 
     def validate(self):
         if not self.map_frame or not self.base_frame:
@@ -140,7 +145,10 @@ class LocalizationGate:
     """
 
     def __init__(self, config=None):
-        self.config = (config or LocalizationConfig()).validate()
+        if config is None:
+            raise ValueError(
+                "LocalizationGate needs map-derived bounds; launch with map:=<pbstream or map yaml>")
+        self.config = config.validate()
         self.state = "LOCALIZATION_CHECK"
         self.ready = False
         self.reason = "waiting for RViz 2D Pose Estimate"

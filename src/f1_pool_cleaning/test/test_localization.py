@@ -2,6 +2,7 @@ import math
 
 from geometry_msgs.msg import PoseWithCovarianceStamped
 
+from f1_pool_cleaning.demo import SYNTHETIC_GEOMETRY
 from f1_pool_cleaning.localization import (
     LocalizationConfig,
     LocalizationGate,
@@ -11,6 +12,11 @@ from f1_pool_cleaning.localization import (
     json_status,
     validate_initial_pose,
 )
+
+
+def localization_config(**overrides):
+    """Localization config with the synthetic demo bounds plus overrides."""
+    return LocalizationConfig(**{**SYNTHETIC_GEOMETRY, **overrides})
 
 
 def pose(frame="map", stamp=1_000_000_000, x=-.2, y=.1, yaw=0.):
@@ -38,7 +44,7 @@ def test_initial_pose_validation_requires_map_frame_and_planar_finite_quaternion
 
 
 def test_gate_requires_continuous_trajectory_pose_scan_and_overlap_evidence():
-    config = LocalizationConfig(stable_sec=.20)
+    config = localization_config(stable_sec=.20)
     gate = LocalizationGate(config)
     assert not gate.update(1_000_000_000, False, None, None)
     gate.accept_initial_pose(1_000_000_000)
@@ -51,7 +57,7 @@ def test_gate_requires_continuous_trajectory_pose_scan_and_overlap_evidence():
 
 
 def test_ready_gate_latches_jump_pause_until_relocalization():
-    gate = LocalizationGate(LocalizationConfig(stable_sec=.01))
+    gate = LocalizationGate(localization_config(stable_sec=.01))
     gate.accept_initial_pose(1_000_000_000)
     p = PoseSample(1_000_000_000, -.2, .1, 0.)
     s = ScanQuality(1_000_000_000, .4, .4)
@@ -67,7 +73,7 @@ def test_ready_gate_latches_jump_pause_until_relocalization():
 
 
 def test_invalid_replacement_pose_is_not_allowed_to_reuse_old_ready_pose():
-    gate = LocalizationGate(LocalizationConfig(stable_sec=.01))
+    gate = LocalizationGate(localization_config(stable_sec=.01))
     gate.accept_initial_pose(1_000_000_000)
     p = PoseSample(1_000_000_000, -.2, .1, 0.)
     s = ScanQuality(1_000_000_000, .4, .4)
@@ -80,7 +86,7 @@ def test_invalid_replacement_pose_is_not_allowed_to_reuse_old_ready_pose():
 
 
 def test_gate_reports_scan_unknown_and_stale_evidence_without_nan_json():
-    gate = LocalizationGate()
+    gate = LocalizationGate(localization_config())
     gate.accept_initial_pose(1_000_000_000)
     p = PoseSample(1_000_000_000, -.2, .1, 0.)
     gate.update(1_000_000_000, True, p, ScanQuality(1_000_000_000, .4, None))

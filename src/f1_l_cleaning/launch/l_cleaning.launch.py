@@ -16,6 +16,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("config", default_value=str(share / "config/l_cleaning.yaml")),
         DeclareLaunchArgument("perception_config", default_value=str(share / "config/perception.yaml")),
+        DeclareLaunchArgument("map", default_value="",
+                              description="Frozen map: .pbstream or the map .yaml beside it"),
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),
         DeclareLaunchArgument("output_enabled", default_value="false", choices=["true", "false"]),
         DeclareLaunchArgument("use_sim_time", default_value="false", choices=["true", "false"]),
@@ -26,5 +28,6 @@ def generate_launch_description():
         Node(package="f1_l_cleaning", executable="l_controller", name="l_controller",
              output="screen", parameters=[LaunchConfiguration("config"),
                  {"use_sim_time": sim,
+                  "map": LaunchConfiguration("map"),
                   "output_enabled": ParameterValue(LaunchConfiguration("output_enabled"), value_type=bool)}]),
     ])

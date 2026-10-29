@@ -22,9 +22,11 @@ def generate_launch_description():
         return GroupAction(actions=[launch], condition=condition)
 
     arg = LaunchConfiguration
-    state_default = str(Path.home() / "surface_ws/maps/lidar_20261026_170703.pbstream")
+    # One map input: localization state, the open A->B->C route and the pose
+    # gate all come from this file.
     return LaunchDescription([
-        DeclareLaunchArgument("load_state_filename", default_value=state_default),
+        DeclareLaunchArgument("map", default_value="",
+                              description="Frozen map: .pbstream or the map .yaml beside it"),
         DeclareLaunchArgument("start_localization", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("start_bridge", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("start_cleaning", default_value="true", choices=["true", "false"]),
@@ -32,14 +34,13 @@ def generate_launch_description():
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),
         DeclareLaunchArgument("config", default_value=str(cleaning / "config/l_cleaning.yaml")),
         DeclareLaunchArgument("perception_config", default_value=str(cleaning / "config/perception.yaml")),
-        DeclareLaunchArgument("localization_config", default_value=str(cleaning / "config/localization.yaml")),
         DeclareLaunchArgument("reference_trajectory_id", default_value="0"),
         DeclareLaunchArgument("publish_lidar_tf", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("bridge_config", default_value=str(bridge / "config/bridge.yaml")),
         DeclareLaunchArgument("lidar_extrinsics_file", default_value=str(mapping / "config/lidar_planar.yaml")),
         DeclareLaunchArgument("start_rviz", default_value="false", choices=["true", "false"]),
         include(pool, "pool_localization.launch.py", {
-            "load_state_filename": arg("load_state_filename"),
+            "map": arg("map"),
             "start_trajectory": "false",
             "reference_trajectory_id": arg("reference_trajectory_id"),
             "scan_topic": arg("scan_topic"),
@@ -47,7 +48,6 @@ def generate_launch_description():
             "publish_lidar_tf": arg("publish_lidar_tf"),
             "start_rviz": arg("start_rviz"),
             "rviz_config": str(pool / "config/pool_localization.rviz"),
-            "localization_config": arg("localization_config"),
             "cleaning_prefix": "l_cleaning",
         }, IfCondition(arg("start_localization"))),
         include(bridge, "bridge.launch.py", {
@@ -58,6 +58,7 @@ def generate_launch_description():
         include(cleaning, "l_cleaning.launch.py", {
             "config": arg("config"),
             "perception_config": arg("perception_config"),
+            "map": arg("map"),
             "scan_topic": arg("scan_topic"),
             "output_enabled": arg("output_enabled"),
         }, IfCondition(arg("start_cleaning"))),

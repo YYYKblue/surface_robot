@@ -96,27 +96,43 @@ class LocalizationManager(Node):
         self.timer = self.create_timer(.05, self._tick, clock=steady)
 
     def _declare_parameters(self):
-        defaults = LocalizationConfig()
-        for name in ("map_frame", "base_frame", "pose_max_age_sec", "scan_max_age_sec",
-                     "stable_sec", "jump_distance_m", "jump_angle_rad", "boundary_margin_m",
-                     "scan_overlap_min", "scan_valid_fraction_min", "initial_pose_timeout_sec",
-                     "scan_map_match_radius_m", "status_max_age_sec", "origin_x_m", "origin_y_m", "axis_yaw_rad",
-                     "length_m", "width_m"):
-            self.declare_parameter(name, getattr(defaults, name))
+        import dataclasses
+        # Declare ``map`` first: the pose gate derives its bounds from it.
+        self.declare_parameter("map", "")
+        # The pose gate's bounds describe one specific map, so they have no
+        # defaults: ``map:=`` fills them, and a launch without either fails
+        # validation instead of applying another map's rectangle.
+        derived = self._map_geometry()
+        for field in dataclasses.fields(LocalizationConfig):
+            default = derived.get(field.name, math.nan if field.default is dataclasses.MISSING
+                                  else field.default)
+            self.declare_parameter(field.name, default)
         self.declare_parameter("configuration_directory", "")
         self.declare_parameter("configuration_basename", "pool_localization.lua")
         self.declare_parameter("reference_trajectory_id", 0)
         self.declare_parameter("scan_topic", "/pavo2_scan")
         self.declare_parameter("trajectory_query_period_sec", .50)
 
+    def _map_geometry(self):
+        path = self.get_parameter("map").value if self.has_parameter("map") else ""
+        if not path:
+            return {}
+        from .map_profile import MapProfileError, bounds_overrides
+        try:
+            return bounds_overrides(path)
+        except MapProfileError as exc:
+            raise ValueError(f"map {path} cannot bound the pose gate: {exc}") from exc
+
     def _read_config(self):
-        values = {name: self.get_parameter(name).value for name in (
-            "map_frame", "base_frame", "pose_max_age_sec", "scan_max_age_sec",
-            "stable_sec", "jump_distance_m", "jump_angle_rad", "boundary_margin_m",
-            "scan_overlap_min", "scan_valid_fraction_min", "scan_map_match_radius_m",
-            "initial_pose_timeout_sec",
-            "status_max_age_sec", "origin_x_m", "origin_y_m", "axis_yaw_rad",
-            "length_m", "width_m")}
+        import dataclasses
+        values = {field.name: self.get_parameter(field.name).value
+                  for field in dataclasses.fields(LocalizationConfig)}
+        missing = [name for name, value in values.items()
+                   if isinstance(value, float) and math.isnan(value)]
+        if missing:
+            raise ValueError(
+                f"localization map bounds {missing} were not supplied; "
+                "launch with map:=<pbstream or map yaml>")
         return LocalizationConfig(**values).validate()
 
     @staticmethod

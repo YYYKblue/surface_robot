@@ -25,10 +25,17 @@ from nano_ros_bridge.session import Session, Command
 from nano_ros_bridge.protocol import Control
 from f1_pool_cleaning.perception_config import PerceptionConfig
 from f1_pool_cleaning.controller_node import PoolController
-from f1_pool_cleaning.demo import sample
+from f1_pool_cleaning.demo import SYNTHETIC_GEOMETRY, sample
 from f1_pool_cleaning.perception_node import WallPerception
 from f1_pool_cleaning.ros_support import stamp, stamp_ns
 from f1_pool_cleaning.synthetic import pool_scan
+from f1_pool_cleaning.synthetic_map import rectangle_map
+
+
+def synthetic_geometry(extra=None):
+    """Map-derived geometry overrides for a controller started without map:=."""
+    return ([Parameter(name, value=value) for name, value in SYNTHETIC_GEOMETRY.items()]
+            + list(extra or []))
 
 
 @pytest.fixture(autouse=True)
@@ -142,7 +149,8 @@ class Harness:
             return observation
 
         self.perception.estimator.process = timed_process
-        self.controller = PoolController(parameter_overrides=[Parameter("output_enabled", value=live)])
+        self.controller = PoolController(parameter_overrides=synthetic_geometry(
+            [Parameter("output_enabled", value=live)]))
         self.bridge = SimBridge()
         self.driver = Node("wall_test_scan_driver")
         self.pub = self.driver.create_publisher(LaserScan, "/pavo2_scan", qos_profile_sensor_data)
@@ -362,8 +370,10 @@ def test_live_clock_fault_latches_and_sim_time_cannot_be_enabled(profile):
         h.close()
 
 
-def test_default_launch_exits_cleanly_without_bridge():
-    process = subprocess.Popen(["ros2", "launch", "f1_pool_cleaning", "pool_cleaning.launch.py"],
+def test_default_launch_exits_cleanly_without_bridge(tmp_path):
+    reference_map = rectangle_map(tmp_path)
+    process = subprocess.Popen(["ros2", "launch", "f1_pool_cleaning", "pool_cleaning.launch.py",
+                                f"map:={reference_map}"],
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True, start_new_session=True)
     try:

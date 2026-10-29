@@ -5,7 +5,7 @@ find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS scripts/pool_controller scripts/pool_perception
   scripts/pool_demo scripts/pool_demo_scan scripts/pool_nano
-  scripts/pool_localization
+  scripts/pool_localization scripts/map_profile
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 install(FILES README.md DEPLOY_TEST_NANO.md MEASUREMENTS.md MIGRATION.md DESTINATION share/${PROJECT_NAME})
@@ -13,6 +13,7 @@ if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(perception test/test_perception.py)
   ament_add_pytest_test(geometry test/test_geometry.py)
+  ament_add_pytest_test(map_profile test/test_map_profile.py)
   ament_add_pytest_test(mission test/test_mission.py)
   ament_add_pytest_test(heading_feedback test/test_heading_feedback.py)
   ament_add_pytest_test(bringup test/test_bringup.py TIMEOUT 60)

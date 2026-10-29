@@ -17,7 +17,14 @@ from f1_interfaces.msg import ActuatorCommand, WallObservation
 from f1_interfaces.srv import SetEdge
 from f1_pool_cleaning.ros_support import stamp, to_observation_message
 from f1_pool_cleaning.controller_node import PoolController
-from f1_pool_cleaning.demo import sample
+from f1_pool_cleaning.demo import SYNTHETIC_GEOMETRY, sample
+
+
+def synthetic_geometry(extra=None):
+    """Map-derived geometry overrides for a controller started without map:=."""
+    return ([Parameter(name, value=value) for name, value in SYNTHETIC_GEOMETRY.items()]
+            + list(extra or []))
+
 
 
 @pytest.fixture(autouse=True)
@@ -33,7 +40,8 @@ def isolated_ros(monkeypatch, tmp_path):
 
 class Harness:
     def __init__(self, parameters=None):
-        self.controller = PoolController(parameter_overrides=parameters or [])
+        self.controller = PoolController(
+            parameter_overrides=synthetic_geometry() + list(parameters or []))
         self.peer = Node("pool_test_feedback")
         self.executor = SingleThreadedExecutor()
         self.executor.add_node(self.controller)
@@ -205,7 +213,8 @@ def test_ros_ten_degree_gate_and_continuous_correction_without_turn_clearance(ha
 @pytest.mark.parametrize("extra", [Parameter("use_sim_time", value=True), Parameter("fifth_left_sign", value=0)])
 def test_hardware_output_requires_clock_and_polarity(extra):
     with pytest.raises(ValueError, match="hardware output requires"):
-        PoolController(parameter_overrides=[Parameter("output_enabled", value=True), extra])
+        PoolController(parameter_overrides=synthetic_geometry()
+                       + [Parameter("output_enabled", value=True), extra])
 
 
 def test_ros_map_endpoint_closes_all_outputs(harness):

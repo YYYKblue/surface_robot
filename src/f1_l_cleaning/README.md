@@ -39,12 +39,24 @@ source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-up-to f1_l_cleaning
 source install/local_setup.bash
 ros2 launch f1_l_cleaning l_bringup.launch.py \
-  load_state_filename:="$PWD/maps/lidar_20261026_170703.pbstream" \
+  map:="$PWD/maps/lidar_20261026_170703.pbstream" \
   start_rviz:=true
 ```
 
-地图文件由现场提供，不打包进源码。请显式指定本机 pbstream 路径；
-默认路径是 `~/surface_ws/maps/lidar_20261026_170703.pbstream`。
+`map:=` 是本任务唯一的地图输入：`route_xy`、定位门限和控制器使用的地图范围
+都由它推导，换池子只换这一个路径。推导逻辑见
+[`f1_pool_cleaning/map_profile.py`](../f1_pool_cleaning/f1_pool_cleaning/map_profile.py)；
+地图若没有唯一一个"墙在左、水在右"的顺时针墙角，启动会直接报错，不会猜测。
+可以先离线检查：
+
+```bash
+ros2 run f1_pool_cleaning map_profile "$PWD/maps/lidar_20261026_170703.pbstream"
+```
+
+需要在现场覆盖推导结果时，仍可在 `config/l_cleaning.yaml` 写 `route_xy`；
+参数优先于地图推导。
+
+地图文件由现场提供，不打包进源码。
 `maps/` 被 Git 忽略，根部署命令也排除了它；即使本地已有地图，Nano 仍需单独同步。在 PC 确认源文件存在后执行：
 
 ```bash

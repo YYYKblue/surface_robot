@@ -9,8 +9,7 @@ import yaml
 
 from f1_pool_cleaning.perception_config import PerceptionConfig
 from f1_pool_cleaning.perception import Perception, Scan
-from f1_pool_cleaning.config import Config
-from f1_pool_cleaning.demo import sample
+from f1_pool_cleaning.demo import sample, synthetic_config
 from f1_pool_cleaning.mission import Mission
 
 
@@ -42,7 +41,7 @@ def replay(legacy=False, hide_left=False):
     if legacy:
         values.update(min_support_m=.5, association_timeout_sec=1.)
     c = PerceptionConfig(**values).validate()
-    control = Config(heading_correction_deadband_rad=math.radians(10 if legacy else 3))
+    control = synthetic_config(heading_correction_deadband_rad=math.radians(10 if legacy else 3))
     estimator, mission = Perception(c), Mission(control)
     history = []
     for i, bow_left in enumerate([0, 8, 12, 16, 20] + [25] * 45):

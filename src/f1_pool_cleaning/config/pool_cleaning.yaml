@@ -11,12 +11,9 @@ pool_controller:
     localization_status_max_age_sec: 0.60
     map_frame: map
     base_frame: base_link
-    # Estimated rectangle in the saved 20261021_145054 map; verify in situ.
-    origin_x_m: -0.9802816886364385
-    origin_y_m: -0.18424262645062695
-    axis_yaw_rad: -0.19739548348805863
-    length_m: 2.8829072052510294
-    width_m: 1.5199000413306079
+    # Map geometry (origin/axis/length/width and the boundary route) is not
+    # configured here: the launch derives it from map:=<pbstream or map yaml>
+    # and passes it in, so changing maps only means changing the map path.
     # Confirmed stable left-brush band: centre-to-wall distance 32--36 cm.
     wall_target_m: 0.34
     # Fifth thruster: left above 36 cm, right below 32 cm, neutral in between.
@@ -36,13 +33,9 @@ pool_controller:
     edge_progress_jump_m: 0.35
     corner_exclusion_m: 0.30
     endpoint_margin_m: 0.30
-    # Map-frame boundary in the canonical clockwise route.  The four edges
-    # therefore all keep the single brush on the boat's left.
+    # The map-derived boundary is always generated in the canonical clockwise
+    # route, so all four edges keep the single brush on the boat's left.
     boundary_order: clockwise
-    boundary_xy: [-0.682204880543, 1.306142005822,
-                  2.144718257910, 0.740757602635,
-                  1.846641449817, -0.749627029637,
-                  -0.980281688636, -0.184242626451]
     # Always start from the first long edge. The pose must still be near edge_0
     # and the wall must remain on base_link +y; completed edges advance in order.
     default_edge_id: "edge_0"

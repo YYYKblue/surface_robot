@@ -7,17 +7,11 @@ l_controller:
     localization_status_max_age_sec: 0.60
     map_frame: map
     base_frame: base_link
-    # Open A -> B -> C; map lidar_20261026_170703, resolution 0.05 m.
-    # Fitted wall points, not surveyed positions. Never close C -> A.
-    # A: right end of lower wall; B: lower-left corner; C: upper end of left wall.
-    route_xy: [-1.801431, 0.681948, -10.462431, -0.786552, -11.917931, 10.962448]
+    # The open A -> B -> C route is derived from map:=<pbstream or map yaml>:
+    # the launch selects the single clockwise wall corner, keeps water on the
+    # right of travel and never closes C -> A.  Set route_xy here only to
+    # override a map whose route the derivation rejects.
     default_edge_id: edge_0
-    # Coarse map bounds only; edge progress comes from route_xy.
-    origin_x_m: -14.0
-    origin_y_m: -2.5
-    axis_yaw_rad: 0.0
-    length_m: 15.0
-    width_m: 16.0
     wall_target_m: 0.34
     side_on_distance_m: 0.36
     side_off_distance_m: 0.32

@@ -3,7 +3,6 @@ from dataclasses import dataclass
 import math
 
 from f1_pool_cleaning.perception import Observation
-from .config import Config
 from .geometry import PoolModel
 
 
@@ -50,8 +49,11 @@ class Mission:
     TRANSFER_PHASES = ("EDGE_STOP", "MOVE_INWARD", "TURN_TO_NEXT_EDGE",
                        "APPROACH_NEXT_EDGE")
 
-    def __init__(self, config=None):
-        self.c = (config or Config()).validate()
+    def __init__(self, config):
+        if config is None:
+            raise ValueError(
+                "Mission needs map-derived geometry; launch with map:=<pbstream or map yaml>")
+        self.c = config.validate()
         self.phase, self.reason = "IDLE", "waiting for start"
         self.started_ns = self.last_update_ns = 0
         self.last_scan = -1

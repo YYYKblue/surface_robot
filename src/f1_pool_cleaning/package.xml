@@ -18,6 +18,9 @@
   <exec_depend>builtin_interfaces</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
+  <!-- Derives task geometry from the saved map at launch (map_profile). -->
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>f1_mapping_bringup</exec_depend>
   <exec_depend>cartographer_ros</exec_depend>

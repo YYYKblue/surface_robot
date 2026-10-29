@@ -8,16 +8,15 @@ import yaml
 from f1_pool_cleaning.perception_config import PerceptionConfig
 from f1_pool_cleaning.perception import Perception, Observation
 from f1_pool_cleaning.synthetic import pool_scan
-from f1_pool_cleaning.config import Config
 from f1_pool_cleaning.geometry import PoolModel
-from f1_pool_cleaning.demo import sample, run_demo
+from f1_pool_cleaning.demo import run_demo, sample, synthetic_config
 from f1_pool_cleaning.mission import Mission, Feedback, Pose, command_fields, Effort
 
 NOW = 1_000_000_000
 
 
 def started(config=None):
-    m = Mission(config)
+    m = Mission(config or synthetic_config().validate())
     assert m.start(sample(m.c, NOW), NOW)[0]
     return m
 
@@ -101,7 +100,7 @@ def test_alignment_immediately_restores_brush_and_correction_reverses():
 
 @pytest.mark.parametrize("angle,direction", [(.21, 3), (-.21, 4)])
 def test_turn_space_and_hull_flags_do_not_block_start_or_correction(angle, direction):
-    m = Mission()
+    m = Mission(synthetic_config())
     f = sample(m.c, NOW, angle=angle)
     f = replace(f, wall=replace(f.wall, left_turn_clear=False, right_turn_clear=False,
                                 rigid_collision=True))
@@ -146,7 +145,7 @@ def test_map_bow_clearance_accounts_for_heading_and_stops_on_pose_only():
 
 
 def test_rectangle_transfer_stops_at_thirty_cm_and_combines_reverse_right_push():
-    c = Config().validate()
+    c = synthetic_config().validate()
     pool = PoolModel.rectangle(c)
     m = Mission(c)
     assert m.configure_edge(pool, pool.edges[0])[0]
@@ -211,7 +210,7 @@ def test_rectangle_transfer_stops_at_thirty_cm_and_combines_reverse_right_push()
 
 
 def test_transfer_does_not_pause_on_static_boundary_clearance():
-    c = Config().validate()
+    c = synthetic_config().validate()
     pool = PoolModel.rectangle(c)
     m = Mission(c)
     assert m.configure_edge(pool, pool.edges[0])[0]
@@ -237,7 +236,7 @@ def test_transfer_does_not_pause_on_static_boundary_clearance():
 
 
 def test_rectangle_transfer_turn_timeout_pauses_without_auto_resume():
-    c = Config(transfer_turn_timeout_sec=.2).validate()
+    c = synthetic_config(transfer_turn_timeout_sec=.2).validate()
     pool = PoolModel.rectangle(c)
     m = Mission(c)
     m.configure_edge(pool, pool.edges[0])
@@ -260,7 +259,7 @@ def test_rectangle_transfer_turn_timeout_pauses_without_auto_resume():
 
 
 def test_rectangle_transfer_default_has_no_overall_time_timeout():
-    c = Config().validate()
+    c = synthetic_config().validate()
     pool = PoolModel.rectangle(c)
     m = Mission(c)
     m.configure_edge(pool, pool.edges[0])
@@ -286,7 +285,7 @@ def test_rectangle_transfer_default_has_no_overall_time_timeout():
 
 
 def test_rectangle_route_completes_all_four_edges_in_clockwise_order():
-    c = Config().validate()
+    c = synthetic_config().validate()
     pool = PoolModel.rectangle(c)
     m = Mission(c)
     now = NOW
@@ -350,13 +349,13 @@ def test_map_front_clearance_invariant_under_pool_half_turn(angle):
     flipped = replace(f.pose, x=rx, y=ry, yaw=f.pose.yaw + math.pi)
     assert m.front_remaining(flipped) == pytest.approx(m.front_remaining(f.pose))
     # The opposite heading is accepted without a special current-side config.
-    other = Mission()
+    other = Mission(synthetic_config())
     assert other.start(replace(f, pose=flipped), NOW)[0]
     assert other.update(replace(f, pose=flipped), NOW).brush_percent == 30
 
 
 def test_negative_map_direction_stops_at_short_wall_ahead():
-    m = Mission()
+    m = Mission(synthetic_config())
     f = sample(m.c, NOW, along=1.5)
     f = replace(f, pose=replace(f.pose, yaw=m.c.axis_yaw_rad + math.pi))
     assert m.start(f, NOW)[0]
@@ -366,7 +365,7 @@ def test_negative_map_direction_stops_at_short_wall_ahead():
 
 
 def test_start_inside_front_stop_zone_never_enables_outputs():
-    m = Mission()
+    m = Mission(synthetic_config())
     x = m.c.length_m - m.c.front_stop_m
     assert not m.start(sample(m.c, NOW, along=x + 1e-9), NOW)[0]
     assert m.phase == "IDLE" and m.last_effort is None
@@ -402,9 +401,9 @@ def test_repeated_scan_never_renews_deadline():
 
 def test_unknown_fifth_mapping_inhibited_in_preview():
     effort = Effort(NOW, NOW + 100_000_000, side_left_percent=30., brush_percent=30.)
-    assert not command_fields(effort, Config(fifth_left_sign=0))["thrust_enabled"]
+    assert not command_fields(effort, synthetic_config(fifth_left_sign=0))["thrust_enabled"]
     for sign in (-1, 1):
-        fields = command_fields(effort, Config(fifth_left_sign=sign))
+        fields = command_fields(effort, synthetic_config(fifth_left_sign=sign))
         assert fields["direction"] == 0 and fields["thrust_percent"] == sign * 30
         assert fields["thrust_enabled"] and fields["brush_enabled"]
 
@@ -426,7 +425,7 @@ def test_map_wall_identity_and_second_quality_gate_removed():
     dict(run_timeout_sec=-1.), dict(wall_recovery_sec=0.)])
 def test_invalid_configuration_rejected(changes):
     with pytest.raises(ValueError):
-        replace(Config(), **changes).validate()
+        replace(synthetic_config(), **changes).validate()
 
 
 def test_future_feedback_rejected_but_no_feedback_skew_gate():
@@ -445,7 +444,7 @@ def test_pause_requires_cancel_and_new_start():
 
 
 def test_timeout_stops_brush_and_side_request():
-    m = started(Config(run_timeout_sec=.2))
+    m = started(synthetic_config(run_timeout_sec=.2))
     for i in range(5):
         update(m, i * .05, distance=.55)
     assert m.phase == "PAUSED" and m.last_effort is None
@@ -463,13 +462,13 @@ def lost_wall(m, now, **kwargs):
 
 
 def test_invalid_wall_rejected_at_start_with_perception_reason():
-    m = Mission()
+    m = Mission(synthetic_config())
     ok, reason = m.start(lost_wall(m, NOW), NOW)
     assert not ok and "association lost" in reason and m.phase == "IDLE"
 
 
 def test_post_acquisition_start_can_wait_for_fresh_wall_recovery():
-    m = Mission()
+    m = Mission(synthetic_config())
     f = lost_wall(m, NOW)
     assert m.start(f, NOW, allow_wall_recovery=True)[0]
     assert m.phase == "WAIT_WALL" and m.wall_lost_since_ns == NOW
@@ -494,7 +493,7 @@ def test_brief_wall_loss_neutralizes_all_outputs_then_recovers_heading_and_brush
 
 
 def test_persistent_invalid_fresh_scans_pause_after_bounded_recovery():
-    m = started(Config(wall_recovery_sec=.2))
+    m = started(synthetic_config(wall_recovery_sec=.2))
     for i in range(4):
         now = NOW + i * 50_000_000
         e = m.update(lost_wall(m, now), now)
@@ -547,7 +546,7 @@ def test_wall_recovery_does_not_bypass_stale_feedback(field):
 def test_actual_perception_profile_tracks_large_yaw_and_return_to_brush_band(sign):
     parameters = yaml.safe_load((Path(__file__).resolve().parents[1] / 'config/perception.yaml').read_text())
     c = PerceptionConfig(**parameters['pool_perception']['ros__parameters']).validate()
-    estimator, m = Perception(c), Mission()
+    estimator, m = Perception(c), Mission(synthetic_config())
     # Includes >11.5 degree changes and angles beyond the previous 34.4 degree cap.
     for i, degrees in enumerate([0, 20, 40, 60, 68, 40, 12, 8]):
         now = NOW + i * 50_000_000

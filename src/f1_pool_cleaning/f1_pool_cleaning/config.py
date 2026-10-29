@@ -5,13 +5,19 @@ import math
 
 @dataclass(frozen=True)
 class Config:
+    # Map geometry.  These five values describe one specific saved map, so they
+    # have no defaults: the launch derives them from `map:=` through
+    # :mod:`f1_pool_cleaning.map_profile` and injects them as parameters.  A
+    # missing value fails validation instead of silently reusing another map's
+    # rectangle.
+    origin_x_m: float
+    origin_y_m: float
+    axis_yaw_rad: float
+    length_m: float
+    width_m: float
+
     map_frame: str = "map"
     base_frame: str = "base_link"
-    origin_x_m: float = -0.9802816886364385
-    origin_y_m: float = -0.18424262645062695
-    axis_yaw_rad: float = -0.19739548348805863
-    length_m: float = 2.8829072052510294
-    width_m: float = 1.5199000413306079
     # Confirmed enclosing boat rectangle: 50 cm long by 45 cm wide.
     hull_half_length_m: float = .25
     hull_half_width_m: float = .225
@@ -64,7 +70,9 @@ class Config:
         for field in fields(self):
             v = getattr(self, field.name)
             if isinstance(v, (int, float)) and not math.isfinite(v):
-                raise ValueError(f"{field.name} must be finite")
+                raise ValueError(
+                    f"{field.name} must be finite; map geometry is supplied by "
+                    "map:=<pbstream or map yaml>")
             if isinstance(v, float) and field.name not in zero_allowed and v <= 0:
                 raise ValueError(f"{field.name} must be positive")
         if not self.base_frame or not self.map_frame:

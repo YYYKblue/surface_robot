@@ -10,6 +10,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 from f1_interfaces.msg import ControlState
+from f1_pool_cleaning.synthetic_map import l_map
 
 
 @pytest.mark.parametrize("start_bridge", [False, True])
@@ -23,12 +24,14 @@ def test_preview_launch_and_reuse_existing_localization(monkeypatch, tmp_path, s
     peer.create_subscription(String, "/l_cleaning/status",
                              lambda m: statuses.append(json.loads(m.data)), 10)
     peer.create_subscription(ControlState, "/f1/control_state", states.append, 10)
+    # The open L route comes from the map, so the launcher needs one.
+    reference_map = l_map(tmp_path)
     log_path = tmp_path / "launch.log"
     with log_path.open("w") as log:
         process = subprocess.Popen([
             "ros2", "launch", "f1_l_cleaning", "l_bringup.launch.py",
             "start_localization:=false", f"start_bridge:={str(start_bridge).lower()}",
-            "load_state_filename:=/missing/map.pbstream",
+            f"map:={reference_map}",
         ], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             until = time.monotonic() + 20.
