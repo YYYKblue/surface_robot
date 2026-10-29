@@ -1,5 +1,7 @@
 # f1_pool_cleaning：泳池沿边清洗
 
+文档核对：2026-10-29。本页说明矩形四边任务及共享清洗实现；开放大 L 两段墙任务由 [`f1_l_cleaning`](../f1_l_cleaning/README.md) 配置和适配，使用 `/l_cleaning/*` 接口。
+
 2026-10-26 阶段 4：矩形水池自动清洁一周的软件功能已完成。任务沿用阶段 1 的 Cartographer 固定地图定位，默认从 `edge_0`（第一条长边）启动；完成直边刷墙后自动按 `edge_0 → edge_1 → edge_2 → edge_3` 换边，第四条边完成后进入 `COMPLETE`。船体按 50 cm × 45 cm 矩形建模，稳定刷墙区间为船中心到左墙 32–36 cm，目标中心值 34 cm。
 
 阶段 1 的软件流程已经具备：定位启动默认不创建新轨迹；操作者在 RViz2 的 `map` 坐标系使用 `2D Pose Estimate` 后，管理器通过 Cartographer `/start_trajectory` 创建带初始位姿的纯定位轨迹。启动入口同时运行栅格地图节点发布 `/map`，管理器检查轨迹状态、`map → base_link` TF 新鲜度、地图边界、雷达有效率和扫描/地图重合，并在稳定窗口后发布 `/pool_cleaning/localization_status` 的 `LOCALIZATION_READY`。阶段 2 的边选择、靠墙和入口调整，阶段 3 的自动换边，以及阶段 4 的四边编排和按边覆盖记录均已接入当前包。代码和本地测试已覆盖完整一周流程；实船清洁效果、地图误差和规定次数的现场重复证据仍需按开发验收文档归档。
@@ -139,7 +141,9 @@ ros2 service call /pool_cleaning/pause std_srvs/srv/Trigger '{}'
 ros2 service call /pool_cleaning/cancel std_srvs/srv/Trigger '{}'
 ```
 
-实机需要已有 bridge 的串口/运动许可、主电机方向确认和 `allow_fifth_thruster=true`。`mode=BOTH` 由固件混控四个主电机；这版不发主电机 FORWARD/REVERSE，推进仍由滚刷提供。保持第五路既有“正号向左”的映射。
+实机需要已有 bridge 的串口/运动许可、主电机方向确认和 `allow_fifth_thruster=true`。`mode=BOTH` 由固件混控四个主电机；直边推进由滚刷提供，主电机用于 LEFT/RIGHT 纠偏，换边 `MOVE_INWARD` 阶段会发送主电机 REVERSE 并同时向右侧推 0.5 s。保持第五路既有“正号向左”的映射。
+
+Qt App 经网关默认连接本包的 `status/start/pause/cancel`。先单独启动定位和清洗节点，再使用任务按钮；App 红色“停止全部”及断线只影响网关手动会话，停止本任务应使用 `pause` 或 `cancel`，详见[网关控制边界](../f1_operator_gateway/README.md#控制行为与边界)。
 
 状态前部新增 `left_wall_distance_cm`：船中心到左墙的垂直距离，单位厘米，保留 1 位小数，例如 `34.0`。原 `wall_distance_m` 米制字段继续提供相同距离；墙线无效时这两个字段均为 `null`，不把占位值 0 当作实际距离。
 

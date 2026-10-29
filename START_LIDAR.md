@@ -26,7 +26,7 @@ Nano 旧工作空间已删除，先按[Nano 从零部署指南](DEPLOY_NANO.md)�
 
 ## 1. 首次部署或源码更新后：同步与构建
 
-首次部署统一按 [DEPLOY_NANO.md](DEPLOY_NANO.md) 完成五个项目包的传输、依赖安装和编译。只加载系统 ROS `/opt/ros/humble`，Cartographer 由系统软件包提供。
+首次部署统一按 [DEPLOY_NANO.md](DEPLOY_NANO.md) 完成六个项目包的传输、依赖安装和编译。只加载系统 ROS `/opt/ros/humble`，Cartographer 由系统软件包提供。
 
 完成后，在 Nano 检查：
 
@@ -104,7 +104,7 @@ ros2 node list
 
 首次启动前若已出现 `/cartographer_node` 或 `/cartographer_occupancy_grid_node`，
 先确认是否已经有一套建图在运行。需要重开时，先退出原启动终端中的建图。
-若是旧服务自动启动的实例，先确认对应服务再停止。旧硬件桥的兼容性与串口占用限制见[桥接包说明](src/f1_nano_bridge/README.md#与上一版的变化)。
+若是旧服务自动启动的实例，先确认对应服务再停止。硬件桥的启动与控制边界见[桥接包说明](src/f1_nano_bridge/README.md)。
 避免多套节点同时发布相同地图和 TF。
 
 ## 4. Nano 终端 A：启动纯雷达建图

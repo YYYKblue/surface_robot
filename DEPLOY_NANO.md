@@ -1,6 +1,6 @@
 # Nano 从零部署 surface_ws
 
-更新：2026-10-26。适用于 Nano 上旧 ROS 工作空间已全部删除的情况。当前 `f1_pool_cleaning` 已支持矩形水池四边自动清洁一周；具体启动和验收见[矩形四边部署与验收步骤](src/f1_pool_cleaning/DEPLOY_TEST_NANO.md)。直接创建新目录，不执行旧目录改名、迁移或清理命令。若已有旧清洗包，先按 [清洗包合并说明](src/f1_pool_cleaning/MIGRATION.md) 升级，再使用本文当前包列表。
+更新：2026-10-29。适用于 Nano 上旧 ROS 工作空间已全部删除的情况。当前包含矩形四边清洗、大 L 两段墙清洗及 Qt App 网关；任务操作分别见[矩形四边部署与验收步骤](src/f1_pool_cleaning/DEPLOY_TEST_NANO.md)和[大 L 任务说明](src/f1_l_cleaning/README.md)。直接创建新目录，不执行旧目录改名、迁移或清理命令。若已有旧清洗包，先按 [清洗包合并说明](src/f1_pool_cleaning/MIGRATION.md) 升级，再使用本文当前包列表。
 
 | 项目 | 统一约定 |
 | --- | --- |
@@ -11,6 +11,7 @@
 | 桥接功能包 | `f1_nano_bridge` |
 | 自定义接口包 | `f1_interfaces` |
 | 沿边清洗功能包 | `f1_pool_cleaning` |
+| 大 L 清洗功能包 | `f1_l_cleaning` |
 | 操作员网关 | `f1_operator_gateway` |
 
 下面每节标明命令在哪台设备执行。PC 和 Nano 分别编译，不传 PC 的生成目录。本说明没有自动连接或修改 Nano。
@@ -71,7 +72,9 @@ rsync -av --progress \
   nvidia@192.168.1.188:/home/nvidia/surface_ws/
 ```
 
-源目录末尾的 `/` 表示传目录内容，目标应是 `surface_ws/src`，不会变成 `surface_ws/surface_ws/src`。本命令同时传输 README 和部署文档；没有使用 `--delete`。本轮新建目录无需删除远端文件。
+源目录末尾的 `/` 表示传工作空间的目录内容，目标是 `/home/nvidia/surface_ws/`，源码会落入其 `src/`，不会变成 `surface_ws/surface_ws/src`。本命令同时传输 README、App 和部署文档；没有使用 `--delete`。本轮新建目录无需删除远端文件。
+
+`maps/` 被 Git 忽略且被上述同步命令排除，需要单独提供与任务参数匹配的地图。矩形入口默认读取 `maps/20261021_145054/lidar_20261021_145054.pbstream`，大 L 入口默认读取 `maps/lidar_20261026_170703.pbstream`；可用 `load_state_filename:=实际绝对路径` 覆盖。只有 `.pgm/.yaml` 不能替代固定地图定位所需的 `.pbstream`。地图传输示例见各任务文档。
 
 不要直接复制 PC 的整个工作空间生成目录到 Nano。PC 的 `build/` 包含本机绝对路径、CMake 缓存和生成索引，`install/` 也包含本机生成的文件与链接。这里的排除规则只阻止本次传输，不会清理 Nano 上已经存在的生成目录。若曾误传，或遇到缓存/JSON 索引错误，按[第 10 节](#10-同步后-cmake-缓存或-json-索引报错)备份并重新生成。
 
@@ -103,10 +106,11 @@ ssh nvidia@192.168.1.188
 `rosdep update` 使用普通用户执行。该流程依据[官方 rosdep 使用说明](https://docs.ros.org/en/humble/Tutorials/Intermediate/Rosdep.html)，从 `package.xml` 解析依赖；网络或依赖解析失败时先解决错误，再执行下一步。
 括号内启用了失败即停止，避免更新失败后继续使用已有缓存安装依赖。若出现缺失的 `debian.yaml` 或 GitHub 索引超时，按[第 9 节](#9-rosdep-更新报错处理)修复后重试。
 
-当前应列出恰好五个项目包：
+未额外加入雷达驱动时，当前应列出六个项目包：
 
 ```text
 f1_interfaces
+f1_l_cleaning
 f1_mapping_bringup
 f1_nano_bridge
 f1_operator_gateway
@@ -120,13 +124,14 @@ f1_pool_cleaning
 仍在刚才的 Nano 构建终端执行，尚不要 source 本工作空间的 install：
 
 ```bash
+source /opt/ros/humble/setup.bash
 cd /home/nvidia/surface_ws
 CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
   colcon build --symlink-install --parallel-workers 1 \
   --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 ```
 
-同时限制包间和包内并行度，减小 Nano 编译时的内存占用。成功时应看到 `5 packages finished`，且没有 failed/aborted。失败时保留输出，先定位首个报错；只有编译成功后才加载本工作空间环境。
+同时限制包间和包内并行度，减小 Nano 编译时的内存占用。仅构建本仓库时，成功应看到 `6 packages finished`，且没有 failed/aborted。失败时保留输出，先定位首个报错；只有编译成功后才加载本工作空间环境。
 
 ## 6. Nano：检查安装结果
 
@@ -146,9 +151,12 @@ ros2 launch f1_nano_bridge bridge.launch.py --show-args
 ros2 pkg executables f1_operator_gateway
 ros2 launch f1_operator_gateway operator_gateway.launch.py --show-args
 ros2 launch f1_mapping_bringup lidar_mapping.launch.py --show-args
+ros2 pkg executables f1_l_cleaning
+ros2 launch f1_pool_cleaning pool_bringup.launch.py --show-args
+ros2 launch f1_l_cleaning l_bringup.launch.py --show-args
 ```
 
-`f1_nano_bridge` 前缀应为 `/home/nvidia/surface_ws/install/f1_nano_bridge`，其可执行程序应只有 `f1_bridge`；`f1_operator_gateway` 应提供 `f1_operator_gateway`。IMU 随原生串口桥发布，无独立接入节点。Cartographer 应有 `cartographer_node` 及 `cartographer_occupancy_grid_node` 或 `occupancy_grid_node`。`--show-args` 只检查启动入口，不启动硬件。
+`f1_nano_bridge` 前缀应为 `/home/nvidia/surface_ws/install/f1_nano_bridge`，其可执行程序应只有 `f1_bridge`；`f1_operator_gateway` 应提供 `f1_operator_gateway`，`f1_l_cleaning` 应提供 `l_controller`。IMU 随原生串口桥发布，无独立接入节点。Cartographer 应有 `cartographer_node` 及 `cartographer_occupancy_grid_node` 或 `occupancy_grid_node`。`--show-args` 只检查启动入口，不启动硬件。
 
 以后运行节点时只加载 `/opt/ros/humble/setup.bash` 和 `/home/nvidia/surface_ws/install/local_setup.bash`。同机查看结果的终端使用相同 ROS 域；PC 参与实时通信时也设置域 33 和相同 RMW，并加载 PC 自己构建的 `surface_ws`。
 
@@ -164,11 +172,11 @@ export ROS_DOMAIN_ID=173
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 cd /home/nvidia/surface_ws
 colcon test --executor sequential --return-code-on-test-failure \
-  --ctest-args -E '^firmware$'
+  --ctest-args -E '^firmware(_imu)?$'
 colcon test-result --verbose
 ```
 
-此命令明确排除了 `firmware` 测试，因为 ROS 工作空间不包含它所需的 STM32 固件源码；其余用例包含网关协议和本机 ROS 检查，应无失败、无错误。测试使用合成输入和本机通信，不连接执行器。测试后关闭该终端，实景终端按第 6 节加载环境。
+此命令排除 `firmware` 和 `firmware_imu` 两组测试，两者都需要仓库外的 STM32 固件源码；其余用例包含网关协议、大 L 路线、清洗状态机和本机 ROS 检查，应无失败、无错误。测试使用合成输入和本机通信，不连接执行器。测试后关闭该终端，实景终端按第 6 节加载环境。
 
 如要运行完整测试，在 PC 单独同步只读测试所需的固件目录：
 
@@ -187,7 +195,7 @@ rsync -av --exclude='__pycache__/' --exclude='*.pyc' \
 ```bash
 export F1_FIRMWARE_DIR=/home/nvidia/surface_firmware
 colcon test --packages-select f1_nano_bridge --return-code-on-test-failure \
-  --ctest-args -R '^firmware$'
+  --ctest-args -R '^firmware(_imu)?$'
 colcon test-result --verbose
 ```
 
@@ -195,7 +203,7 @@ colcon test-result --verbose
 
 ## 8. 实机雷达：单独恢复驱动
 
-**当前四个包不包含 PAVO2 雷达驱动。** 如果驱动曾放在被删除的工作空间里，它也需要从原源码/备份恢复。上述四包编译成功不代表 `/pavo2_scan` 已恢复。
+**本仓库不包含 PAVO2 雷达驱动。** 如果驱动曾放在被删除的工作空间里，它也需要从原源码/备份恢复。上述六包编译成功不代表 `/pavo2_scan` 已恢复。
 
 先检查旧服务是否存在、指向哪里：
 
@@ -204,7 +212,7 @@ systemctl cat pavo2-scan.service
 systemctl show pavo2-scan.service -p ExecStart -p WorkingDirectory --no-pager
 ```
 
-服务文件仍存在不等于驱动存在。若入口指向已删除目录，需要恢复对应 ROS 2 驱动源码，并更新服务引用的路径和环境。后续驱动源码也放在 `/home/nvidia/surface_ws/src/` 中，安装依赖并在同一工作空间构建；加入驱动后包数量会多于四个。仓库尚未包含该驱动及服务定义，因此这里不假设其仓库地址、包名或可执行文件。
+服务文件仍存在不等于驱动存在。若入口指向已删除目录，需要恢复对应 ROS 2 驱动源码，并更新服务引用的路径和环境。后续驱动源码也放在 `/home/nvidia/surface_ws/src/` 中，安装依赖并在同一工作空间构建；加入驱动后包数量会多于六个。仓库尚未包含该驱动及服务定义，因此这里不假设其仓库地址、包名或可执行文件。
 
 驱动恢复后，在运行终端检查：
 
@@ -213,7 +221,7 @@ ros2 topic info /pavo2_scan --verbose
 ros2 run f1_mapping_bringup scan_check --samples 100
 ```
 
-确认扫描有效后，再按[纯雷达建图步骤](START_LIDAR.md)启动 SLAM，或按[沿边清洗实景验证](src/f1_pool_cleaning/DEPLOY_TEST_NANO.md)继续。已有地图备份仍在 PC 的 `backups/nano_maps`，需要时再单独恢复。
+确认扫描有效后，再按[纯雷达建图步骤](START_LIDAR.md)启动 SLAM，或按[矩形清洗实景验证](src/f1_pool_cleaning/DEPLOY_TEST_NANO.md)、[大 L 清洗说明](src/f1_l_cleaning/README.md)继续。历史地图备份约定为 PC 的 `/home/bboss/new-nano/backups/nano_maps`；使用前确认实际文件存在，或从本地 `maps/` 单独同步。
 
 ## 9. rosdep 更新报错处理
 
@@ -224,7 +232,7 @@ ros2 run f1_mapping_bringup scan_check --samples 100
 | 找不到 `file:///usr/share/python3-rosdep2/debian.yaml` | rosdep 源列表仍引用一个已不存在的本地规则文件；可能是更换 rosdep 安装包后遗留的配置，单凭日志不能确认变更过程 |
 | `raw.githubusercontent.com/.../index-v4.yaml` 超时 | ROS 发行版索引下载失败；base/python 等规则已经使用镜像，不代表发行版索引也已换源 |
 
-后续 `All system dependencies have been satisfied` 表示依照当前可用规则，项目声明的依赖已满足，不表示上面的更新成功。四个包已列出则说明源码位置与功能包发现正常，无需重新传输源码。
+后续 `All system dependencies have been satisfied` 表示依照当前可用规则，项目声明的依赖已满足，不表示上面的更新成功。`colcon list` 能列出第 4 节的当前包列表，才说明当前源码位置与功能包发现符合预期；历史日志中的四包数量不再适用于当前版本。
 
 在该 Ubuntu Nano 上，仅当所引用文件确实不存在时，备份源列表并注释失效引用：
 

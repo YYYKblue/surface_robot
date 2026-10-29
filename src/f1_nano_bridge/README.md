@@ -30,12 +30,13 @@ App 的启动方式和协议见 [`f1_operator_gateway`](../f1_operator_gateway/R
 ```bash
 source /opt/ros/humble/setup.bash
 cd /home/nvidia/surface_ws
-colcon build --symlink-install --packages-up-to f1_operator_gateway
+colcon build --symlink-install --packages-up-to f1_nano_bridge f1_operator_gateway
 source install/local_setup.bash
 
 ros2 launch f1_nano_bridge bridge.launch.py \
   serial_enabled:=true motion_enabled:=true direction_confirmed:=true \
   allow_fifth_thruster:=true
+# 另一终端加载同一 ROS/工作空间环境后启动网关：
 ros2 launch f1_operator_gateway operator_gateway.launch.py bind_address:=0.0.0.0
 ```
 
@@ -44,9 +45,9 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py bind_address:=0.0.0.0
 ## 控制安全边界
 
 - App 发送最新手动输入，不发送 token，也不调用 ROS 服务。
-- 网关只保留一个活动操作端；第二个连接不能发送手动指令。
+- 网关只保留一个活动操作端；其他连接可接收遥测，但不能发送手动或任务操作。
 - `allow_fifth_thruster` 默认在 `config/bridge.yaml` 中启用，因此 Qt App 可使用第五电推的 `-100%` 到 `100%` 输入；如需硬件锁定可改为 `false`。
-- App 停止发送输入、WebSocket 断开或网关退出时，网关释放内部会话。
+- App 停止发送输入、WebSocket 断开或网关退出时，网关释放自己的手动会话。自动任务的租约由任务控制器管理，需通过其 `pause/cancel` 停止；App 的 `manual_stop` 不调用 `/f1/stop`。
 - 重连后不会恢复上一次动作；必须重新产生新输入。
 - RC 接管、epoch 改变、串口错误、CTRL/ACK 超时和原始命令过期仍会停止输出。
 
@@ -56,7 +57,12 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py bind_address:=0.0.0.0
 source /opt/ros/humble/setup.bash
 cd /home/bboss/new-nano/surface_ws
 colcon build --symlink-install --packages-up-to f1_nano_bridge f1_operator_gateway
-colcon test --packages-select f1_nano_bridge f1_operator_gateway --return-code-on-test-failure
+source install/local_setup.bash
+export ROS_LOCALHOST_ONLY=1
+export ROS_DOMAIN_ID=173
+colcon test --packages-select f1_nano_bridge f1_operator_gateway \
+  --return-code-on-test-failure --ctest-args -E '^firmware(_imu)?$'
+colcon test-result --verbose
 ```
 
-测试不会连接真实串口或驱动电机。跨机 WebSocket、实际 Wi-Fi 延迟、雷达坐标和执行器方向仍需现场验收。
+上述命令跳过需要外部固件源码的 `firmware` 和 `firmware_imu` 测试组；完整测试的 `F1_FIRMWARE_DIR` 准备步骤见[部署文档](../../DEPLOY_NANO.md#7-nano离线测试)。测试不会连接真实串口或驱动电机。跨机 WebSocket、实际 Wi-Fi 延迟、雷达坐标和执行器方向仍需现场验收。

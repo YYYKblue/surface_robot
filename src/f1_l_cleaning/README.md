@@ -1,5 +1,7 @@
 # f1_l_cleaning：大 L 两段墙清洗
 
+文档核对：2026-10-29。项目构建、部署和任务入口总览见[工作空间 README](../../README.md)。
+
 目标是 `maps/lidar_20261026_170703.pgm` 左下方的大 L。开放路线为
 `A → B → C`，只有 `edge_0`、`edge_1`，墙始终在船左侧。
 本包负责路线、配置和启动编排；沿墙、右转、定位、租约及硬件输出复用
@@ -35,7 +37,7 @@ AB 约 8.78 m，BC 约 11.84 m，右转约 92.56°。坐标来自栅格墙线拟
 ```bash
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-up-to f1_l_cleaning
-source install/setup.bash
+source install/local_setup.bash
 ros2 launch f1_l_cleaning l_bringup.launch.py \
   load_state_filename:="$PWD/maps/lidar_20261026_170703.pbstream" \
   start_rviz:=true
@@ -43,6 +45,14 @@ ros2 launch f1_l_cleaning l_bringup.launch.py \
 
 地图文件由现场提供，不打包进源码。请显式指定本机 pbstream 路径；
 默认路径是 `~/surface_ws/maps/lidar_20261026_170703.pbstream`。
+`maps/` 被 Git 忽略，根部署命令也排除了它；即使本地已有地图，Nano 仍需单独同步。在 PC 确认源文件存在后执行：
+
+```bash
+ssh nvidia@192.168.1.188 'mkdir -p /home/nvidia/surface_ws/maps'
+rsync -av /home/bboss/new-nano/surface_ws/maps/lidar_20261026_170703.pbstream \
+  nvidia@192.168.1.188:/home/nvidia/surface_ws/maps/
+```
+
 雷达驱动需已运行，默认扫描话题 `/pavo2_scan`。
 在 RViz 的 `2D Pose Estimate` 标记初始位姿，初始船应位于 AB 附近、
 朝向 B，墙在船左侧。定位状态变为 `LOCALIZATION_READY` 后手动启动：
@@ -77,6 +87,12 @@ ros2 service call /l_cleaning/cancel std_srvs/srv/Trigger '{}'
 该参数会为新启动的 bridge 开启串口与运动权限；如果复用已有 bridge，其权限
 必须在该 bridge 自身配置。预览用 `output_enabled:=false`；`brush_percent=0`
 不受现有控制配置支持，不能用它表示无输出模式。
+
+## Qt App 接入
+
+App 网关默认订阅和调用 `/pool_cleaning/*`，不会自动连接本包。使用 App 操作大 L 时，按[网关说明](../f1_operator_gateway/README.md#连接大-l-任务)重映射 `status/start/pause/cancel` 四个接口；共享 `/f1/*`、`/map` 和 TF 不变。网关需要另行构建和启动，`--packages-up-to f1_l_cleaning` 不包含网关。
+
+自动任务停止使用 `/l_cleaning/pause` 或 `/l_cleaning/cancel`。App 的红色“停止全部”按钮实际发送 `manual_stop`，仅释放网关手动会话，不会暂停本任务。
 
 ## 验证边界
 
