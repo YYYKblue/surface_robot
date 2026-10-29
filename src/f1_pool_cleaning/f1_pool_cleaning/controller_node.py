@@ -1,5 +1,5 @@
 """Rectangle edge-task ROS adapter with isolated preview and optional lease."""
-from dataclasses import fields, MISSING
+from dataclasses import fields, MISSING, replace
 import json
 import math
 import time
@@ -10,6 +10,7 @@ from rclpy.time import Time
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from geometry_msgs.msg import PoseWithCovarianceStamped
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from f1_interfaces.msg import ActuatorCommand, EdgeTarget, WallObservation
@@ -20,6 +21,8 @@ from .config import Config
 from .geometry import PoolModel
 from .mission import Mission, Feedback, Pose, Effort, command_fields
 from .lease import Lease
+from .autonomous import AutonomousMission
+from .navigation import Navigator, NavigationConfig, NavigationScan
 
 
 class PoolController(Node):
@@ -73,12 +76,31 @@ class PoolController(Node):
         self.boundary_xy = self._declare_readonly(
             "boundary_xy", self.derived_geometry.get("boundary_xy") or [0.0])
         self.default_edge_id = self._declare_readonly("default_edge_id", "edge_0")
+        self.start_policy = self._declare_readonly("start_policy", "specified")
+        if self.start_policy not in ("specified", "nearest_reachable"):
+            raise ValueError("start_policy must be specified or nearest_reachable")
         self.pool = self._build_pool()
         if self.live and (self.get_parameter("use_sim_time").value or not self.config.fifth_left_sign):
             self.destroy_node()
             raise ValueError("hardware output requires system time and known fifth_left_sign")
         self.add_on_set_parameters_callback(self._validate_parameters)
-        self.mission = Mission(self.config)
+        self.automatic = bool(self.edge_task_enabled and self.map_path)
+        if self.start_policy == "nearest_reachable" and not self.automatic:
+            raise ValueError("nearest_reachable requires map:= and edge_task_enabled=true")
+        if self.automatic:
+            from .map_profile import load_occupancy
+            navigation = NavigationConfig(**{
+                field.name: self._declare_readonly("navigation_"+field.name, field.default)
+                for field in fields(NavigationConfig)})
+            self.mission = AutonomousMission(
+                self.config, self.pool, Navigator(load_occupancy(self.map_path), self.config, navigation))
+        else:
+            # Explicit, map-free fixtures and standalone legacy wall following.
+            self.mission = Mission(self.config)
+        self.requested_start_edge = None
+        self.wall_after_ns = 0
+        self.synced_target_generation = -1
+        self.navigation_scan = None
         self.selected_edge = None
         self.edge_generation = 0
         self.edge_task_id = f"edge-task-{int(time.time() * 1000)}"
@@ -104,12 +126,15 @@ class PoolController(Node):
             self.localization_sub = self.create_subscription(
                 String, "/pool_cleaning/localization_status", self._localization_status,
                 localization_qos)
-        if self.use_map_tf:
+        if self.use_map_tf or self.automatic:
             from tf2_ros import Buffer, TransformListener
             self.tf_buffer = Buffer()
             self.tf_listener = TransformListener(self.tf_buffer, self)
-        else:
+        if not self.use_map_tf:
             self.pose_sub = self.create_subscription(PoseWithCovarianceStamped, "/pool_cleaning/map_pose", self._pose, qos)
+        if self.automatic:
+            self.scan_sub = self.create_subscription(
+                LaserScan, self._declare_readonly("scan_topic", "/pavo2_scan"), self._navigation_scan, qos)
         self.preview_pub = self.create_publisher(ActuatorCommand, "/pool_cleaning/command_preview", 2)
         self.status_pub = self.create_publisher(String, "/pool_cleaning/status", 5)
         self.lease = Lease(self) if self.live else None
@@ -207,6 +232,7 @@ class PoolController(Node):
         msg.edge_id = self.selected_edge.id if self.selected_edge else ""
         transfer_without_wall = self.mission.phase in (
             "EDGE_STOP", "MOVE_INWARD", "TURN_TO_NEXT_EDGE", "COMPLETE")
+        transfer_without_wall |= not getattr(self.mission, "target_wall_enabled", True)
         msg.valid = (bool(self.selected_edge and self.pose and not transfer_without_wall)
                      if valid is None else bool(valid))
         msg.reason = reason or ("waiting for map pose" if not self.pose else "")
@@ -239,6 +265,8 @@ class PoolController(Node):
             response.success = False
             response.message = f"unknown edge id: {request.edge_id}"
             return response
+        if self.automatic:
+            self.requested_start_edge = edge.id
         self._set_selected_edge(edge)
         response.success, response.message = True, f"selected {edge.id}"
         return response
@@ -264,10 +292,16 @@ class PoolController(Node):
         """Publish a new wall target after the mission finishes a right turn."""
         if not self.edge_task_enabled or self.mission.edge is None:
             return
-        if self.selected_edge is self.mission.edge:
+        generation = getattr(self.mission, "target_generation", 0)
+        if self.selected_edge is self.mission.edge and (not self.automatic or generation == self.synced_target_generation):
             return
         self.selected_edge = self.mission.edge
+        self.synced_target_generation = generation
         self.edge_generation += 1
+        if self.automatic:
+            self.wall_after_ns = self.get_clock().now().nanoseconds
+            if self.wall is not None:
+                self.wall = replace(self.wall, valid=False, reason="waiting for new target-wall evidence")
         self._publish_edge_target(valid=False, reason="edge transfer completed; resetting wall association")
 
     def _halt(self, reason, phase="PAUSED"):
@@ -285,6 +319,8 @@ class PoolController(Node):
             self._halt(reason)
 
     def _wall(self, msg):
+        if self.automatic and stamp_ns(msg.header.stamp) <= self.wall_after_ns:
+            return
         if msg.header.frame_id != self.config.base_frame or not msg.session:
             self._invalidate("wall", "invalid wall frame/session")
             return
@@ -339,14 +375,51 @@ class PoolController(Node):
         yaw = math.atan2(2*(q.w*q.z + q.x*q.y), 1 - 2*(q.y*q.y + q.z*q.z))
         self._accept_pose(Pose(stamp_ns(tf.header.stamp), t.x, t.y, yaw))
 
+    def _navigation_scan(self, msg):
+        """Raw scan freshness/obstacles are independent of successful wall fitting."""
+        from tf2_ros import TransformException
+        source_stamp = stamp_ns(msg.header.stamp)
+        if self.navigation_scan and source_stamp <= self.navigation_scan.stamp_ns:
+            return
+        if (source_stamp <= 0 or not msg.header.frame_id or len(msg.ranges) < 12
+                or not all(math.isfinite(v) for v in (msg.angle_min, msg.angle_increment, msg.range_min, msg.range_max))
+                or msg.angle_increment == 0 or not 0 <= msg.range_min < msg.range_max):
+            self.navigation_scan = None
+            return
+        x = y = yaw = 0.
+        if msg.header.frame_id != self.config.base_frame:
+            try:
+                tf = self.tf_buffer.lookup_transform(self.config.base_frame, msg.header.frame_id,
+                                                     Time.from_msg(msg.header.stamp))
+            except TransformException:
+                self.navigation_scan = None
+                return
+            t, q = tf.transform.translation, tf.transform.rotation
+            if (not all(math.isfinite(v) for v in (t.x,t.y,q.x,q.y,q.z,q.w))
+                    or abs(q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w-1.) > .01):
+                self.navigation_scan = None
+                return
+            x,y = t.x,t.y
+            yaw = math.atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z))
+        points = tuple((x+r*math.cos(msg.angle_min+i*msg.angle_increment+yaw),
+                        y+r*math.sin(msg.angle_min+i*msg.angle_increment+yaw))
+                       for i,r in enumerate(msg.ranges) if math.isfinite(r) and msg.range_min <= r <= msg.range_max)
+        if len(points) < max(3, .05*len(msg.ranges)):
+            self.navigation_scan = None
+            return
+        self.navigation_scan = NavigationScan(source_stamp, points)
+        self.received["scan"] = time.monotonic()
+
     def _feedback(self):
-        return Feedback(self.wall, self.pose) if self.pose is not None else None
+        return Feedback(self.wall, self.pose, self.navigation_scan) if self.pose is not None else None
 
     def _stream_error(self, require_wall=None):
         if require_wall is None:
             require_wall = self.mission.wall_required
         now = time.monotonic()
         streams = [("pose", self.config.pose_max_age_sec)]
+        if self.automatic:
+            streams.append(("scan", self.mission.n.scan_max_age_sec))
         if require_wall:
             streams.insert(0, ("wall", self.config.wall_max_age_sec))
         for name, max_age in streams:
@@ -357,6 +430,34 @@ class PoolController(Node):
     def _start(self, request, response):
         if self.use_map_tf:
             self._read_tf_pose()
+        if self.automatic:
+            if self.mission.phase not in ("IDLE", "CANCELLED", "STOPPED", "COMPLETE"):
+                response.success, response.message = False, "cancel before restarting the task"
+                return response
+            error = ("clock fault latched; restart controller" if self.clock_fault else
+                     self._localization_error() or self._stream_error(require_wall=False))
+            if error:
+                response.success, response.message = False, error
+                return response
+            self.mission.requested_edge_id = (self.requested_start_edge or
+                (self.default_edge_id if self.start_policy == "specified" else None))
+            if self.mission.requested_edge_id and self.mission.requested_edge_id not in self.pool.by_id:
+                response.success, response.message = False, "unknown configured start edge"
+                return response
+            response.success, response.message = self.mission.start(self._feedback(),self.get_clock().now().nanoseconds)
+            if response.success:
+                self.requested_start_edge = None
+                self.selected_edge = None
+                self.edge_generation += 1
+                self._publish_edge_target(valid=False,reason="automatic start: selecting a task wall")
+                if self.lease:
+                    response.success, response.message = self.lease.begin()
+                    if not response.success:
+                        self._halt(response.message)
+                else:
+                    response.message += "; preview only"
+                    self._tick()
+            return response
         if self.mission.phase in ("CANCELLED", "COMPLETE"):
             self.selected_edge = None
         error = ("clock fault latched; restart controller" if self.clock_fault else
@@ -394,7 +495,9 @@ class PoolController(Node):
             self.edge_generation += 1
             self._publish_edge_target(valid=False, reason="task cancelled; edge association reset")
             self.selected_edge = None
-            self.mission.pool = None
+            self.requested_start_edge = None
+            if not self.automatic:
+                self.mission.pool = None
             self.mission.edge = None
             self.mission.edge_projection = None
         response.success, response.message = True, "cancelled"
@@ -413,6 +516,9 @@ class PoolController(Node):
         self.clock_pair = now, mono
         if self.use_map_tf:
             self._read_tf_pose()
+        if self.automatic and self.selected_edge is not None:
+            if self.mission.target_wall_enabled:
+                self._publish_edge_target()
         if (self.edge_task_enabled and self.selected_edge is not None
                 and self.mission.phase in ("EDGE_STOP", "MOVE_INWARD", "TURN_TO_NEXT_EDGE")):
             # Break the old wall association as soon as a transfer begins;
@@ -559,11 +665,16 @@ class PoolController(Node):
                       completed_edges=list(self.mission.completed_edges),
                       cleaned_intervals_by_edge=cleaned_by_edge,
                       coverage_available=bool(edge))
+        status["start_policy"] = self.start_policy
+        if self.automatic:
+            status.update(self.mission.status())
         self.status_pub.publish(String(data=json.dumps(status, ensure_ascii=False, allow_nan=False)))
 
     def destroy_node(self):
         if hasattr(self, "lease") and self.context.ok():
             self._halt("controller shutdown", "CANCELLED")
+        if hasattr(self, "mission") and isinstance(self.mission, AutonomousMission):
+            self.mission.close()
         return super().destroy_node()
 
 

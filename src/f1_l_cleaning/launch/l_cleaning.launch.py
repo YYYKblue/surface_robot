@@ -19,6 +19,8 @@ def generate_launch_description():
         DeclareLaunchArgument("map", default_value="",
                               description="Frozen map: .pbstream or the map .yaml beside it"),
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),
+        DeclareLaunchArgument("start_policy", default_value="nearest_reachable", choices=["nearest_reachable", "specified"]),
+        DeclareLaunchArgument("default_edge_id", default_value="edge_0"),
         DeclareLaunchArgument("output_enabled", default_value="false", choices=["true", "false"]),
         DeclareLaunchArgument("use_sim_time", default_value="false", choices=["true", "false"]),
         Node(package="f1_pool_cleaning", executable="pool_perception", name="l_perception",
@@ -29,5 +31,8 @@ def generate_launch_description():
              output="screen", parameters=[LaunchConfiguration("config"),
                  {"use_sim_time": sim,
                   "map": LaunchConfiguration("map"),
+                  "scan_topic": LaunchConfiguration("scan_topic"),
+                  "start_policy": LaunchConfiguration("start_policy"),
+                  "default_edge_id": LaunchConfiguration("default_edge_id"),
                   "output_enabled": ParameterValue(LaunchConfiguration("output_enabled"), value_type=bool)}]),
     ])

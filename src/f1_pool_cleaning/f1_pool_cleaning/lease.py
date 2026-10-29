@@ -89,7 +89,8 @@ class Lease:
             self.node._halt(error or reply.message or "acquire delayed or epoch changed")
             return
         now = self.node.get_clock().now().nanoseconds
-        error = self.node._stream_error()
+        error = (self.node._localization_error() or self.node._stream_error()
+                 or ("clock fault latched" if self.node.clock_fault else ""))
         # Revalidate observations after async acquisition; never reuse pre-lease effort.
         self.node.mission.halt("lease acquired", "IDLE")
         # Explicit start already required a valid wall. If a fresh fit is lost

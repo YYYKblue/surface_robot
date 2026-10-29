@@ -28,7 +28,7 @@ class LController(PoolController):
     def _build_pool(self):
         if not self.edge_task_enabled:
             raise ValueError("L cleaning requires edge_task_enabled=true")
-        if self.default_edge_id != "edge_0":
+        if not self.map_path and self.default_edge_id != "edge_0":
             raise ValueError("L cleaning must start from edge_0 (A -> B)")
         if list(self.boundary_xy) != [0.0]:
             raise ValueError("use route_xy for the open L, not a closed boundary_xy")
@@ -39,7 +39,7 @@ class LController(PoolController):
         return build_l_route(self.route_xy, self.config)
 
     def _set_edge(self, request, response):
-        if request.edge_id != "edge_0":
+        if not self.automatic and request.edge_id != "edge_0":
             response.success = False
             response.message = "L cleaning starts from edge_0; edge_1 is reached by the single transfer"
             return response

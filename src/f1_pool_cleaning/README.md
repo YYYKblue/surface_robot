@@ -2,7 +2,7 @@
 
 文档核对：2026-10-29。本页说明矩形四边任务及共享清洗实现；开放大 L 两段墙任务由 [`f1_l_cleaning`](../f1_l_cleaning/README.md) 配置和适配，使用 `/l_cleaning/*` 接口。
 
-2026-10-26 阶段 4：矩形水池自动清洁一周的软件功能已完成。任务沿用阶段 1 的 Cartographer 固定地图定位，默认从 `edge_0`（第一条长边）启动；完成直边刷墙后自动按 `edge_0 → edge_1 → edge_2 → edge_3` 换边，第四条边完成后进入 `COMPLETE`。船体按 50 cm × 45 cm 矩形建模，稳定刷墙区间为船中心到左墙 32–36 cm，目标中心值 34 cm。
+2026-10-29：矩形任务默认按 `start_policy=nearest_reachable` 从当前定位自动选择最近且可规划到达的墙边；也可设 `start_policy:=specified` 使用 `default_edge_id`，或在空闲时调用 `set_edge` 指定起始边。任务先关刷导航并确认墙面，再按顺时针清洗所有边并补齐起始边未清洗段。相邻边换边继续使用现有后退/右推和闭环右转状态机；转弯不经过新增的足迹或激光碰撞门控。船体按 50 cm × 45 cm 矩形建模，稳定刷墙区间为船中心到左墙 32–36 cm，目标中心值 34 cm。
 
 阶段 1 的软件流程已经具备：定位启动默认不创建新轨迹；操作者在 RViz2 的 `map` 坐标系使用 `2D Pose Estimate` 后，管理器通过 Cartographer `/start_trajectory` 创建带初始位姿的纯定位轨迹。启动入口同时运行栅格地图节点发布 `/map`，管理器检查轨迹状态、`map → base_link` TF 新鲜度、地图边界、雷达有效率和扫描/地图重合，并在稳定窗口后发布 `/pool_cleaning/localization_status` 的 `LOCALIZATION_READY`。阶段 2 的边选择、靠墙和入口调整，阶段 3 的自动换边，以及阶段 4 的四边编排和按边覆盖记录均已接入当前包。代码和本地测试已覆盖完整一周流程；实船清洁效果、地图误差和规定次数的现场重复证据仍需按开发验收文档归档。
 
@@ -10,7 +10,7 @@
 
 当前执行器参数：滚刷 30%，第五电机双向推力 ±30%，滚刷角度门控 ±10°，四主电机从偏角超过 ±3° 就开始纠偏，开刷与纠偏可以同时进行。中心墙距 32–36 cm 时第五路关闭并允许滚刷工作；超出该区间时先侧推调整。换边时滚刷关闭，`REVERSE` 与向右侧推同时持续 0.5 s。
 
-大偏角丢墙修复：本任务的墙线识别范围从约 ±34.4° 扩大到 ±70°，相邻有效观测的角度变化容差从约 11.5° 调整为 30°。这是感知识别范围，滚刷门控仍为 ±10°。运行中收到新鲜但未拟合到墙的扫描时进入 `WAIT_WALL`，全部输出关闭，保持任务与租约，最多等待 1.5 秒；墙线恢复后自动继续纠偏或刷洗。超过等待时间进入 `PAUSED`。初次 start 仍需有效墙线；取得租约的瞬间若短暂丢墙，同样进入等待恢复。
+大偏角丢墙修复：本任务的墙线识别范围从约 ±34.4° 扩大到 ±70°，相邻有效观测的角度变化容差从约 11.5° 调整为 30°。这是感知识别范围，滚刷门控仍为 ±10°。运行中收到新鲜但未拟合到墙的扫描时进入 `WAIT_WALL`，全部输出关闭，保持任务与租约，最多等待 1.5 秒；墙线恢复后自动继续纠偏或刷洗。超过等待时间进入 `PAUSED`。带地图的自动任务初次 start 只要求定位和原始雷达扫描就绪，在导航完成后重新获取有效墙线；无地图的旧沿墙入口仍需有效墙线。
 
 反向纠偏复现修复：盲船头下转向会缩短可见左墙段，本任务拟合所需最短墙段从 0.50 m 调整为 0.30 m，其他点数、残差与内点比例条件保留。墙线关联有效期从 1 秒延长至 2 秒，长于本任务 1.5 秒的丢墙恢复窗口，避免等待期间丢弃墙身份、把后方短墙当成左墙并发出相反转向。详见 [代码复现分析](../../docs/single_side_trial/HEADING_FEEDBACK_20261023.md)。
 
@@ -34,7 +34,7 @@
 
 默认无固定运行时长上限。启动门控在 `LOCALIZATION_CHECK` 中完成定位检查和地图选边，直边状态序列为 `APPROACH_WALL → APPROACH_EDGE → FOLLOW ↔ CORRECT_HEADING/WAIT_WALL → EDGE_STOP`，换边状态序列为 `EDGE_STOP → MOVE_INWARD → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`；端点和后退右推之间各保留一个停止指令周期，不等待物理停稳。转向目标航向误差放宽为 ±20°，转向和整段换边的时间超时默认关闭。临时丢墙为 `WAIT_WALL`。`wall_recovery_sec` 默认 1.5 秒；持续丢墙、反馈过期、定位退化或通信异常进入 `PAUSED`。手动暂停、取消和过期数据不会因反馈恢复而自动续跑；暂停后必须 `cancel` 再 `start`。
 
-任务启动时，操作者只需将船粗略放在 `edge_0` 附近并在 RViz2 发布大致初始位姿。当前配置将 `default_edge_id` 固定为 `edge_0`；控制器仍会检查位姿距离、左侧关系和边走廊，靠墙阶段关闭滚刷并使用第五路调整到 32–36 cm，同时纠正航向，航向稳定后再用滚刷沿边推进到入口。位姿不在 `edge_0` 可用范围、墙位于右侧或目标墙不匹配时拒绝启动。每条边在船中心距前方墙约 30 cm 处换边，第四条边完成后进入 `COMPLETE`。
+任务启动需要新鲜固定地图位姿和雷达扫描。`nearest_reachable` 不要求船预先位于某一指定边：控制器按距离尝试规划到各墙边的接近位姿，关刷移动并确认目标墙；若均不可达则拒绝任务。`specified` 模式及 `set_edge` 仍要求指定边可达。相邻边之间沿用现有换边动作；非相邻补洗转场使用关刷导航。闭合矩形路线结束后核对覆盖缺口，再进入 `COMPLETE`。
 
 ## 前墙距离
 
@@ -58,6 +58,7 @@
 - `perception.py` / `perception_node.py`：墙线拟合、关联和空间观测；`perception_config.py` 只含感知与几何参数。
 - `geometry.py`：矩形/有序边界、顺时针左墙边段、投影和边选择。
 - `mission.py` / `config.py`：边段状态机、靠墙/入口调整、端点停止、后退右推、右转和四边任务参数。
+- `autonomous.py` / `navigation.py` / `coverage.py`：自动找墙、关刷转场、覆盖区间与补洗；连续换边复用 `mission.py`。
 - `controller_node.py` / `lease.py`：任务服务、状态、预览与 bridge 租约输出。
 - `ros_support.py` / `runner.py`：公共消息转换、时间戳和节点退出处理。
 - `localization.py` / `localization_node.py`：RViz 初始位姿、Cartographer 轨迹生命周期和定位就绪门控。
@@ -114,6 +115,31 @@ Nano 源码同步和完整用法见 [下水测试步骤](DEPLOY_TEST_NANO.md)。
 ros2 run f1_pool_cleaning map_profile ~/surface_ws/maps/lidar_20261021_145054.pbstream
 ```
 
+默认自动选边无需增加地图以外的启动参数。保留指定起始边的用法：
+
+```bash
+ros2 launch f1_pool_cleaning pool_bringup.launch.py \
+  map:="$PWD/maps/lidar_20261021_145054.pbstream" \
+  start_policy:=specified default_edge_id:=edge_1
+# 也可在任务空闲时为下一次 start 指定边；cancel 会清除此选择。
+ros2 service call /pool_cleaning/set_edge f1_interfaces/srv/SetEdge '{edge_id: edge_2}'
+```
+
+自动状态为 `PLANNING → NAVIGATING → SETTLING → ACQUIRE_WALL → DOCK_WALL → FOLLOW`。
+规划在后台执行，取得硬件租约前不规划或移动；导航和平移转场关闭滚刷。
+起始墙可在船的右侧或后方，导航先调整朝向，使正式清洗时墙在左侧。
+未知地图区域不能作为普通导航通道；已知目标墙的窄带只允许刷盘接触，
+船体仍需留在空闲区。此检查只用于导航平移，沿墙控制和原换边动作沿用现状。
+
+自动任务状态包含 `requested_start_edge`、`first_brush_contact`、
+`required_contact_intervals`、`remaining_contact_intervals`、`active_cleaning_interval`、
+`remaining_legs`、`repair_pass` 和当前导航航点。覆盖仅统计新鲜反馈、有效墙距/角度
+以及上一条仍有效的开刷命令之间的连续进度。区间按角部边距和可达接近位姿确定，
+并非物理墙面每一厘米都可清洗；累计覆盖允许默认 5 cm 的缺口容差。
+默认最多补洗 2 轮，仍有缺口则 `PAUSED`；无缺口才 `COMPLETE`。
+`navigation_*` 参数可在控制器 YAML 中覆盖；地图或实时障碍导致无法规划时暂停，
+不会自动跳过任务边。指定边模式同样会导航接近并补齐路线。
+
 ```bash
 # Nano 终端 A：自动加载环境，启动冻结地图、定位管理器、bridge、感知和清洗控制器。
 bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano
@@ -157,6 +183,6 @@ Qt App 经网关默认连接本包的 `status/start/pause/cancel`。先单独启
 
 状态还包含 `wall_angle_deg`、`wall_valid`、`wall_reason`、`heading_band_deg`、`map_front_clearance_m`、刷盘/侧推请求及租约状态；`localization_ready`、`localization_state`、`localization_reason` 来自定位管理器。`wall_reason` 保留感知的拒绝原因，持续丢墙暂停时 `reason` 也会带出该原因。查看单条完整状态：`ros2 topic echo /pool_cleaning/status --once --full-length`。预览 token 始终为空。`STOPPED` 只表示输出已关闭，不代表船体已经停稳。
 
-阶段 4 状态还包含 `current_edge_id`、`transfer_next_edge`、`completed_edges`、`edge_progress_m`、`edge_entry_m`、`edge_stop_m`、`cleaned_intervals` 和按边覆盖记录。第四条边结束时 `phase=COMPLETE`，`completed_edges` 应为 `edge_0` 至 `edge_3`。覆盖区间的统计基准是 `left_brush_contact_centerline`，表示左侧滚刷接触中心线的连续轨迹；它用于核对一周任务的边段覆盖，不能单独等同于池底面积覆盖率。
+阶段 4 状态还包含 `current_edge_id`、`transfer_next_edge`、`completed_edges`、`edge_progress_m`、`edge_entry_m`、`edge_stop_m`、`cleaned_intervals` 和按边覆盖记录。所有要求区间补齐后 `phase=COMPLETE`，`completed_edges` 应为 `edge_0` 至 `edge_3`。覆盖区间的统计基准是 `left_brush_contact_centerline`，表示左侧滚刷接触中心线的连续轨迹；它用于核对一周任务的边段覆盖，不能单独等同于池底面积覆盖率。
 
 请使用本包更新后的默认配置。历史诊断目录中的 `rectangle_current_side.yaml` 仍保存当时的 ±3°、8 秒限制，不是本版测试参数。

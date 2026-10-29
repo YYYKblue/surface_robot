@@ -2,6 +2,9 @@ pool_controller:
   ros__parameters:
     output_enabled: false
     edge_task_enabled: true
+    # nearest_reachable selects a reachable wall from the localized pose.
+    # specified uses default_edge_id; set_edge selects a one-task explicit edge.
+    start_policy: nearest_reachable
     # Consume fresh map -> base_link TF from fixed-map localization.
     # Set false when supplying PoseWithCovarianceStamped on map_pose instead.
     use_map_tf: true
@@ -36,8 +39,7 @@ pool_controller:
     # The map-derived boundary is always generated in the canonical clockwise
     # route, so all four edges keep the single brush on the boat's left.
     boundary_order: clockwise
-    # Always start from the first long edge. The pose must still be near edge_0
-    # and the wall must remain on base_link +y; completed edges advance in order.
+    # Used only by start_policy=specified (or an explicit set_edge request).
     default_edge_id: "edge_0"
     # Wider than the 32--36 cm control band: map edge identity must survive
     # rough initial placement before the fifth thruster closes the gap.

@@ -30,6 +30,8 @@ def generate_launch_description():
         DeclareLaunchArgument("start_localization", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("start_bridge", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("start_cleaning", default_value="true", choices=["true", "false"]),
+        DeclareLaunchArgument("start_policy", default_value="nearest_reachable", choices=["nearest_reachable", "specified"]),
+        DeclareLaunchArgument("default_edge_id", default_value="edge_0"),
         DeclareLaunchArgument("output_enabled", default_value="false", choices=["true", "false"]),
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),
         DeclareLaunchArgument("config", default_value=str(cleaning / "config/l_cleaning.yaml")),
@@ -60,6 +62,8 @@ def generate_launch_description():
             "perception_config": arg("perception_config"),
             "map": arg("map"),
             "scan_topic": arg("scan_topic"),
+            "start_policy": arg("start_policy"),
+            "default_edge_id": arg("default_edge_id"),
             "output_enabled": arg("output_enabled"),
         }, IfCondition(arg("start_cleaning"))),
         LogInfo(msg="L task is idle; after localization is ready, start with: "

@@ -20,6 +20,8 @@ def controller_parameters(extra=None):
     """Map-derived geometry plus the open route, without a map file."""
     values = {**SYNTHETIC_GEOMETRY, "route_xy": ROUTE}
     values.update(extra or {})
+    # These legacy adapter tests intentionally supply geometry without a map.
+    values["start_policy"] = "specified"
     return [Parameter(name, value=value) for name, value in values.items()]
 
 

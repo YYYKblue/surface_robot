@@ -480,3 +480,104 @@ def test_cancel_during_acquire_releases_late_token():
         assert not b.commands
     finally:
         h.close()
+
+
+def automatic_controller(tmp_path, **overrides):
+    from f1_pool_cleaning.synthetic_map import rectangle_map
+    values = dict(map=str(rectangle_map(tmp_path)), edge_task_enabled=True,
+                  start_policy="nearest_reachable", use_map_tf=True,
+                  require_localization_ready=True, scan_topic="/test_navigation_scan")
+    values.update(overrides)
+    return PoolController(parameter_overrides=[Parameter(k, value=v) for k, v in values.items()])
+
+
+def automatic_feedback(node, *, ready=True):
+    from geometry_msgs.msg import TransformStamped
+    from sensor_msgs.msg import LaserScan
+    now = node.get_clock().now().nanoseconds
+    tf = TransformStamped()
+    tf.header.frame_id, tf.child_frame_id = "map", "base_link"
+    tf.header.stamp = stamp(now)
+    tf.transform.translation.x, tf.transform.translation.y = 2.8, 1.45
+    tf.transform.rotation.w = 1.
+    node.tf_buffer.set_transform(tf, "test")
+    node._read_tf_pose()
+    scan = LaserScan()
+    scan.header.frame_id, scan.header.stamp = "base_link", stamp(now)
+    scan.angle_min, scan.angle_increment = -math.pi, math.pi/12
+    scan.range_min, scan.range_max = .05, 20.
+    scan.ranges = [10.]*24
+    node._navigation_scan(scan)
+    node._localization_status(String(data=json.dumps(dict(
+        state="LOCALIZATION_READY" if ready else "LOCALIZATION_CHECK", ready=ready))))
+    return scan
+
+
+def test_automatic_start_tf_scan_gate_and_explicit_selection(tmp_path):
+    node = automatic_controller(tmp_path)
+    try:
+        scan = automatic_feedback(node, ready=False)
+        assert not node._start(None, Trigger.Response()).success
+        automatic_feedback(node)
+        assert node.scan_sub.topic_name == "/test_navigation_scan"
+        assert node._set_edge(SetEdge.Request(edge_id="edge_0"), SetEdge.Response()).success
+        assert node._start(None, Trigger.Response()).success
+        assert node.mission.requested_edge_id == "edge_0"
+        assert node.requested_start_edge is None  # consumed for this task only
+        node.mission.future.result(timeout=5)
+        automatic_feedback(node)
+        node._tick()
+        assert node.selected_edge.id == "edge_0"
+        assert node.mission.phase == "NAVIGATING"
+        assert not node.mission.target_wall_enabled
+        assert not node.mission.last_effort.brush_percent
+        # A newly invalid scan cannot be hidden behind the receive watchdog.
+        scan.header.stamp = stamp(node.get_clock().now().nanoseconds)
+        scan.ranges = [float("nan")]*24
+        node._navigation_scan(scan)
+        node._tick()
+        assert node.mission.phase == "PAUSED"
+        node._cancel(None, Trigger.Response())
+        automatic_feedback(node)
+        assert node._start(None, Trigger.Response()).success
+        node.mission.future.result(timeout=5)
+        automatic_feedback(node)
+        node._tick()
+        assert node.selected_edge.id == "edge_2"
+    finally:
+        node.destroy_node()
+
+
+@pytest.mark.parametrize("lose_localization", [False, True])
+def test_automatic_planning_waits_for_lease_and_rechecks_localization(tmp_path, lose_localization):
+    from concurrent.futures import Future
+    from types import SimpleNamespace
+    from f1_interfaces.msg import ControlState
+    from f1_interfaces.srv import AcquireControl
+    node = automatic_controller(tmp_path, output_enabled=True)
+    try:
+        automatic_feedback(node)
+        lease = node.lease
+        pending = Future()
+        lease.acquire = SimpleNamespace(service_is_ready=lambda: True, call_async=lambda request: pending)
+        bridge = ControlState(connected=True, connection_id="automatic-test", epoch=7,
+                              state="READY", source="NANO", armed=True, result="OK",
+                              allow_fifth_thruster=True, ctrl_age_sec=0., ack_age_sec=0.)
+        bridge.stamp = stamp(node.get_clock().now().nanoseconds)
+        lease._bridge(bridge)
+        assert node._start(None, Trigger.Response()).success
+        assert node.mission.phase == "ACQUIRING" and node.mission.future is None
+        automatic_feedback(node, ready=not lose_localization)
+        bridge.state, bridge.owner, bridge.motion_authorized = "ACTIVE", lease.owner, True
+        bridge.stamp = stamp(node.get_clock().now().nanoseconds)
+        lease._bridge(bridge)
+        pending.set_result(AcquireControl.Response(success=True, token="test-token", epoch=7))
+        if lose_localization:
+            assert not lease.token and node.mission.phase == "PAUSED"
+            assert node.mission.future is None
+        else:
+            assert lease.token == "test-token"
+            assert node.mission.phase in ("PLANNING", "NAVIGATING")
+            assert not node.mission.last_effort.brush_percent
+    finally:
+        node.destroy_node()

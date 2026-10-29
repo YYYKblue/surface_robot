@@ -23,7 +23,8 @@ AB 约 8.78 m，BC 约 11.84 m，右转约 92.56°。坐标来自栅格墙线拟
 动作顺序：第一段距终点约 0.30 m 关刷停车 → 同时后退、右推 0.50 s
 → 停车 → 根据地图航向右转 → 进入第二段方向 ±20°后停车
 → 重新建立第二面墙关联、靠墙和纠偏 → 清洗第二段 → 距 C 约 0.30 m
-关刷停车、进入 `COMPLETE`。全程最多一次转移，没有返回起点的动作。
+关刷停车。以上是相邻两边的沿墙动作；自动任务还会检查起始段及转弯后遗漏区间，
+必要时关刷导航回补，所有要求区间补齐后才进入 `COMPLETE`。
 
 “重新找墙”使用现有感知和近墙控制：新鲜但无有效墙线时保持零输出，
 最多等待 1.5 s；持续丢墙或数据过期进入 `PAUSED`。不会在无墙反馈时盲目推进。
@@ -66,8 +67,11 @@ rsync -av /home/bboss/new-nano/surface_ws/maps/lidar_20261026_170703.pbstream \
 ```
 
 雷达驱动需已运行，默认扫描话题 `/pavo2_scan`。
-在 RViz 的 `2D Pose Estimate` 标记初始位姿，初始船应位于 AB 附近、
-朝向 B，墙在船左侧。定位状态变为 `LOCALIZATION_READY` 后手动启动：
+在 RViz 的 `2D Pose Estimate` 标记初始位姿，船可位于任一地图墙边附近；
+默认 `start_policy=nearest_reachable` 会选择从当前位姿可达的最近任务墙边，
+关刷导航到接近点后重新确认左墙。也可用 `start_policy:=specified` 配合
+`default_edge_id`，或在空闲时通过 `set_edge` 指定任务起始段。定位状态变为
+`LOCALIZATION_READY` 后手动启动：
 
 ```bash
 ros2 topic echo /l_cleaning/localization_status
@@ -78,8 +82,10 @@ ros2 service call /l_cleaning/pause std_srvs/srv/Trigger '{}'
 ros2 service call /l_cleaning/cancel std_srvs/srv/Trigger '{}'
 ```
 
-暂停、完成后的重跑需先 cancel，并将船重新放到第一段合法起始位置后 start。
-`set_edge` 只接受 `edge_0`；第二段由状态机自动进入，不能跳过第一段。
+暂停、完成后的重跑需先 cancel，再 start。自动模式可从 `edge_0` 或 `edge_1`
+开始；清洗完当前段后沿开放路线经过另一段，最后关刷导航回补起始段未清洗部分。
+L 路线的末端到起始段之间不执行清洗，也不构造虚假的闭合墙面。相邻边转弯继续
+使用现有后退/右推和闭环转向逻辑。
 
 现有节点复用：
 
@@ -90,9 +96,8 @@ ros2 service call /l_cleaning/cancel std_srvs/srv/Trigger '{}'
 - 已有雷达静态 TF：`publish_lidar_tf:=false`。
 - 可通过 `config`、`perception_config`、`localization_config` 指定现场参数文件。
 
-不要同时启动两套 Cartographer/定位管理器或两个 bridge。旧矩形配置的定位范围
-不适合此地图；新定位 YAML 的 `[-14, 1] × [-2.5, 13.5] m` 是粗范围检查，
-不是可行驶区域或障碍物地图。扫描与占用栅格重合、新鲜度、跳变检查仍然保留。
+不要同时启动两套 Cartographer/定位管理器或两个 bridge。定位范围现在由 `map:=`
+的空闲水域推导；这是定位粗范围检查。扫描与占用栅格重合、新鲜度、跳变检查仍然保留。
 普通 `l_cleaning.launch.py` 只启动感知和控制器，生产配置仍要求定位就绪。
 
 需要实际输出时，在完成现场检查后将同一启动命令加入 `output_enabled:=true`。
@@ -115,5 +120,6 @@ colcon test-result --verbose
 
 软件测试覆盖开放路线校验、一次后退右推和右转、第二墙重关联、第二段完成停车、
 默认禁用硬件输出和定位门控。现场仍需确认拟合端点、0.50 s 动作位移、
-实际余转、角部净空、定位稳定性及刷盘接触效果；进入 `COMPLETE` 只表示两段
-任务流程结束，不证明全部清洗区间有效覆盖。原控制器的盲区和动态避障限制仍然存在。
+实际余转、角部净空、定位稳定性及刷盘接触效果；进入 `COMPLETE` 表示软件记录的
+要求接触区间已覆盖，不证明实际去污效果。原控制器的盲区限制仍然存在。
+自动选边、导航参数和覆盖状态字段见[共享实现说明](../f1_pool_cleaning/README.md)。

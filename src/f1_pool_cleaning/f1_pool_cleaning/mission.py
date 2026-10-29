@@ -22,6 +22,7 @@ class Pose:
 class Feedback:
     wall: Observation
     pose: Pose
+    scan: object = None  # optional raw-scan evidence for map-guided transit
 
 
 @dataclass(frozen=True)
@@ -232,8 +233,11 @@ class Mission:
         if self.edge.id not in self.completed_edges:
             self.completed_edges.append(self.edge.id)
 
+    def _next_task_edge(self):
+        return self.pool.next_edge(self.edge)
+
     def _begin_transfer(self, f, now):
-        next_edge = self.pool.next_edge(self.edge)
+        next_edge = self._next_task_edge()
         self._mark_edge_completed()
         if next_edge is None:
             self.phase = "COMPLETE"
