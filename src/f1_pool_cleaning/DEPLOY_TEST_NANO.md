@@ -8,15 +8,9 @@
 
 两个清洗包已合并为 `f1_pool_cleaning`。Nano 第一次升级必须先按 [迁移说明](MIGRATION.md) 停止旧节点、移走两个旧源码包和对应 build/install 目录；普通 rsync 不会自动删除它们。
 
-源码传输与基础依赖按 [Nano 从零部署指南](../../DEPLOY_NANO.md)。不复制 PC 的 build/install/log。清理旧包后，在 PC 同步：
+源码传输与基础依赖按 [Nano 从零部署指南](../../DEPLOY_NANO.md)。2026-10-30 定位已拆至 `f1_localization`，首次升级必须按[定位拆包升级](../../DEPLOY_NANO.md#定位拆包升级)同步新增包、传播旧文件删除并重新生成安装目录，不能只同步本清洗包。
 
-```bash
-rsync -av --exclude '__pycache__' --exclude '.pytest_cache' \
-  /home/bboss/new-nano/surface_ws/src/f1_pool_cleaning/ \
-  nvidia@192.168.1.188:/home/nvidia/surface_ws/src/f1_pool_cleaning/
-```
-
-统一启动入口还需要已有的 `f1_nano_bridge` 包；`--packages-up-to f1_pool_cleaning` 会一起构建。依赖 `tf2_ros`、`cartographer_ros`，正常运行 rosdep 后构建即可。
+统一启动入口依赖 `f1_localization` 和 `f1_nano_bridge`；`--packages-up-to f1_pool_cleaning` 会一起构建。依赖通过 rosdep 安装。
 
 地图副本路径约定为 `/home/nvidia/surface_ws/maps/20261021_145054/lidar_20261021_145054.pbstream`。PC 同步示例：
 
@@ -36,8 +30,8 @@ colcon build --symlink-install --packages-up-to f1_pool_cleaning
 source install/local_setup.bash
 ros2 run f1_pool_cleaning pool_demo
 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp colcon test \
-  --packages-select f1_pool_cleaning --return-code-on-test-failure
-colcon test-result --test-result-base build/f1_pool_cleaning --verbose
+  --packages-select f1_localization f1_pool_cleaning --return-code-on-test-failure
+colcon test-result --verbose
 ```
 
 每个实景终端加载：
@@ -106,7 +100,7 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 终端 A：
 
 ```bash
-ros2 launch f1_pool_cleaning pool_localization.launch.py \
+ros2 launch f1_localization localization.launch.py \
   map:=/home/nvidia/surface_ws/maps/lidar_20261021_145054.pbstream
 ```
 

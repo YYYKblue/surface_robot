@@ -108,7 +108,7 @@ class LocalizationManager(Node):
                                   else field.default)
             self.declare_parameter(field.name, default)
         self.declare_parameter("configuration_directory", "")
-        self.declare_parameter("configuration_basename", "pool_localization.lua")
+        self.declare_parameter("configuration_basename", "localization.lua")
         self.declare_parameter("reference_trajectory_id", 0)
         self.declare_parameter("scan_topic", "/pavo2_scan")
         self.declare_parameter("trajectory_query_period_sec", .50)
@@ -117,7 +117,8 @@ class LocalizationManager(Node):
         path = self.get_parameter("map").value if self.has_parameter("map") else ""
         if not path:
             return {}
-        from .map_profile import MapProfileError, bounds_overrides
+        from .map_io import MapProfileError
+        from .localization import bounds_overrides
         try:
             return bounds_overrides(path)
         except MapProfileError as exc:

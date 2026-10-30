@@ -11,6 +11,7 @@ from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
     share = Path(get_package_share_directory("f1_pool_cleaning"))
+    localization = Path(get_package_share_directory("f1_localization"))
     bridge = Path(get_package_share_directory("f1_nano_bridge"))
     mapping = Path(get_package_share_directory("f1_mapping_bringup"))
 
@@ -44,11 +45,13 @@ def generate_launch_description():
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),
         DeclareLaunchArgument("publish_lidar_tf", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("start_rviz", default_value="false", choices=["true", "false"]),
-        DeclareLaunchArgument("rviz_config", default_value=str(share / "config/pool_localization.rviz")),
+        DeclareLaunchArgument("rviz_config", default_value=str(localization / "config/localization.rviz")),
+        DeclareLaunchArgument("localization_config", default_value=""),
         DeclareLaunchArgument("reference_trajectory_id", default_value="0"),
         DeclareLaunchArgument("lidar_extrinsics_file", default_value=str(mapping / "config/lidar_planar.yaml")),
-        include(share, "pool_localization.launch.py", {
+        include(localization, "localization.launch.py", {
             "map": config("map"),
+            "localization_config": config("localization_config"),
             "start_trajectory": "false",
             "reference_trajectory_id": config("reference_trajectory_id"),
             "scan_topic": config("scan_topic"),

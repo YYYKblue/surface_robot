@@ -108,11 +108,12 @@ ssh nvidia@192.168.1.188
 `rosdep update` 使用普通用户执行。该流程依据[官方 rosdep 使用说明](https://docs.ros.org/en/humble/Tutorials/Intermediate/Rosdep.html)，从 `package.xml` 解析依赖；网络或依赖解析失败时先解决错误，再执行下一步。
 括号内启用了失败即停止，避免更新失败后继续使用已有缓存安装依赖。若出现缺失的 `debian.yaml` 或 GitHub 索引超时，按[第 9 节](#9-rosdep-更新报错处理)修复后重试。
 
-未额外加入雷达驱动时，当前应列出六个项目包：
+未额外加入雷达驱动时，当前应列出七个项目包：
 
 ```text
 f1_interfaces
 f1_l_cleaning
+f1_localization
 f1_mapping_bringup
 f1_nano_bridge
 f1_operator_gateway
@@ -205,7 +206,7 @@ colcon test-result --verbose
 
 ## 8. 实机雷达：单独恢复驱动
 
-**本仓库不包含 PAVO2 雷达驱动。** 如果驱动曾放在被删除的工作空间里，它也需要从原源码/备份恢复。上述六包编译成功不代表 `/pavo2_scan` 已恢复。
+**本仓库不包含 PAVO2 雷达驱动。** 如果驱动曾放在被删除的工作空间里，它也需要从原源码/备份恢复。上述七包编译成功不代表 `/pavo2_scan` 已恢复。
 
 先检查旧服务是否存在、指向哪里：
 
@@ -214,7 +215,7 @@ systemctl cat pavo2-scan.service
 systemctl show pavo2-scan.service -p ExecStart -p WorkingDirectory --no-pager
 ```
 
-服务文件仍存在不等于驱动存在。若入口指向已删除目录，需要恢复对应 ROS 2 驱动源码，并更新服务引用的路径和环境。后续驱动源码也放在 `/home/nvidia/surface_ws/src/` 中，安装依赖并在同一工作空间构建；加入驱动后包数量会多于六个。仓库尚未包含该驱动及服务定义，因此这里不假设其仓库地址、包名或可执行文件。
+服务文件仍存在不等于驱动存在。若入口指向已删除目录，需要恢复对应 ROS 2 驱动源码，并更新服务引用的路径和环境。后续驱动源码也放在 `/home/nvidia/surface_ws/src/` 中，安装依赖并在同一工作空间构建；加入驱动后包数量会多于七个。仓库尚未包含该驱动及服务定义，因此这里不假设其仓库地址、包名或可执行文件。
 
 驱动恢复后，在运行终端检查：
 
@@ -312,3 +313,41 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py --show-args
 [`--cmake-clean-cache`](https://colcon.readthedocs.io/en/main/reference/verb/build.html#cmake-specific-arguments) 只移除 `CMakeCache.txt`，不等于清空 `.cmake/api` 中的生成索引；本次两个位置都出现异常，因此采用备份整个生成目录的方法。
 
 如果重新生成后仍出现空 JSON，不要反复覆盖或清空缓存。保留新失败日志及上面的备份，检查 `df -h`、`df -i`，并查看 `log/latest_build/f1_nano_bridge/stderr.log` 和 `stdout_stderr.log`；必要时用 `journalctl -k -n 100 --no-pager` 检查 OOM 或文件系统 I/O 错误。Nano 重新构建的结果仍需实际执行确认，本说明未远程操作设备。
+
+## 定位拆包升级
+
+2026-10-30 起，定位实现位于 `f1_localization`，源码包含七个项目包。矩形和大 L 的任务启动命令不变，旧定位 launch 与可执行入口保留转发。详见[定位包说明](src/f1_localization/README.md)。
+
+首次升级时，先停止运行中的定位和清洗节点，备份现场修改的参数文件。在 PC 将新定位包及两个清洗包同步到 Nano；下列 `--delete` 仅限这三个包目录，用于移除迁走的旧定位源码和配置：
+
+```bash
+for package in f1_localization f1_pool_cleaning f1_l_cleaning; do
+  rsync -av --delete --exclude='__pycache__/' --exclude='.pytest_cache/' \
+    "/home/bboss/new-nano/surface_ws/src/$package/" \
+    "nvidia@192.168.1.188:/home/nvidia/surface_ws/src/$package/"
+done
+```
+
+在 Nano 的新终端中只加载系统 ROS，将原构建和安装目录移到独立备份目录后重建。不要加载旧 overlay，避免残留模块或旧 CTest 结果掩盖缺失依赖：
+
+```bash
+set -e
+source /opt/ros/humble/setup.bash
+cd /home/nvidia/surface_ws
+localization_backup=$(mktemp -d "$PWD/pre-localization-split.XXXXXX")
+touch "$localization_backup/COLCON_IGNORE"
+for generated in build install log; do
+  if [ -d "$generated" ]; then mv "$generated" "$localization_backup/"; fi
+done
+rosdep install --from-paths src --ignore-src --rosdistro humble -y
+colcon build --symlink-install --parallel-workers 1 \
+  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
+source install/local_setup.bash
+export ROS_LOCALHOST_ONLY=1 ROS_DOMAIN_ID=173 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+colcon test --executor sequential \
+  --packages-select f1_localization f1_pool_cleaning f1_l_cleaning \
+  --return-code-on-test-failure
+colcon test-result --verbose
+```
+
+测试完成后关闭测试终端，实机另开终端加载正常运行环境。单独部署定位可只构建 `--packages-up-to f1_localization`；不会构建清洗包或 bridge。地图配套文件仍需独立同步。

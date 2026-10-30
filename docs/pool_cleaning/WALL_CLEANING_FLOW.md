@@ -41,7 +41,7 @@ flowchart TD
     E --> E1[PAUSED 或 CANCELLED\n不会自动续跑]
 ```
 
-定位门控由 [localization.py](../../src/f1_pool_cleaning/f1_pool_cleaning/localization.py) 负责；墙线提取和关联由 [perception.py](../../src/f1_pool_cleaning/f1_pool_cleaning/perception.py) 负责；任务服务、数据新鲜度检查、租约和输出由 [controller_node.py](../../src/f1_pool_cleaning/f1_pool_cleaning/controller_node.py) 负责。
+定位门控由 [localization.py](../../src/f1_localization/f1_localization/localization.py) 负责；墙线提取和关联由 [perception.py](../../src/f1_pool_cleaning/f1_pool_cleaning/perception.py) 负责；任务服务、数据新鲜度检查、租约和输出由 [controller_node.py](../../src/f1_pool_cleaning/f1_pool_cleaning/controller_node.py) 负责。
 
 ## 沿墙清洗与自动换边状态机
 

@@ -1,5 +1,7 @@
 # 两个清洗包合并为 f1_pool_cleaning
 
+2026-10-30 补充：定位实现已进一步迁至 [`f1_localization`](../f1_localization/README.md)，下表的 `pool_localization.launch.py` 现为兼容转发；Lua/RViz 使用新包的 `config/localization.*`。首次升级按[定位拆包部署步骤](../../DEPLOY_NANO.md#定位拆包升级)处理旧安装残留。
+
 2026-10-23：`f1_rectangle_cleaning` 的当前单边控制和 `f1_wall_cleaning` 的墙线感知合并到本包。旧脉冲控制器、旧试跑配置及其专用测试删除；保留感知、连续纠偏、双向侧推、丢墙恢复、定位、租约和对应回归测试。合并当时尚未新增自动换边或四边清洗；当前版本已在此基础上实现矩形四边自动清洁一周，详见[开发与验收文档](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)。
 
 ## 入口变化
@@ -57,7 +59,7 @@ RMW_IMPLEMENTATION=rmw_cyclonedds_cpp colcon test \
 colcon test-result --test-result-base build/f1_pool_cleaning --verbose
 ```
 
-当前仓库应发现六个包：`f1_interfaces`、`f1_mapping_bringup`、`f1_nano_bridge`、`f1_pool_cleaning`、`f1_l_cleaning`、`f1_operator_gateway`。额外安装的雷达驱动另计；`f1_l_cleaning` 是当前大 L 任务适配包，不属于需要移除的旧包。
+当前仓库应发现七个包：`f1_interfaces`、`f1_mapping_bringup`、`f1_localization`、`f1_nano_bridge`、`f1_pool_cleaning`、`f1_l_cleaning`、`f1_operator_gateway`。额外安装的雷达驱动另计；`f1_l_cleaning` 是当前大 L 任务适配包，不属于需要移除的旧包。
 
 默认预览（需要外部雷达与定位输入，但不连接硬件桥输出）：
 

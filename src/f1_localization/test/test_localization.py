@@ -2,8 +2,7 @@ import math
 
 from geometry_msgs.msg import PoseWithCovarianceStamped
 
-from f1_pool_cleaning.demo import SYNTHETIC_GEOMETRY
-from f1_pool_cleaning.localization import (
+from f1_localization.localization import (
     LocalizationConfig,
     LocalizationGate,
     PoseSample,
@@ -12,6 +11,11 @@ from f1_pool_cleaning.localization import (
     json_status,
     validate_initial_pose,
 )
+
+
+# Independent synthetic bounds; no cleaning/demo dependency.
+SYNTHETIC_GEOMETRY = dict(origin_x_m=-1.0, origin_y_m=-0.7, axis_yaw_rad=0.0,
+                          length_m=3.0, width_m=1.6)
 
 
 def localization_config(**overrides):

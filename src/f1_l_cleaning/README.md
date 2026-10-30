@@ -1,11 +1,11 @@
 # f1_l_cleaning：大 L 两段墙清洗
 
-文档核对：2026-10-29。项目构建、部署和任务入口总览见[工作空间 README](../../README.md)。
+文档核对：2026-10-30。项目构建、部署和任务入口总览见[工作空间 README](../../README.md)。
 
 目标是 `maps/lidar_20261026_170703.pgm` 左下方的大 L。开放路线为
 `A → B → C`，只有 `edge_0`、`edge_1`，墙始终在船左侧。
-本包负责路线、配置和启动编排；沿墙、右转、定位、租约及硬件输出复用
-`f1_pool_cleaning`。默认只发布预览，不产生硬件输出，也不自动 start。
+本包负责路线、配置和启动编排；沿墙、右转、租约及硬件输出复用
+`f1_pool_cleaning`，定位由独立的 [`f1_localization`](../f1_localization/README.md) 提供。默认只发布预览，不产生硬件输出，也不自动 start。
 
 ## 路线与动作
 
@@ -114,7 +114,7 @@ App 网关默认订阅和调用 `/pool_cleaning/*`，不会自动连接本包。
 ## 验证边界
 
 ```bash
-colcon test --packages-select f1_pool_cleaning f1_l_cleaning --event-handlers console_direct+
+colcon test --packages-select f1_localization f1_pool_cleaning f1_l_cleaning --event-handlers console_direct+
 colcon test-result --verbose
 ```
 

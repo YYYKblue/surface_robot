@@ -11,7 +11,7 @@ from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
     cleaning = Path(get_package_share_directory("f1_l_cleaning"))
-    pool = Path(get_package_share_directory("f1_pool_cleaning"))
+    localization = Path(get_package_share_directory("f1_localization"))
     bridge = Path(get_package_share_directory("f1_nano_bridge"))
     mapping = Path(get_package_share_directory("f1_mapping_bringup"))
 
@@ -41,15 +41,18 @@ def generate_launch_description():
         DeclareLaunchArgument("bridge_config", default_value=str(bridge / "config/bridge.yaml")),
         DeclareLaunchArgument("lidar_extrinsics_file", default_value=str(mapping / "config/lidar_planar.yaml")),
         DeclareLaunchArgument("start_rviz", default_value="false", choices=["true", "false"]),
-        include(pool, "pool_localization.launch.py", {
+        DeclareLaunchArgument("rviz_config", default_value=str(localization / "config/localization.rviz")),
+        DeclareLaunchArgument("localization_config", default_value=""),
+        include(localization, "localization.launch.py", {
             "map": arg("map"),
+            "localization_config": arg("localization_config"),
             "start_trajectory": "false",
             "reference_trajectory_id": arg("reference_trajectory_id"),
             "scan_topic": arg("scan_topic"),
             "lidar_extrinsics_file": arg("lidar_extrinsics_file"),
             "publish_lidar_tf": arg("publish_lidar_tf"),
             "start_rviz": arg("start_rviz"),
-            "rviz_config": str(pool / "config/pool_localization.rviz"),
+            "rviz_config": arg("rviz_config"),
             "cleaning_prefix": "l_cleaning",
         }, IfCondition(arg("start_localization"))),
         include(bridge, "bridge.launch.py", {

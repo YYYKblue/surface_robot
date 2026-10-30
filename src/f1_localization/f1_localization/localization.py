@@ -14,6 +14,8 @@ from dataclasses import dataclass
 import json
 import math
 
+from .map_io import free_bounds, load_occupancy
+
 
 def wrap(angle):
     return math.atan2(math.sin(angle), math.cos(angle))
@@ -72,7 +74,7 @@ def occupied_map_overlap(points, resolution, width, height, data,
 @dataclass(frozen=True)
 class LocalizationConfig:
     # Coarse pose gate covering the mapped free water.  These five values come
-    # from the selected map (see :mod:`f1_pool_cleaning.map_profile`), so they
+    # from the selected map (see :mod:`f1_localization.map_io`), so they
     # carry no defaults: a hand-written rectangle from another map would
     # silently accept or reject the wrong poses.
     origin_x_m: float
@@ -340,3 +342,15 @@ def validate_initial_pose(message, map_frame):
 def json_status(status):
     """Serialize status with strict JSON so diagnostics never contain NaN."""
     return json.dumps(status, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+
+
+def bounds_overrides(path):
+    """Coarse pose gate covering the mapped free water.
+
+    This replaces the hand-written rectangle in the localization config.  It is
+    a containment check only, not a drivable-area or obstacle map; scan/map
+    overlap and pose freshness remain the real evidence.
+    """
+    x_min, y_min, x_max, y_max = free_bounds(load_occupancy(path))
+    return dict(origin_x_m=x_min, origin_y_m=y_min, axis_yaw_rad=0.0,
+                length_m=x_max - x_min, width_m=y_max - y_min)

@@ -26,7 +26,7 @@ Nano 旧工作空间已删除，先按[Nano 从零部署指南](DEPLOY_NANO.md)�
 
 ## 1. 首次部署或源码更新后：同步与构建
 
-首次部署统一按 [DEPLOY_NANO.md](DEPLOY_NANO.md) 完成六个项目包的传输、依赖安装和编译。只加载系统 ROS `/opt/ros/humble`，Cartographer 由系统软件包提供。
+首次部署统一按 [DEPLOY_NANO.md](DEPLOY_NANO.md) 完成七个项目包的传输、依赖安装和编译。只加载系统 ROS `/opt/ros/humble`，Cartographer 由系统软件包提供。
 
 完成后，在 Nano 检查：
 

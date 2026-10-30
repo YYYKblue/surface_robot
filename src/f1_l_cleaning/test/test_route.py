@@ -57,7 +57,7 @@ def test_open_polyline_rejects_degenerate_and_crossing_routes(points):
 
 
 def test_deployed_route_and_map_derived_pose_gate(route_parameters, route_config):
-    from f1_pool_cleaning.localization import LocalizationConfig, LocalizationGate, PoseSample
+    from f1_localization.localization import LocalizationConfig, LocalizationGate, PoseSample
     from f1_pool_cleaning.map_profile import bounds_of
 
     route = build_l_route(ROUTE, route_config)

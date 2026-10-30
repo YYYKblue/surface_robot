@@ -72,3 +72,22 @@ def test_combined_preview_and_reuse_existing_nodes(monkeypatch, tmp_path, start_
             peer.destroy_node()
             rclpy.shutdown()
     assert "process has died" not in log_path.read_text()
+
+
+def test_legacy_localization_launch_exposes_new_package_arguments():
+    """Operators can still pass every old argument through the wrapper."""
+    from ament_index_python.packages import get_package_share_directory
+    from launch import LaunchContext
+    from launch.launch_description_sources import PythonLaunchDescriptionSource
+    from pathlib import Path
+
+    def arguments(package, filename):
+        path = Path(get_package_share_directory(package)) / 'launch' / filename
+        description = PythonLaunchDescriptionSource(str(path)).get_launch_description(LaunchContext())
+        return {argument.name: argument.default_value for argument in description.get_launch_arguments()}
+
+    old = arguments('f1_pool_cleaning', 'pool_localization.launch.py')
+    new = arguments('f1_localization', 'localization.launch.py')
+    assert set(old) == set(new)
+    assert {'map', 'load_state_filename', 'cleaning_prefix', 'localization_config',
+            'publish_lidar_tf', 'reference_trajectory_id', 'rviz_config'} <= set(old)

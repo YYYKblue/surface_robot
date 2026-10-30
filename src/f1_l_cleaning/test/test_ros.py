@@ -108,10 +108,10 @@ def test_localization_launch_requires_a_map_and_applies_l_topics(tmp_path):
     from pathlib import Path
     from ament_index_python.packages import get_package_share_directory
     from launch import LaunchContext
-    from f1_pool_cleaning.localization_node import LocalizationManager
+    from f1_localization.localization_node import LocalizationManager
 
-    pool = Path(get_package_share_directory("f1_pool_cleaning"))
-    spec = importlib.util.spec_from_file_location("pool_localization_launch", pool / "launch/pool_localization.launch.py")
+    pool = Path(get_package_share_directory("f1_localization"))
+    spec = importlib.util.spec_from_file_location("pool_localization_launch", pool / "launch/localization.launch.py")
     launch = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(launch)
     # The factory must reject a missing map before creating any nodes.

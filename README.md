@@ -1,6 +1,6 @@
 # surface_ws：水面清洗机器人 ROS 2 工作空间
 
-更新：2026-10-29，依据当前源码、启动文件和默认配置整理。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
+更新：2026-10-30，依据当前源码、启动文件和默认配置整理。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
 
 项目包含 PAVO2 纯雷达建图、固定地图定位、F103 串口控制、矩形四边清洗、大 L 两段墙清洗和 WebSocket 操作员网关。软件流程已实现，实船定位精度、执行器方向和清洗效果仍需现场验收。
 
@@ -11,14 +11,15 @@
 | [`f1_interfaces`](src/f1_interfaces/README.md) | 统一执行器、控制状态、墙观测、目标边消息与服务 |
 | [`f1_nano_bridge`](src/f1_nano_bridge/README.md) | F103 串口协议、CTRL/ACK、控制租约、超时保护和 IMU 遥测 |
 | [`f1_mapping_bringup`](src/f1_mapping_bringup/README.md) | Cartographer 2D 纯雷达建图、静态雷达 TF 和扫描检查 |
-| [`f1_pool_cleaning`](src/f1_pool_cleaning/README.md) | 固定地图定位、墙感知、沿墙控制、矩形四边任务及覆盖记录 |
+| [`f1_localization`](src/f1_localization/README.md) | 固定地图定位、初始位姿、轨迹管理和定位就绪门控 |
+| [`f1_pool_cleaning`](src/f1_pool_cleaning/README.md) | 墙感知、关刷导航、沿墙控制、矩形四边任务及覆盖记录 |
 | [`f1_l_cleaning`](src/f1_l_cleaning/README.md) | 复用清洗控制器的开放大 L 路线，执行 A → B → C 两段墙 |
 | [`f1_operator_gateway`](src/f1_operator_gateway/README.md) | App 的 WebSocket 手动控制、任务服务和遥测入口 |
 | [`operator_app/`](operator_app/README.md) | Qt 操作员界面，包含地图、雷达、手动输入和任务按钮 |
 | `maps/` | 本地地图资料；被 Git 忽略，克隆仓库和默认部署同步均不包含 |
 | `docs/`、`tools/` | 开发验收、历史试验记录和离线路线示意工具 |
 
-仓库共有六个 ROS 功能包。PAVO2 驱动、STM32 固件源码和地图需要单独准备；旧 ZMQ 网关和旧 UI 协议已移除。
+仓库共有七个 ROS 功能包。PAVO2 驱动、STM32 固件源码和地图需要单独准备；旧 ZMQ 网关和旧 UI 协议已移除。
 
 ## 数据与控制链路
 
@@ -52,6 +53,8 @@ Qt App ←→ WebSocket :8765 ←→ 网关 → f1_nano_bridge ←→ F103
 
 App 网关默认连接矩形任务，未提供任务类型选择或初始位姿操作。大 L 可通过 ROS 服务操作，或按[网关说明](src/f1_operator_gateway/README.md#连接大-l-任务)显式重映射。App 的 `manual_stop`、断线和输入超时只停止网关持有的手动会话；自动任务应使用自己的 `pause` / `cancel` 服务。
 
+固定地图定位现在由独立的 [`f1_localization`](src/f1_localization/README.md) 提供。可单独构建 `--packages-up-to f1_localization`，并使用 `ros2 launch f1_localization localization.launch.py map:=...` 启动；矩形和大 L 的原 bringup 命令保持不变。旧 `f1_pool_cleaning/pool_localization.launch.py` 保留为转发入口。首次升级需按[定位拆包升级](DEPLOY_NANO.md#定位拆包升级)清理旧安装残留。
+
 ## 构建
 
 在工作空间根目录执行；Nano 的依赖安装和源码同步见[完整部署指南](DEPLOY_NANO.md)。
@@ -64,7 +67,7 @@ source install/local_setup.bash
 colcon list --names-only
 ```
 
-按需构建可使用 `--packages-up-to f1_l_cleaning f1_operator_gateway`，当前依赖关系下会覆盖六个包。仅构建 `f1_operator_gateway` 不会构建 bridge 或清洗包；只部署 App 手动控制时应显式选择 `--packages-up-to f1_nano_bridge f1_operator_gateway`。
+按需构建可使用 `--packages-up-to f1_l_cleaning f1_operator_gateway`，当前依赖关系下会覆盖七个包。仅构建 `f1_operator_gateway` 不会构建 bridge 或清洗包；只部署 App 手动控制时应显式选择 `--packages-up-to f1_nano_bridge f1_operator_gateway`。
 
 ## 启动入口
 

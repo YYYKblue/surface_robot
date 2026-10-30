@@ -1,6 +1,8 @@
 # f1_pool_cleaning：泳池沿边清洗
 
-文档核对：2026-10-29。本页说明矩形四边任务及共享清洗实现；开放大 L 两段墙任务由 [`f1_l_cleaning`](../f1_l_cleaning/README.md) 配置和适配，使用 `/l_cleaning/*` 接口。
+文档核对：2026-10-30。本页说明矩形四边任务及共享清洗实现；开放大 L 两段墙任务由 [`f1_l_cleaning`](../f1_l_cleaning/README.md) 配置和适配，使用 `/l_cleaning/*` 接口。
+
+2026-10-30：定位实现、Lua/RViz 配置及定位单元测试迁至 [`f1_localization`](../f1_localization/README.md)。本包保留定位状态消费与停机门控，原定位 launch/脚本仅做兼容转发；矩形与大 L 的 bringup 直接启动新包。
 
 2026-10-29：矩形任务默认按 `start_policy=nearest_reachable` 从当前定位自动选择最近且可规划到达的墙边；也可设 `start_policy:=specified` 使用 `default_edge_id`，或在空闲时调用 `set_edge` 指定起始边。任务先关刷导航并确认墙面，再按顺时针清洗所有边并补齐起始边未清洗段。相邻边换边继续使用现有后退/右推和闭环右转状态机；转弯不经过新增的足迹或激光碰撞门控。船体按 50 cm × 45 cm 矩形建模，稳定刷墙区间为船中心到左墙 32–36 cm，目标中心值 34 cm。
 
@@ -61,8 +63,8 @@
 - `autonomous.py` / `navigation.py` / `coverage.py`：自动找墙、关刷转场、覆盖区间与补洗；连续换边复用 `mission.py`。
 - `controller_node.py` / `lease.py`：任务服务、状态、预览与 bridge 租约输出。
 - `ros_support.py` / `runner.py`：公共消息转换、时间戳和节点退出处理。
-- `localization.py` / `localization_node.py`：RViz 初始位姿、Cartographer 轨迹生命周期和定位就绪门控。
-- `pool_localization.launch.py` / `pool_localization.lua`：冻结地图定位、静态雷达 TF 和定位管理器。
+- [`f1_localization`](../f1_localization/README.md)：独立负责 RViz 初始位姿、Cartographer 轨迹生命周期、冻结地图定位及定位就绪门控。
+- `pool_localization.launch.py`：兼容入口，转发到新定位包；Lua/RViz 配置位于新包。
 
 感知和控制仍为两个独立节点。当前接口统一为 `/pool_cleaning/*`：
 
@@ -95,8 +97,8 @@ colcon build --symlink-install --packages-up-to f1_pool_cleaning
 source install/local_setup.bash
 ros2 run f1_pool_cleaning pool_demo
 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp colcon test \
-  --packages-select f1_pool_cleaning --return-code-on-test-failure
-colcon test-result --test-result-base build/f1_pool_cleaning --verbose
+  --packages-select f1_localization f1_pool_cleaning --return-code-on-test-failure
+colcon test-result --verbose
 ```
 
 演示和测试使用合成反馈、localhost DDS 和模拟 bridge，不连接串口或实机。
