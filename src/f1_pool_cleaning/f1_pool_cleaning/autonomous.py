@@ -1,4 +1,4 @@
-"""Nearest-wall acquisition and complete interval coverage of a task route.
+"""Left-preferred wall acquisition and complete interval coverage of a task route.
 
 Planning runs off the control thread. While waiting, the controller keeps
 publishing STOP with the ordinary lease and deadlines. Transit never brushes.
@@ -117,11 +117,14 @@ class AutonomousMission(Mission):
             projection = edge.project(pose, self.c.brush_x_m, self.c.brush_tip_y_m)
             contact = min(high-self.n.coverage_overlap_m, max(low, projection.contact_s_m))
             goal = nav.edge_pose(edge, contact, self.n.approach_distance_m)
-            # Prefer the nearest wall segment; heading only breaks close ties.
-            candidates.append((projection.distance_to_segment_m,
+            # Prefer walls on the current brush side (base_link +y), then
+            # distance and heading. Ignore numerical noise at the fore/aft
+            # axis; non-left walls remain candidates if left ones cannot be reached.
+            non_left = projection.left_offset_m <= 1e-6
+            candidates.append((non_left, projection.distance_to_segment_m,
                                abs(wrap(edge.yaw_rad-pose.yaw)), edge.id, edge, contact, goal))
         failures = []
-        for _, _, _, edge, contact, goal in sorted(candidates, key=lambda v: (v[0],v[1],v[2])):
+        for _, _, _, _, edge, contact, goal in sorted(candidates, key=lambda v: v[:4]):
             try:
                 path = nav.plan(pose, goal)
             except PlanningError as exc:

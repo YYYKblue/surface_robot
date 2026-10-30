@@ -68,9 +68,12 @@ rsync -av /home/bboss/new-nano/surface_ws/maps/lidar_20261026_170703.pbstream \
 
 雷达驱动需已运行，默认扫描话题 `/pavo2_scan`。
 在 RViz 的 `2D Pose Estimate` 标记初始位姿，船可位于任一地图墙边附近；
-默认 `start_policy=nearest_reachable` 会选择从当前位姿可达的最近任务墙边，
+默认 `start_policy=nearest_reachable` 优先选择当前船体左侧可达的任务墙边，
+左侧均不可达或没有左侧墙时再尝试其他墙；每组按墙段距离、航向调整量排序。
+左侧根据墙段最近点在船体坐标系中的位置判定，随当前船头方向变化。
+两种任务共用[自动选边规则](../f1_pool_cleaning/README.md)，
 关刷导航到接近点后重新确认左墙。也可用 `start_policy:=specified` 配合
-`default_edge_id`，或在空闲时通过 `set_edge` 指定任务起始段。定位状态变为
+`default_edge_id`，或在空闲时通过 `set_edge` 指定任务起始段，指定边优先于自动选边且不可达时不回退。定位状态变为
 `LOCALIZATION_READY` 后手动启动：
 
 ```bash

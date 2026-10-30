@@ -520,14 +520,14 @@ def test_automatic_start_tf_scan_gate_and_explicit_selection(tmp_path):
         assert not node._start(None, Trigger.Response()).success
         automatic_feedback(node)
         assert node.scan_sub.topic_name == "/test_navigation_scan"
-        assert node._set_edge(SetEdge.Request(edge_id="edge_0"), SetEdge.Response()).success
+        assert node._set_edge(SetEdge.Request(edge_id="edge_2"), SetEdge.Response()).success
         assert node._start(None, Trigger.Response()).success
-        assert node.mission.requested_edge_id == "edge_0"
+        assert node.mission.requested_edge_id == "edge_2"
         assert node.requested_start_edge is None  # consumed for this task only
         node.mission.future.result(timeout=5)
         automatic_feedback(node)
         node._tick()
-        assert node.selected_edge.id == "edge_0"
+        assert node.selected_edge.id == "edge_2"
         assert node.mission.phase == "NAVIGATING"
         assert not node.mission.target_wall_enabled
         assert not node.mission.last_effort.brush_percent
@@ -543,7 +543,7 @@ def test_automatic_start_tf_scan_gate_and_explicit_selection(tmp_path):
         node.mission.future.result(timeout=5)
         automatic_feedback(node)
         node._tick()
-        assert node.selected_edge.id == "edge_2"
+        assert node.selected_edge.id == "edge_0"
     finally:
         node.destroy_node()
 

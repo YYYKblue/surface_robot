@@ -2,7 +2,8 @@ l_controller:
   ros__parameters:
     output_enabled: false
     edge_task_enabled: true
-    # Either task edge may be chosen. C->A is brush-off navigation, not a wall.
+    # Prefer current left-side walls, then distance and heading adjustment.
+    # Fall back to other reachable walls. C->A is brush-off navigation, not a wall.
     start_policy: nearest_reachable
     use_map_tf: true
     require_localization_ready: true

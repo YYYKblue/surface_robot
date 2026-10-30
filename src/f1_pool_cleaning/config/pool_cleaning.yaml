@@ -2,7 +2,8 @@ pool_controller:
   ros__parameters:
     output_enabled: false
     edge_task_enabled: true
-    # nearest_reachable selects a reachable wall from the localized pose.
+    # nearest_reachable tries current left-side walls first, then other walls;
+    # each group is ordered by segment distance, then heading adjustment.
     # specified uses default_edge_id; set_edge selects a one-task explicit edge.
     start_policy: nearest_reachable
     # Consume fresh map -> base_link TF from fixed-map localization.

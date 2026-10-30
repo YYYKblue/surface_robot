@@ -105,12 +105,15 @@ def test_rectangle_schedule_wraps_and_returns_to_starting_prefix(rectangle):
     assert legs[-1].end == pytest.approx(1.3)
 
 
-@pytest.mark.parametrize("yaw", [0., math.pi/2, math.pi, -math.pi/2])
-def test_nearest_wall_can_start_on_right_or_behind(rectangle, yaw):
+@pytest.mark.parametrize("yaw, expected", [
+    (0., "edge_0"), (math.pi/2, "edge_3"),
+    (math.pi, "edge_2"), (-math.pi/2, "edge_1"),
+])
+def test_start_prefers_current_left_wall_over_nearer_non_left_walls(rectangle, yaw, expected):
     pose = Waypoint(2.8,1.45,yaw)
     required, legs, path = rectangle._initial_plan(pose,None)
-    assert legs[0].edge_id == "edge_2"
-    assert path[-1].yaw == pytest.approx(rectangle.pool.by_id["edge_2"].yaw_rad)
+    assert legs[0].edge_id == expected
+    assert path[-1].yaw == pytest.approx(rectangle.pool.by_id[expected].yaw_rad)
     previous = pose
     for target in path:
         assert rectangle.navigator.sweep(previous,target,target.contact,
@@ -118,9 +121,72 @@ def test_nearest_wall_can_start_on_right_or_behind(rectangle, yaw):
         previous = target
 
 
-def test_explicit_edge_is_respected_even_when_another_is_nearer(rectangle):
-    _, legs, _ = rectangle._initial_plan(Waypoint(2.8,1.45,0.), "edge_0")
-    assert legs[0].edge_id == "edge_0"
+@pytest.mark.parametrize("edge_id", ["edge_0", "edge_2"])
+def test_explicit_edge_overrides_distance_and_left_preference(rectangle, edge_id):
+    _, legs, _ = rectangle._initial_plan(Waypoint(2.8,1.45,0.), edge_id)
+    assert legs[0].edge_id == edge_id
+
+
+def test_unreachable_left_wall_falls_back_to_nearest_other_wall(rectangle, monkeypatch):
+    plan = rectangle.navigator.plan
+    attempted = []
+    def block_left(start, goal):
+        attempted.append(goal.yaw)
+        if goal.yaw == rectangle.pool.by_id["edge_0"].yaw_rad:
+            raise PlanningError("left approach blocked")
+        return plan(start, goal)
+    monkeypatch.setattr(rectangle.navigator, "plan", block_left)
+    _, legs, _ = rectangle._initial_plan(Waypoint(2.8,1.45,0.), None)
+    assert legs[0].edge_id == "edge_2"
+    assert attempted == [rectangle.pool.by_id[e].yaw_rad for e in ("edge_0", "edge_2")]
+
+
+@pytest.mark.parametrize("blocked, expected_order", [
+    ((), ["edge_0"]),
+    (("edge_0",), ["edge_0", "edge_3"]),
+    (("edge_0", "edge_3"), ["edge_0", "edge_3", "edge_2"]),
+])
+def test_all_left_candidates_are_tried_by_distance_before_non_left(
+        rectangle, monkeypatch, blocked, expected_order):
+    attempted = []
+    def plan(start, goal):
+        edge_id = next(e.id for e in rectangle.pool.edges if e.yaw_rad == goal.yaw)
+        attempted.append(edge_id)
+        if edge_id in blocked:
+            raise PlanningError("blocked approach")
+        return [goal]
+    monkeypatch.setattr(rectangle.navigator, "plan", plan)
+    _, legs, _ = rectangle._initial_plan(Waypoint(2.8,1.45,math.pi/4), None)
+    assert attempted == expected_order
+    assert legs[0].edge_id == expected_order[-1]
+
+
+def test_equal_distance_left_walls_prefer_smaller_heading_change(rectangle, monkeypatch):
+    rectangle.pool = PoolModel.from_boundary([(0.,4.), (4.,4.), (4.,0.), (0.,0.)])
+    monkeypatch.setattr(rectangle.navigator, "usable_interval", lambda e: (.3, e.length_m-.3))
+    monkeypatch.setattr(rectangle.navigator, "plan", lambda start, goal: [goal])
+    # Top and west walls are equally distant and both left; west is aligned
+    # more closely despite its larger edge id.
+    _, legs, _ = rectangle._initial_plan(Waypoint(2.,2.,math.pi/3), None)
+    assert legs[0].edge_id == "edge_3"
+
+
+def test_no_left_wall_uses_nearest_remaining_wall(open_l):
+    pose = Waypoint(-11.15,7.,0.)
+    assert all(e.project(pose).left_offset_m <= 1e-6 for e in open_l.pool.edges)
+    _, legs, _ = open_l._initial_plan(pose, None)
+    assert legs[0].edge_id == "edge_1"
+
+
+def test_unreachable_explicit_edge_does_not_fall_back(rectangle, monkeypatch):
+    attempted = []
+    def fail(start, goal):
+        attempted.append(goal.yaw)
+        raise PlanningError("specified approach blocked")
+    monkeypatch.setattr(rectangle.navigator, "plan", fail)
+    with pytest.raises(PlanningError, match="no reachable task wall"):
+        rectangle._initial_plan(Waypoint(2.8,1.45,0.), "edge_2")
+    assert attempted == [rectangle.pool.by_id["edge_2"].yaw_rad]
 
 
 def test_unknown_and_hull_collision_are_not_accepted_as_free_water(rectangle):
@@ -153,10 +219,10 @@ def test_l_return_path_stays_in_water_and_never_closes_a_wall(open_l):
 
 def test_rectangle_completes_all_edges_and_starting_prefix(rectangle):
     phases, legs, brush = run_boat(rectangle,Waypoint(2.8,1.45,0.))
-    assert [leg.edge_id for leg in legs[:5]] == ["edge_2","edge_3","edge_0","edge_1","edge_2"]
+    assert [leg.edge_id for leg in legs[:5]] == ["edge_0","edge_1","edge_2","edge_3","edge_0"]
     assert {"PLANNING","NAVIGATING","SETTLING","ACQUIRE_WALL","FOLLOW"} <= phases
     assert {"EDGE_STOP", "MOVE_INWARD", "TURN_TO_NEXT_EDGE", "APPROACH_NEXT_EDGE"} <= phases
-    assert brush[0][0] == "edge_2"
+    assert brush[0][0] == "edge_0"
 
 
 def test_l_can_start_on_second_leg_and_complete_both(open_l):
