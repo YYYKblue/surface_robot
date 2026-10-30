@@ -99,7 +99,8 @@ class Occupancy:
     def cell(self, x, y):
         """``'free'``/``'occupied'``/``'unknown'``/``None`` for a map point."""
         column = int(math.floor((x - self.origin_x_m) / self.resolution_m))
-        row = self.height - int(math.floor((y - self.origin_y_m) / self.resolution_m))
+        # The bottom map row is image row height - 1; map y increases upward.
+        row = self.height - 1 - int(math.floor((y - self.origin_y_m) / self.resolution_m))
         if not (0 <= row < self.height and 0 <= column < self.width):
             return None
         if self.occupied[row, column]:
