@@ -351,3 +351,16 @@ colcon test-result --verbose
 ```
 
 测试完成后关闭测试终端，实机另开终端加载正常运行环境。单独部署定位可只构建 `--packages-up-to f1_localization`；不会构建清洗包或 bridge。地图配套文件仍需独立同步。
+
+## Windows App 清洗功能升级（2026-10-30）
+
+同步并重新构建 `f1_operator_gateway`、`f1_localization`、`f1_pool_cleaning`、`f1_l_cleaning`，同时更新 Windows 的整个 `operator_app`。原手动协议保留，新任务界面要求后端提供启动检查及任务实例标识。
+
+```bash
+colcon build --symlink-install --packages-up-to f1_operator_gateway
+source install/local_setup.bash
+ros2 launch f1_operator_gateway operator_bringup.launch.py \
+  map:="$PWD/maps/现场地图.pbstream" bind_address:=0.0.0.0
+```
+
+该入口默认预览，不会自动 start。已有完整 bringup 时不要再运行它；仅启动网关即可，已有 L 定位使用 `localization_prefix:=/l_cleaning`。两类任务接口不再重映射。完整操作与验收边界见[网关](src/f1_operator_gateway/README.md)和 [App](operator_app/README.md)文档。

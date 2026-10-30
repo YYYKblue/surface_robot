@@ -8,6 +8,8 @@
 
 阶段 1 的软件流程已经具备：定位启动默认不创建新轨迹；操作者在 RViz2 的 `map` 坐标系使用 `2D Pose Estimate` 后，管理器通过 Cartographer `/start_trajectory` 创建带初始位姿的纯定位轨迹。启动入口同时运行栅格地图节点发布 `/map`，管理器检查轨迹状态、`map → base_link` TF 新鲜度、地图边界、雷达有效率和扫描/地图重合，并在稳定窗口后发布 `/pool_cleaning/localization_status` 的 `LOCALIZATION_READY`。阶段 2 的边选择、靠墙和入口调整，阶段 3 的自动换边，以及阶段 4 的四边编排和按边覆盖记录均已接入当前包。代码和本地测试已覆盖完整一周流程；实船清洁效果、地图误差和规定次数的现场重复证据仍需按开发验收文档归档。
 
+Windows App 现已支持任务类型选择、初始位姿发布、启动条件和完成结果。推荐使用[网关组合入口](../f1_operator_gateway/README.md)；自动任务状态新增 `task_type/map_id/stamp_ns/run_id/completed_at_ns/can_start/start_blockers`。定位接口可通过控制器 `localization_status_topic` 指向共享管理器。自动任务暂停后需取消再重启，完成后可直接开始新任务。
+
 完整状态机和 ROS 数据流见[沿墙清洗流程图](../../docs/pool_cleaning/WALL_CLEANING_FLOW.md)。
 
 当前执行器参数：滚刷 30%，第五电机双向推力 ±30%，滚刷角度门控 ±10°，四主电机从偏角超过 ±3° 就开始纠偏，开刷与纠偏可以同时进行。中心墙距 32–36 cm 时第五路关闭并允许滚刷工作；超出该区间时先侧推调整。换边时滚刷关闭，`REVERSE` 与向右侧推同时持续 0.5 s。

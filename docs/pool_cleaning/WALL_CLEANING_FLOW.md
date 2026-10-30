@@ -6,8 +6,8 @@
 
 ```mermaid
 flowchart TD
-    A[启动 pool_bringup / pool_cleaning] --> B[固定地图定位]
-    B --> B1[RViz 2D Pose Estimate]
+    A[启动 operator_bringup 或独立清洗入口] --> B[固定地图定位]
+    B --> B1[Windows App 发布初始位姿\n或 RViz 2D Pose Estimate]
     B1 --> B2[启动 Cartographer 纯定位轨迹]
     B2 --> B3{定位门控通过?}
     B3 -- 否 --> B4[LOCALIZATION_CHECK\n不允许 start]
@@ -26,16 +26,21 @@ flowchart TD
     B5 --> C
     W0 --> C
     W1 --> C
-    C --> C1[构造 PoolModel\n选择 default_edge_id=edge_0]
+    C --> C1[构造任务路线\nnearest_reachable 或指定起始边]
     C1 --> C2[发布 EdgeTarget\n保持左墙身份]
     C2 --> T
     C --> S[/pool_cleaning/start/]
     S --> G{启动门控通过?}
     G -- 否 --> R[拒绝启动\n输出关闭]
     G -- 是 --> Q[获取 bridge lease\n或进入 preview]
-    Q --> F[沿墙清洗状态机]
+    Q --> N[关刷规划和导航到可达起点]
+    N --> F[找墙及沿墙清洗状态机]
     F --> O[/command_preview\n及 live lease 输出/]
-    O --> H[status JSON\nphase / edge / coverage / reason]
+    O --> H[status JSON\nphase / run_id / can_start / coverage / reason]
+    H --> UI[网关推送 App\n启动条件及任务阶段]
+    F --> COVER{全部要求区间已覆盖?}
+    COVER -- 否 --> N
+    COVER -- 是 --> DONE[COMPLETE\n输出关闭并显示任务完成]
 
     X[/pause 或 /cancel/] --> E[输出关闭]
     E --> E1[PAUSED 或 CANCELLED\n不会自动续跑]
@@ -43,7 +48,11 @@ flowchart TD
 
 定位门控由 [localization.py](../../src/f1_localization/f1_localization/localization.py) 负责；墙线提取和关联由 [perception.py](../../src/f1_pool_cleaning/f1_pool_cleaning/perception.py) 负责；任务服务、数据新鲜度检查、租约和输出由 [controller_node.py](../../src/f1_pool_cleaning/f1_pool_cleaning/controller_node.py) 负责。
 
+Windows App 的任务类型选择只切换 `/pool_cleaning/*` 与 `/l_cleaning/*`，不切换地图。组合入口使用一套 `/f1_localization/*` 定位，控制器共享定位状态。网关与控制器重新检查启动条件，App 在定位未稳定或状态过期时禁用开始。暂停后需取消再开始；完成后可开始新的自动任务，使用新的 `run_id` 区分完成结果。
+
 ## 沿墙清洗与自动换边状态机
+
+下图描述沿墙子流程。带地图的自动任务启动前只要求定位、位姿和原始扫描等前提，不要求已经贴墙；会先规划和导航，再获取墙线。下图的末边结束还需经过外层覆盖检查与必要的关刷导航回补，不能仅据此向 App 宣布整个自动任务完成。
 
 ```mermaid
 flowchart TD

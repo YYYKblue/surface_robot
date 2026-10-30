@@ -85,7 +85,7 @@ ros2 service call /l_cleaning/pause std_srvs/srv/Trigger '{}'
 ros2 service call /l_cleaning/cancel std_srvs/srv/Trigger '{}'
 ```
 
-暂停、完成后的重跑需先 cancel，再 start。自动模式可从 `edge_0` 或 `edge_1`
+暂停后重跑需先 cancel，再 start；带地图的自动任务完成后可直接 start 新任务。自动模式可从 `edge_0` 或 `edge_1`
 开始；清洗完当前段后沿开放路线经过另一段，最后关刷导航回补起始段未清洗部分。
 L 路线的末端到起始段之间不执行清洗，也不构造虚假的闭合墙面。相邻边转弯继续
 使用现有后退/右推和闭环转向逻辑。
@@ -110,9 +110,9 @@ L 路线的末端到起始段之间不执行清洗，也不构造虚假的闭合
 
 ## Qt App 接入
 
-App 网关默认订阅和调用 `/pool_cleaning/*`，不会自动连接本包。使用 App 操作大 L 时，按[网关说明](../f1_operator_gateway/README.md#连接大-l-任务)重映射 `status/start/pause/cancel` 四个接口；共享 `/f1/*`、`/map` 和 TF 不变。网关需要另行构建和启动，`--packages-up-to f1_l_cleaning` 不包含网关。
+App 已支持任务类型选择、初始位姿发布、定位门控与任务完成显示。已有大 L bringup 时，网关设置 `localization_prefix:=/l_cleaning`；不再重映射任务的 `status/start/pause/cancel`。也可以使用[网关组合入口](../f1_operator_gateway/README.md)统一启动，定位共享 `/f1_localization/*`，本任务消费同一定位状态。
 
-自动任务停止使用 `/l_cleaning/pause` 或 `/l_cleaning/cancel`。App 的红色“停止全部”按钮实际发送 `manual_stop`，仅释放网关手动会话，不会暂停本任务。
+自动任务停止使用“暂停任务”或“取消任务”。App 顶部“停止手动输出”按钮只释放手动会话。暂停后需先取消再重新开始；带地图的自动任务完成后可直接开始新任务。
 
 ## 验证边界
 

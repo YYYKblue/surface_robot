@@ -1,103 +1,116 @@
 # f1_operator_gateway
 
-更新：2026-10-29。Qt 操作员 App 的 Nano 侧 WebSocket 入口。App 发送当前输入，网关通过 `/f1/acquire_control`、`/f1/release_control` 管理手动租约，并向 `/f1/actuator_command` 发布有期限的执行器指令。App 不需要 ROS，也不处理 token。
+更新：2026-10-30。Windows Qt App 的 Nano 侧 WebSocket 入口，提供手动控制、双任务操作、初始位姿服务和状态转发。
 
-网关只提供控制和遥测转发，不启动 bridge、雷达、Cartographer 或清洗节点。
-
-## 构建与启动
-
-只部署手动控制链路时，同时构建 bridge 和网关：
+## 构建
 
 ```bash
 source /opt/ros/humble/setup.bash
 cd /home/nvidia/surface_ws
-colcon build --symlink-install --packages-up-to f1_nano_bridge f1_operator_gateway
+colcon build --symlink-install --packages-up-to f1_operator_gateway
 source install/local_setup.bash
 export ROS_DOMAIN_ID=33
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ```
 
-网关依赖 `python3-websockets`，由 rosdep 安装，也可使用 `sudo apt install python3-websockets`。每个运行终端加载上述环境。若尚未运行 bridge，在终端 A 启动；硬件方向已核对时才启用对应许可：
+包的运行依赖包含组合启动需要的 bridge、定位和两个清洗包，`--packages-up-to` 会构建这些依赖。网关运行需要 `python3-websockets`，通过 rosdep 或 `sudo apt install python3-websockets` 安装。Windows 依赖见 [App 说明](../../operator_app/README.md)。
+
+## 推荐：一个入口启动 App 清洗系统
+
+先运行雷达驱动，并同步同名 `.pbstream`、`.yaml`、`.pgm`。以下默认只预览，不输出硬件动作：
 
 ```bash
-ros2 launch f1_nano_bridge bridge.launch.py \
-  serial_enabled:=true motion_enabled:=true direction_confirmed:=true \
-  allow_fifth_thruster:=true
+ros2 launch f1_operator_gateway operator_bringup.launch.py \
+  map:="$PWD/maps/现场地图.pbstream" bind_address:=0.0.0.0
 ```
 
-在终端 B 启动网关；已有清洗 bringup 提供 bridge 时，直接复用：
+该入口只启动一套 Cartographer/定位管理器、一套 bridge、一个网关，并启动地图几何校验通过的清洗控制器。定位统一使用 `/f1_localization/*`，任务分别使用 `/pool_cleaning/*`、`/l_cleaning/*`。不能与已有完整 bringup 重复启动。
+
+- 地图不支持某种任务时，不启动该控制器，并把具体推导错误传给 App；另一种可用任务仍可运行。
+- 不会在矩形地图上任意猜选两条边作为 L 路线。当前 L 推导存在歧义时不可用。
+- `start_bridge:=false` 复用已有 bridge；`start_localization:=false` 要求已有定位使用 `cleaning_prefix:=f1_localization` 且地图相同。
+- 可指定 `rectangle_config`、`l_config`、`localization_config`、`bridge_config`、`scan_topic`；已有雷达 TF 时设 `publish_lidar_tf:=false`。
+- 需要现场实际输出时加入 `output_enabled:=true`。复用的 bridge 需自行配置对应串口、运动、方向和第五路许可。
+- 支持 `start_rviz:=true`，App 初始位姿发布不依赖 RViz 运行。
+- 类型选择不负责切换地图；不同地图需要重新启动对应配置、发布新位姿并重新等待定位稳定。
+
+监听默认 `127.0.0.1:8765`。跨机设 `bind_address:=0.0.0.0`，Windows 连接 Nano 实际 IP。当前仍用于可信局域网，没有新增 TLS 或登录认证。
+
+## 复用现有节点／仅手动控制
+
+已有矩形任务或只做手动控制时，单独启动网关：
 
 ```bash
 ros2 launch f1_operator_gateway operator_gateway.launch.py bind_address:=0.0.0.0
 ```
 
-`0.0.0.0` 是监听地址，Windows App 应连接 `ws://Nano实际IP:8765`。当前无 TLS 或登录认证，使用可信局域网。App 安装与启动见 [operator_app](../../operator_app/README.md)。
-
-## 参数和接口
-
-| 参数 | 默认值 | 设置方式 |
-|---|---|---|
-| `bind_address` | `127.0.0.1` | launch 参数；跨机设为 `0.0.0.0` |
-| `port` | `8765` | launch 参数 |
-| `input_timeout_sec` | `0.25` | launch 参数；有效范围为 0.1–1.0 秒 |
-| `telemetry_hz` | `10.0` | 节点参数；当前 launch 未暴露，可用 `ros2 run ... --ros-args -p telemetry_hz:=10.0` |
-
-当前命令期限固定为 250 ms；增加输入超时不会同步延长执行器命令期限。App 每 50 ms 发送一次最新手动输入。
-
-| ROS 接口 | 用途 |
-|---|---|
-| `/f1/actuator_command` | 发布手动执行器命令 |
-| `/f1/acquire_control`、`/f1/release_control` | 申请与释放手动租约 |
-| `/f1/control_state` | 设备状态、控制源及第五路许可 |
-| `/map`、TF `map → base_link`、`/pavo2_scan` | 地图、船体位姿和雷达遥测 |
-| `/pool_cleaning/status` | 默认订阅的矩形任务状态 |
-| `/pool_cleaning/start`、`pause`、`cancel` | 默认调用的矩形任务服务 |
-
-协议名为 `f1-operator-v1`，消息使用 JSON 文本：
-
-| App 操作 | 字段与含义 |
-|---|---|
-| `hello` | `client`、可选 `version`；获取协议回应及已有地图 |
-| `manual_input` | `seq`、`direction`、`speed_percent`、`mode`，以及 `brush_enabled/brush_percent`、`thrust_enabled/thrust_percent` |
-| `manual_stop` | 可选 `reason`；释放网关手动会话 |
-| `task` | `action` 为 `start`、`pause` 或 `cancel` |
-
-方向可取 `STOP/FORWARD/REVERSE/LEFT/RIGHT`，档位为 25、50、75，轮组为 `FRONT/BOTH/BACK`；两个辅助执行器百分比范围均为 -100 到 100。服务端发送 `hello`、`map`、`telemetry`、`reply` 或 `error`。地图在内容变化及客户端 `hello` 时发送，遥测包含 `state/pose/scan/task`。
-
-## 控制行为与边界
-
-- 可以有多个 WebSocket 连接接收遥测；首次发送控制操作的客户端成为活动操作端，其他客户端的手动和任务操作会被拒绝。活动端断开后才解除该绑定，手动停止本身不会让出操作端身份。
-- 第五路未获 bridge 确认启用时，网关屏蔽第五路字段并回复原因，仍保留主驱动输入。
-- 手动输入超时、活动端断开或网关退出时，网关释放自身手动租约。后续运动仍需新的输入和有效授权。
-- 任务操作先释放网关手动会话，再调用所选任务服务。执行器互斥由 bridge 的单租约机制承担；当前网关没有根据任务状态独立拒绝手动输入的判断。
-- **`manual_stop` 不调用 `/f1/stop` 或任务 `pause/cancel`。** App 红色“停止全部”按钮和空格键发送的是 `manual_stop`，不能据此认定自动清洗已停止；自动清洗应点“暂停任务”或“取消任务”，并确认任务状态。App 断线也不会主动取消自动任务。
-
-这些行为对应 `operator_gateway/node.py`；硬件桥仍独立处理 RC 接管、通信错误、租约及命令超时。
-
-## 连接大 L 任务
-
-网关默认端点固定为 `/pool_cleaning/*`，没有 `cleaning_prefix` launch 参数。先按[大 L 文档](../f1_l_cleaning/README.md)启动任务，再用以下命令替代普通网关启动，将状态及三个服务重映射到 `/l_cleaning/*`：
+该入口不创建 bridge、雷达、定位或清洗节点。已有大 L bringup 时：
 
 ```bash
-ros2 run f1_operator_gateway f1_operator_gateway --ros-args \
-  -p bind_address:=0.0.0.0 \
-  -r /pool_cleaning/status:=/l_cleaning/status \
-  -r /pool_cleaning/start:=/l_cleaning/start \
-  -r /pool_cleaning/pause:=/l_cleaning/pause \
-  -r /pool_cleaning/cancel:=/l_cleaning/cancel
+ros2 launch f1_operator_gateway operator_gateway.launch.py \
+  bind_address:=0.0.0.0 localization_prefix:=/l_cleaning
 ```
 
-一次只运行一个网关实例；上述命令与普通 launch 不同时使用。App 尚无任务类型选择，界面静态“单边清洗”文字不代表实际路线；实际执行内容由所连接控制器决定。初始位姿仍通过 RViz 或任务的 `set_initial_pose` 服务设置。
+**不再重映射 `/pool_cleaning/status/start/pause/cancel` 到 L 接口。** 网关同时管理两种任务，旧重映射命令会混淆任务类型。`localization_prefix` 只选择共享定位管理器的接口；若手动组合两个控制器，应给它们设置相同的 `localization_status_topic`。
+
+原有矩形与 L bringup 独立使用仍兼容各自的定位前缀。
+
+## 状态与控制语义
+
+| 接口 | 用途 |
+|---|---|
+| `/f1/actuator_command`、`acquire_control`、`release_control` | 手动控制与单租约 |
+| `/f1/control_state` | 控制源、通信、执行器许可 |
+| `/map`、TF、`/pavo2_scan` | 地图、船体位姿、按扫描时间转换的地图雷达点 |
+| `/pool_cleaning/status`、`/l_cleaning/status` | 两种任务的独立状态 |
+| 两组任务的 `start/pause/cancel` | 任务操作 |
+| `${localization_prefix}/set_initial_pose` | 提交 map 坐标系初始位姿 |
+| `${localization_prefix}/localization_status` | 定位诊断、稳定窗口与就绪状态 |
+
+控制器状态新增 `task_type`、`map_id`、`stamp_ns`、`run_id`、`completed_at_ns`、`can_start`、`start_blockers`。启动检查复用于自动任务的 `/start` 和状态发布；在获取租约后仍复查定位/反馈。规划和找墙发生在开始以后，不把贴墙条件强加到自动启动前。
+
+网关检查定位/任务的接收时间和 ROS 源时间戳（0.6 秒），校验地图与任务类型。某任务状态过期不会把已知运行任务视为结束。启动请求串行处理；先停止手动会话，等待待返回的手动申请/释放和控制器状态更新，再发 start。等待超过 3 秒但尚未发送时放弃启动；已发出的操作超时保持结果待确认，不自动重发。开始服务成功后，还需收到新的 `run_id` 状态才确认启动。启动过程中收到暂停/取消会按时序处理，防止迟到的启动响应覆盖停止意图。
+
+初始位姿服务成功只表示请求已接受；新初始位姿确认前不复用旧定位就绪状态。任务运行期间禁止网关发布新初始位姿。RViz/其他 ROS 客户端仍可直接操作 ROS 服务，控制器原有定位失效停机检查保留。
+
+网关明确拒绝自动任务运行/操作处理中新的手动输入；bridge 单租约继续承担硬件互斥。多客户端可观察遥测，首次控制操作绑定活动端，其他端控制请求被拒绝。
+
+`manual_stop` 只停止网关手动会话，不调用自动任务暂停/取消。App 已将按钮改为“停止手动输出”。App 断线不会主动取消自动任务；待发送的启动交接会撤销，已发送的任务操作仍需根据机器人状态确认。
+
+## WebSocket 协议
+
+协议名仍为 `f1-operator-v1`；`hello` 新增 `client_id` 和 `capabilities`。手动消息字段与原版本一致。
+
+```json
+{"op":"task","task_type":"l","action":"start","request_id":"唯一请求编号"}
+{"op":"initial_pose","x":1.2,"y":3.4,"yaw":1.57,"map_revision":1,"request_id":"另一请求编号"}
+```
+
+`task_type` 为 `rectangle/l`；`action` 为 `start/pause/cancel`。位姿使用米、弧度，yaw 在 [-π, π]；`map_revision` 必须匹配当前地图。网关生成 ROS 时间戳、平面四元数和默认协方差。
+
+`reply` 回传 `request_id`、`success`、`message`，可能带 `pending=true`（尚未确认）。网关缓存每客户端最近的请求结果，重复编号不重复执行；App 不自动重试操作。
+
+`telemetry` 包含 `state/pose/scan/tasks/localization/active_tasks/task_busy/operation_pending/can_set_initial_pose/active_client`。`tasks` 分别保存 `rectangle/l` 及其新鲜度和启动条件；`scan` 是 `frame_id=map` 的点列表，缺少对应时间 TF 或扫描过期时为 null。保留 `task` 字段作为矩形旧版状态兼容入口。
 
 ## 验证
-
-构建后可在隔离测试终端运行：
 
 ```bash
 export ROS_LOCALHOST_ONLY=1
 export ROS_DOMAIN_ID=173
-colcon test --packages-select f1_operator_gateway --return-code-on-test-failure
-colcon test-result --test-result-base build/f1_operator_gateway --verbose
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export CYCLONEDDS_URI="file://$PWD/src/f1_operator_gateway/test/cyclonedds_localhost.xml"
+colcon test --executor sequential --packages-select f1_operator_gateway f1_localization f1_pool_cleaning f1_l_cleaning --return-code-on-test-failure
+colcon test-result --verbose
 ```
 
-现有测试覆盖协议解析及部分输入处理，不等同于跨机 WebSocket、Wi-Fi 断连、自动任务停止或显示坐标的实机验收。
+网关测试包括协议、异步启动交接、过期状态、重复请求、初始位姿，以及真实 WebSocket 到模拟 ROS 服务的集成测试；不会连接硬件。Windows 现场仍需验收坐标方向、Wi-Fi 断连、硬件停止及真实清洗效果。
+
+上述 DDS 文件**仅用于本机测试**，使用 localhost 单播与 1200 字节报文/1024 字节分片，不用于连接 Nano。当前开发环境曾出现“能发现节点，但接收不到清洗状态”：独立字符串测试中 10/1000 字节消息正常，3000/10000 字节消息丢失；使用此配置后四种大小均可接收。实机终端不要继承这份测试配置。
+
+### 本次验证记录（2026-10-30）
+
+- `colcon build --packages-up-to f1_operator_gateway`：七个包构建成功。
+- 四个受影响 ROS 包通过 CTest：定位 30、矩形清洗 193、L 清洗 22、网关 37 个 pytest 用例，共 282 个，零失败；使用上述仅限本机的 DDS 配置。
+- Qt 无显示环境测试 6 个通过，覆盖旋转地图坐标转换、初始朝向拖拽、命令队列、定位门控、完成展示及遥测过期。
+- 本地真实地图 `lidar_20261026_170703.pbstream` 的完整组合启动检查通过：一套 Cartographer/定位、一套 bridge、L 任务和网关；地图尺寸 1054×863，WebSocket 初始位姿经真实定位服务接受。没有扫描输入时定位始终未就绪，开始条件保持关闭；所有硬件输出禁用，退出正常。
+- 未进行 Windows 原生打包、跨机 Wi-Fi 或实船验收；本地真实地图检查不证明定位精度和实际清洗效果。

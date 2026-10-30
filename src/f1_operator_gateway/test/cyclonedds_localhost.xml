@@ -1,0 +1,15 @@
+<!-- Test-only localhost unicast. Do not use this to connect to the robot. -->
+<CycloneDDS>
+  <Domain>
+    <General>
+      <AllowMulticast>false</AllowMulticast>
+      <MaxMessageSize>1200B</MaxMessageSize>
+      <FragmentSize>1024B</FragmentSize>
+    </General>
+    <Discovery>
+      <Peers><Peer Address="127.0.0.1"/></Peers>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>60</MaxAutoParticipantIndex>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

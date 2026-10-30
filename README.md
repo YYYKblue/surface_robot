@@ -34,7 +34,7 @@ PAVO2 驱动 → /pavo2_scan → Cartographer → /map、map → base_link TF
 Qt App ←→ WebSocket :8765 ←→ 网关 → f1_nano_bridge ←→ F103
 ```
 
-建图使用纯雷达，不融合桥发布的 IMU。清洗使用已有 `.pbstream` 冻结地图，操作者先在 RViz 的 `map` 坐标系设置 `2D Pose Estimate`，定位达到 `LOCALIZATION_READY` 后才可开始任务。建图与固定地图定位应择一运行，避免重复发布地图和 TF。
+建图使用纯雷达，不融合桥发布的 IMU。清洗使用已有 `.pbstream` 冻结地图，操作者先在 Windows App 地图中发布初始位姿，或在 RViz 的 `map` 坐标系设置 `2D Pose Estimate`，定位达到 `LOCALIZATION_READY` 后才可开始任务。建图与固定地图定位应择一运行，避免重复发布地图和 TF。
 
 | 任务 | 启动入口 | 任务接口 | 对应地图 |
 |---|---|---|---|
@@ -49,9 +49,9 @@ Qt App ←→ WebSocket :8765 ←→ 网关 → f1_nano_bridge ←→ F103
 
 用 `ros2 run f1_pool_cleaning map_profile <地图>` 可离线查看某张地图能推导出什么。船体尺寸、刷盘几何和清洗策略（目标墙距、停车距离、边距）仍按船配置，不随地图变化。
 
-矩形路线为 `edge_0 → edge_1 → edge_2 → edge_3`，三次换边后完成；大 L 为 `edge_0 → edge_1`，一次右转后结束，不返回起点。两种任务都保持墙在船左侧，共享 `/f1/*` 硬件接口；现场一次启动一套任务、一个 bridge 和一套定位。
+矩形任务包含四条边，大 L 包含两条边且不构造 C→A 清洗墙。默认按当前位姿选择可达起始边，关刷导航到起点，沿墙清洗并按需回补遗漏区间，全部要求区间覆盖后才完成。两种任务都保持墙在船左侧，共享 `/f1/*` 硬件接口；同一机器人仅运行一套 bridge 和定位，网关只允许一个清洗任务活动。组合入口可以让当前地图支持的控制器同时待命。
 
-App 网关默认连接矩形任务，未提供任务类型选择或初始位姿操作。大 L 可通过 ROS 服务操作，或按[网关说明](src/f1_operator_gateway/README.md#连接大-l-任务)显式重映射。App 的 `manual_stop`、断线和输入超时只停止网关持有的手动会话；自动任务应使用自己的 `pause` / `cancel` 服务。
+App 支持 L／矩形任务选择、地图初始位姿发布、启动条件和完成结果显示。推荐使用[网关组合入口](src/f1_operator_gateway/README.md)启动一套共享定位和当前地图支持的任务；独立大 L bringup 使用网关 `localization_prefix:=/l_cleaning`，不再重映射任务接口。App 的 `manual_stop`、断线和输入超时只停止网关持有的手动会话；自动任务应使用自己的 `pause` / `cancel` 服务。
 
 固定地图定位现在由独立的 [`f1_localization`](src/f1_localization/README.md) 提供。可单独构建 `--packages-up-to f1_localization`，并使用 `ros2 launch f1_localization localization.launch.py map:=...` 启动；矩形和大 L 的原 bringup 命令保持不变。旧 `f1_pool_cleaning/pool_localization.launch.py` 保留为转发入口。首次升级需按[定位拆包升级](DEPLOY_NANO.md#定位拆包升级)清理旧安装残留。
 
@@ -67,7 +67,7 @@ source install/local_setup.bash
 colcon list --names-only
 ```
 
-按需构建可使用 `--packages-up-to f1_l_cleaning f1_operator_gateway`，当前依赖关系下会覆盖七个包。仅构建 `f1_operator_gateway` 不会构建 bridge 或清洗包；只部署 App 手动控制时应显式选择 `--packages-up-to f1_nano_bridge f1_operator_gateway`。
+按需构建可使用 `--packages-up-to f1_l_cleaning f1_operator_gateway`，当前依赖关系下会覆盖七个包。网关为组合启动声明了 bridge、定位及清洗包的运行依赖，`--packages-up-to f1_operator_gateway` 会一并构建这些依赖。
 
 ## 启动入口
 
@@ -121,7 +121,7 @@ App 网关单独在另一终端运行：
 ros2 launch f1_operator_gateway operator_gateway.launch.py bind_address:=0.0.0.0
 ```
 
-默认监听 `127.0.0.1:8765`；跨机时监听 `0.0.0.0`，App 连接 Nano 的实际 IP。入口当前无认证，使用可信局域网。网关不负责启动 bridge、雷达、定位或清洗节点，Windows 安装与启动见 [App 文档](operator_app/README.md)。
+默认监听 `127.0.0.1:8765`；跨机时监听 `0.0.0.0`，App 连接 Nano 的实际 IP。入口当前无认证，使用可信局域网。上述单独网关入口不启动其他节点；新增 `operator_bringup.launch.py map:=...` 可启动一套共享定位、bridge 和当前地图支持的清洗任务（雷达仍需另行启动）。Windows 安装与启动见 [App 文档](operator_app/README.md)。
 
 ## 离线验证
 

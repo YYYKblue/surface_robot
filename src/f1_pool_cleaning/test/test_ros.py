@@ -581,3 +581,39 @@ def test_automatic_planning_waits_for_lease_and_rechecks_localization(tmp_path, 
             assert not node.mission.last_effort.brush_percent
     finally:
         node.destroy_node()
+
+
+def test_automatic_preflight_matches_start_and_run_identity_changes(tmp_path):
+    node = automatic_controller(tmp_path)
+    try:
+        assert not node._start(None, Trigger.Response()).success
+        assert node._start_blockers()
+        automatic_feedback(node)
+        assert not node._start_blockers()
+        assert node._start(None, Trigger.Response()).success
+        first_run = node.run_id
+        assert first_run
+        node._cancel(None, Trigger.Response())
+        automatic_feedback(node)
+        assert node._start(None, Trigger.Response()).success
+        assert node.run_id and node.run_id != first_run
+        node._halt("test complete", "COMPLETE")
+        node._status()
+        completed_at = node.completed_at_ns
+        node._status()
+        assert completed_at is not None and node.completed_at_ns == completed_at
+    finally:
+        node.destroy_node()
+
+
+def test_automatic_start_rejects_recently_received_but_old_localization(tmp_path):
+    node = automatic_controller(tmp_path)
+    try:
+        automatic_feedback(node)
+        assert not node._start_blockers()
+        node._localization_status(String(data=json.dumps(dict(ready=True, state="LOCALIZATION_READY",
+            stamp_ns=node.get_clock().now().nanoseconds-2_000_000_000))))
+        response = node._start(None, Trigger.Response())
+        assert not response.success and "source timestamp" in response.message
+    finally:
+        node.destroy_node()

@@ -8,10 +8,12 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("bind_address", default_value="127.0.0.1"),
+        DeclareLaunchArgument("localization_prefix", default_value="/pool_cleaning"),
         DeclareLaunchArgument("port", default_value="8765"),
         DeclareLaunchArgument("input_timeout_sec", default_value="0.25"),
         Node(package="f1_operator_gateway", executable="f1_operator_gateway",
              name="f1_operator_gateway", output="screen", parameters=[{
+                 "localization_prefix": LaunchConfiguration("localization_prefix"),
                  "bind_address": LaunchConfiguration("bind_address"),
                  "port": ParameterValue(LaunchConfiguration("port"), value_type=int),
                  "input_timeout_sec": ParameterValue(LaunchConfiguration("input_timeout_sec"), value_type=float),

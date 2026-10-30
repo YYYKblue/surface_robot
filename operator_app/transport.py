@@ -3,7 +3,7 @@ import json
 import math
 import threading
 import time
-from queue import Empty, Queue
+from collections import deque
 
 try:
     from PySide6.QtCore import QThread, Signal
@@ -18,54 +18,32 @@ class SocketWorker(QThread):
     def __init__(self, url, *, mock=False, parent=None):
         super().__init__(parent)
         self.url, self.mock = url, mock
-        self.outgoing = Queue(maxsize=4)
+        self.commands = deque()
+        self.latest_manual = None
+        self.queue_lock = threading.Lock()
         self.stop_requested = threading.Event()
 
     def send_packet(self, packet):
-        # Latest input wins. Do not let a blocked socket accumulate old motion.
-        if packet.get("op") == "manual_input":
-            preserved = []
-            while True:
-                try:
-                    old = self.outgoing.get_nowait()
-                except Empty:
-                    break
-                if old.get("op") in ("manual_stop", "task"):
-                    preserved.append(old)
-            for old in preserved:
-                try:
-                    self.outgoing.put_nowait(old)
-                except Exception:
-                    break
-            try:
-                self.outgoing.put_nowait(packet)
-            except Exception:
-                pass
-            return
-        try:
-            self.outgoing.put_nowait(packet)
-        except Exception:
-            # A stop/task packet may evict an obsolete motion input, never a
-            # queued stop or task packet.
-            items = []
-            while True:
-                try:
-                    items.append(self.outgoing.get_nowait())
-                except Empty:
-                    break
-            for index, old in enumerate(items):
-                if old.get("op") == "manual_input":
-                    del items[index]
-                    break
-            for old in items:
-                try:
-                    self.outgoing.put_nowait(old)
-                except Exception:
-                    break
-            try:
-                self.outgoing.put_nowait(packet)
-            except Exception:
-                pass
+        with self.queue_lock:
+            if packet.get("op") == "manual_input":
+                self.latest_manual = packet
+            else:
+                if len(self.commands) >= 32:
+                    self.status.emit("操作队列已满，请等待响应")
+                    return False
+                self.commands.append(packet)
+                # Never replay manual intent queued before a discrete operation.
+                self.latest_manual = None
+        return True
+
+    def _take_outgoing(self):
+        with self.queue_lock:
+            packets = list(self.commands)
+            self.commands.clear()
+            if self.latest_manual is not None:
+                packets.append(self.latest_manual)
+                self.latest_manual = None
+            return packets
 
     def close(self):
         self.stop_requested.set()
@@ -94,6 +72,8 @@ class SocketWorker(QThread):
                     if "timed out" not in str(error).lower() and "timeout" not in str(error).lower():
                         raise
                     continue
+                if not raw:
+                    raise ConnectionError("网关已关闭连接")
                 if raw:
                     try:
                         self.message.emit(json.loads(raw))
@@ -108,11 +88,7 @@ class SocketWorker(QThread):
             self.status.emit("连接失败：" + str(error))
 
     def _flush(self, ws):
-        while True:
-            try:
-                packet = self.outgoing.get_nowait()
-            except Empty:
-                return
+        for packet in self._take_outgoing():
             self._send_now(ws, packet)
 
     @staticmethod
@@ -120,17 +96,59 @@ class SocketWorker(QThread):
         ws.send(json.dumps(packet, ensure_ascii=False, separators=(",", ":")))
 
     def _mock_loop(self):
-        started = time.monotonic()
+        """Interactive UI fixture only; never opens a hardware connection."""
+        import uuid
+        self.message.emit({"type": "hello", "client_id": "mock", "capabilities": ["task_selection", "initial_pose", "start_conditions"]})
+        self.message.emit({"type": "map", "map": {"resolution": .02, "width": 160, "height": 100,
+            "frame_id": "map", "revision": 1, "origin": {"x": 0, "y": 0, "yaw": 0}, "data": [0]*16000}})
+        initialized = None
+        active = None
+        started = None
+        tasks = {kind: dict(task_type=kind, phase="IDLE", run_id="", output_enabled=False,
+                           map_id="mock-map", edge_count=2 if kind == "l" else 4) for kind in ("l", "rectangle")}
+        pose = dict(x=1.15, y=1., yaw=0.)
         while not self.stop_requested.wait(.1):
-            t = time.monotonic() - started
-            self.message.emit({
-                "type": "telemetry", "state": {"state": "READY", "connected": True,
-                "source": "NANO", "motion_authorized": False},
-                "pose": {"x": 1.15 + .15 * math.sin(t / 5), "y": 1.0 + .08 * math.cos(t / 4),
-                         "yaw": .15 * math.sin(t / 3)},
-                "scan": {"angle_min": -math.pi, "angle_increment": math.pi / 180,
-                         "ranges": [1.0 + .12 * math.sin(t + i / 15) for i in range(360)]},
-                "map": {"resolution": .02, "width": 160, "height": 100,
-                        "origin": {"x": 0, "y": 0},
-                        "data": [0] * (160 * 100)},
-            })
+            now = time.monotonic()
+            ready = initialized is not None and now-initialized >= 1.
+            for packet in self._take_outgoing():
+                op = packet["op"]
+                success, message = True, "模拟操作已接受"
+                if op == "initial_pose":
+                    initialized, ready = now, False
+                    pose = {key: packet[key] for key in ("x", "y", "yaw")}
+                elif op == "task":
+                    kind, action = packet["task_type"], packet["action"]
+                    if action == "start" and ready and active is None:
+                        active, started = kind, now
+                        tasks[kind].update(phase="NAVIGATING", run_id=uuid.uuid4().hex)
+                    elif action in ("pause", "cancel"):
+                        tasks[kind]["phase"] = "PAUSED" if action == "pause" else "CANCELLED"
+                        active = None
+                    else:
+                        success, message = False, "模拟启动条件未满足"
+                else:
+                    continue
+                self.message.emit(dict(type="reply", request_id=packet.get("request_id"), op=op,
+                                       success=success, message=message))
+            if active:
+                if now-started > 8:
+                    tasks[active].update(phase="COMPLETE", completed_at_ns=time.time_ns())
+                    active = None
+                elif now-started > 3:
+                    tasks[active]["phase"] = "FOLLOW"
+            for task in tasks.values():
+                blockers = []
+                if not ready:
+                    blockers.append(dict(code="localization", message="等待定位稳定"))
+                if active or task["phase"] == "PAUSED":
+                    blockers.append(dict(code="phase", message="任务运行中或需要先取消暂停任务"))
+                task.update(fresh=True, can_start=not blockers, start_blockers=blockers)
+            self.message.emit(dict(type="telemetry", state=dict(state="READY", connected=True,
+                source="NANO", motion_authorized=False, allow_fifth_thruster=True), control_fresh=True,
+                pose=pose, scan=None, tasks={k: dict(v) for k,v in tasks.items()}, task_busy=bool(active),
+                operation_pending=False, active_tasks=[active] if active else [], active_client="mock",
+                can_set_initial_pose=active is None,
+                localization=dict(fresh=True, ready=ready, initial_pose_received=initialized is not None,
+                    state="LOCALIZATION_READY" if ready else "LOCALIZATION_CHECK", map_id="mock-map",
+                    pose_fresh=ready, scan_fresh=True, map_available=True, stable_sec=1.,
+                    stable_elapsed_sec=0. if initialized is None else now-initialized)))

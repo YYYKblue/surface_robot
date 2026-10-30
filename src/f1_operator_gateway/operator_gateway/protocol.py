@@ -9,7 +9,7 @@ import math
 
 PROTOCOL = "f1-operator-v1"
 MAX_PAYLOAD = 128 * 1024
-OPERATIONS = {"hello", "manual_input", "manual_stop", "task"}
+OPERATIONS = {"hello", "manual_input", "manual_stop", "task", "initial_pose"}
 DIRECTIONS = {"STOP", "FORWARD", "REVERSE", "LEFT", "RIGHT"}
 MODES = {"FRONT", "BOTH", "BACK"}
 TASKS = {"start", "pause", "cancel"}
@@ -65,11 +65,26 @@ def decode(raw):
         if type(reason) is not str or not 1 <= len(reason) <= 80:
             raise ValueError("invalid stop reason")
         return {"op": op, "reason": reason}
+    if op in ("task", "initial_pose"):
+        request_id = packet.get("request_id", "")
+        if type(request_id) is not str or len(request_id) > 80:
+            raise ValueError("invalid request_id")
+    if op == "initial_pose":
+        revision = packet.get("map_revision")
+        if type(revision) is not int or revision < 1:
+            raise ValueError("initial pose requires current map_revision")
+        return dict(op=op, request_id=request_id, map_revision=revision,
+                    x=float(_number(packet.get("x"), "x", -1e6, 1e6)),
+                    y=float(_number(packet.get("y"), "y", -1e6, 1e6)),
+                    yaw=float(_number(packet.get("yaw"), "yaw", -math.pi, math.pi)))
     if op == "task":
         action = packet.get("action")
         if action not in TASKS:
             raise ValueError("invalid task action")
-        return {"op": op, "action": action}
+        task_type = packet.get("task_type", "rectangle")
+        if task_type not in ("rectangle", "l"):
+            raise ValueError("invalid task_type")
+        return dict(op=op, action=action, task_type=task_type, request_id=request_id)
     sequence = packet.get("seq")
     if type(sequence) is not int or not 0 <= sequence < 2**64:
         raise ValueError("seq must be uint64")

@@ -3,6 +3,8 @@ from dataclasses import fields, MISSING, replace
 import json
 import math
 import time
+import uuid
+from pathlib import Path
 
 from rclpy.node import Node
 from rclpy.clock import Clock, ClockType
@@ -48,6 +50,9 @@ class PoolController(Node):
         # derived from that file; the launch passes the same path, so swapping
         # maps never means re-deriving numbers by hand.
         self.map_path = self._declare_readonly("map", "")
+        self.map_id = str(Path(self.map_path).expanduser().resolve().with_suffix("")) if self.map_path else ""
+        self.run_id = ""
+        self.completed_at_ns = None
         # Kept so subclasses can consume non-Config entries (the L route).
         self.derived_geometry = self._map_geometry()
         values = {}
@@ -124,7 +129,7 @@ class PoolController(Node):
             localization_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                           durability=DurabilityPolicy.TRANSIENT_LOCAL)
             self.localization_sub = self.create_subscription(
-                String, "/pool_cleaning/localization_status", self._localization_status,
+                String, self._declare_readonly("localization_status_topic", "/pool_cleaning/localization_status"), self._localization_status,
                 localization_qos)
         if self.use_map_tf or self.automatic:
             from tf2_ros import Buffer, TransformListener
@@ -202,7 +207,7 @@ class PoolController(Node):
             self.localization_state = str(status.get("state", "UNKNOWN"))
             self.localization_reason = str(status.get("reason", "localization not ready"))
             self.localization_status_received = time.monotonic()
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, AttributeError) as exc:
             self.localization_ready = False
             self.localization_state = "LOCALIZATION_CHECK"
             self.localization_reason = f"invalid localization status: {exc}"
@@ -217,8 +222,14 @@ class PoolController(Node):
             return "localization status missing"
         if time.monotonic() - self.localization_status_received >= self.localization_status_max_age_sec:
             return "localization status stream stopped"
+        source_stamp = self.localization_snapshot.get("stamp_ns")
+        if source_stamp is not None and (type(source_stamp) is not int or not
+                0 <= self.get_clock().now().nanoseconds - source_stamp < self.localization_status_max_age_sec * 1e9):
+            return "localization status source timestamp stale or invalid"
         if not self.localization_ready:
             return "localization not ready: " + self.localization_reason
+        if self.localization_snapshot.get("map_id") and self.map_id != self.localization_snapshot["map_id"]:
+            return "localization and cleaning maps do not match"
         return ""
 
     def _publish_edge_target(self, valid=None, reason=""):
@@ -427,17 +438,36 @@ class PoolController(Node):
                 return name + " receive stream stopped"
         return ""
 
+    def _start_blockers(self):
+        """Side-effect-free preflight, shared by status and start (no planning)."""
+        blockers = []
+        def add(code, message):
+            if message:
+                blockers.append(dict(code=code, message=message))
+        allowed = ("IDLE", "CANCELLED", "STOPPED", "COMPLETE") if self.automatic else ("IDLE", "CANCELLED", "STOPPED")
+        if self.mission.phase not in allowed:
+            add("phase", "cancel before restarting the task")
+        add("clock", "clock fault latched; restart controller" if self.clock_fault else "")
+        add("localization", self._localization_error())
+        add("feedback", self._stream_error(require_wall=False if self.automatic else None))
+        if self.automatic:
+            now = self.get_clock().now().nanoseconds
+            feedback = self._feedback()
+            add("pose", self.mission._pose_error(feedback, now))
+            add("scan", self.mission.scan_error(feedback, now))
+        if self.lease:
+            add("bridge", self.lease.error(acquiring=True))
+            if not self.lease.acquire.service_is_ready():
+                add("bridge_service", "bridge acquire service unavailable")
+        return blockers
+
     def _start(self, request, response):
         if self.use_map_tf:
             self._read_tf_pose()
         if self.automatic:
-            if self.mission.phase not in ("IDLE", "CANCELLED", "STOPPED", "COMPLETE"):
-                response.success, response.message = False, "cancel before restarting the task"
-                return response
-            error = ("clock fault latched; restart controller" if self.clock_fault else
-                     self._localization_error() or self._stream_error(require_wall=False))
-            if error:
-                response.success, response.message = False, error
+            blockers = self._start_blockers()
+            if blockers:
+                response.success, response.message = False, blockers[0]["message"]
                 return response
             self.mission.requested_edge_id = (self.requested_start_edge or
                 (self.default_edge_id if self.start_policy == "specified" else None))
@@ -446,6 +476,8 @@ class PoolController(Node):
                 return response
             response.success, response.message = self.mission.start(self._feedback(),self.get_clock().now().nanoseconds)
             if response.success:
+                self.run_id = uuid.uuid4().hex
+                self.completed_at_ns = None
                 self.requested_start_edge = None
                 self.selected_edge = None
                 self.edge_generation += 1
@@ -604,7 +636,14 @@ class PoolController(Node):
             uncovered = [[edge.clean_start_s_m, edge.clean_end_s_m]]
         left_distance = (self.wall.distance if self.wall and self.wall.valid
                          and math.isfinite(self.wall.distance) and self.wall.distance > 0 else None)
+        if self.mission.phase == "COMPLETE" and self.completed_at_ns is None:
+            self.completed_at_ns = now
+        blockers = self._start_blockers()
         status = dict(phase=self.mission.phase,
+                      task_type="l" if self.MAP_PROFILE_KIND == "route" else "rectangle",
+                      run_id=self.run_id, completed_at_ns=self.completed_at_ns,
+                      map_id=self.map_id, stamp_ns=now,
+                      can_start=not blockers, start_blockers=blockers,
                       edge_task_enabled=self.edge_task_enabled,
                       left_wall_distance_cm=round(left_distance * 100, 1) if left_distance is not None else None,
                       wall_angle_deg=round(math.degrees(self.wall.angle), 2) if self.wall and self.wall.valid

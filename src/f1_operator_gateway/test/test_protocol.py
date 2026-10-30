@@ -31,3 +31,17 @@ def test_invalid_packet_rejected(packet):
 def test_duplicate_keys_rejected():
     with pytest.raises(ValueError):
         decode(b'{"op":"hello","op":"manual_stop"}')
+
+
+def test_task_selection_and_request_identity_survive_decoding():
+    packet = decode(json.dumps(dict(op="task", action="start", task_type="l", request_id="start-1")))
+    assert packet == dict(op="task", action="start", task_type="l", request_id="start-1")
+
+
+@pytest.mark.parametrize("fields", [dict(x=float("nan")), dict(yaw=4.), dict(map_revision=0),
+                                    dict(map_revision=True), dict(request_id=42)])
+def test_bad_initial_pose_rejected(fields):
+    packet = dict(op="initial_pose", x=1., y=2., yaw=0., map_revision=1, request_id="pose-1")
+    packet.update(fields)
+    with pytest.raises(ValueError):
+        decode(json.dumps(packet))

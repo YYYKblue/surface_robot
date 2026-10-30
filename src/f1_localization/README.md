@@ -17,7 +17,7 @@ ros2 launch f1_localization localization.launch.py \
 
 `map:=` 接受 `.pbstream` 或配套 `.yaml` 路径。纯定位需要 `.pbstream`，定位范围计算还需要 YAML 和栅格图；请一起同步同名 `.pbstream`、`.yaml`、`.pgm`，不能只复制状态文件。支持现有 `load_state_filename:=` 兼容参数。
 
-默认不创建新轨迹。在 RViz 的 `map` 坐标系使用 `2D Pose Estimate` 后，管理器调用 Cartographer 的轨迹服务，并检查轨迹状态、TF/扫描新鲜度、地图范围、位姿跳变、有效扫描比例和扫描/地图重合。持续满足稳定窗口后才发布 `LOCALIZATION_READY`。轨迹创建成功本身不表示定位就绪。
+默认不创建新轨迹。在 RViz 的 `map` 坐标系使用 `2D Pose Estimate`，或在 Windows App 地图中设置并发布初始位姿后，管理器调用 Cartographer 的轨迹服务，并检查轨迹状态、TF/扫描新鲜度、地图范围、位姿跳变、有效扫描比例和扫描/地图重合。持续满足稳定窗口后才发布 `LOCALIZATION_READY`。轨迹创建成功本身不表示定位就绪。
 
 ## 接口与清洗任务接入
 
@@ -42,7 +42,7 @@ ros2 launch f1_l_cleaning l_bringup.launch.py \
   map:=/path/to/reference.pbstream start_localization:=false
 ```
 
-矩形与大 L 的 bringup 已直接 include 本包，无需改变原任务启动命令。定位与任务必须使用同一张地图；同一机器人只运行一套 Cartographer/定位管理器。建图与固定地图定位择一运行。
+矩形与大 L 的 bringup 已直接 include 本包，无需改变原任务启动命令。新增网关 `operator_bringup.launch.py` 将共享定位接口统一映射至 `/f1_localization/*`，两个任务通过 `localization_status_topic` 消费同一状态；定位状态包含规范化地图路径标识 `map_id`，用于核对任务地图。定位与任务必须使用同一张地图；同一机器人只运行一套 Cartographer/定位管理器。建图与固定地图定位择一运行。
 
 常用参数：`scan_topic`、`reference_trajectory_id`、`localization_config`、`publish_lidar_tf`、`lidar_extrinsics_file`、`start_rviz`、`rviz_config`。已有雷达静态 TF 时设置 `publish_lidar_tf:=false`。`localization_config` 中的节点选择器仍使用 `pool_localization_manager`。雷达外参复用 `f1_mapping_bringup` 的配置，不会启动建图。
 

@@ -42,6 +42,8 @@ class WebSocketHub:
         self.server = await websockets.serve(
             self._handler, self.bind_address, self.port,
             max_size=128 * 1024, max_queue=4, ping_interval=5, ping_timeout=3)
+        if not self.server.sockets:
+            raise RuntimeError("WebSocket listener has no bound sockets; check network permissions")
         self.ready.set()
         while not self.stop_event.is_set():
             await asyncio.sleep(.1)

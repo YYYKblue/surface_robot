@@ -2,6 +2,7 @@
 
 import math
 import time
+from pathlib import Path
 
 from cartographer_ros_msgs.msg import StatusCode, TrajectoryStates
 from cartographer_ros_msgs.srv import FinishTrajectory, GetTrajectoryStates, StartTrajectory
@@ -10,6 +11,7 @@ from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
+from rcl_interfaces.msg import ParameterDescriptor
 from nav_msgs.msg import OccupancyGrid
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, String
@@ -41,6 +43,8 @@ class LocalizationManager(Node):
         super().__init__("pool_localization_manager", **kwargs)
         self._declare_parameters()
         self.config = self._read_config()
+        map_path = self.get_parameter("map").value
+        self.map_id = str(Path(map_path).expanduser().resolve().with_suffix("")) if map_path else ""
         self.configuration_directory = self.get_parameter("configuration_directory").value
         self.configuration_basename = self.get_parameter("configuration_basename").value
         self.reference_trajectory_id = self.get_parameter("reference_trajectory_id").value
@@ -98,7 +102,7 @@ class LocalizationManager(Node):
     def _declare_parameters(self):
         import dataclasses
         # Declare ``map`` first: the pose gate derives its bounds from it.
-        self.declare_parameter("map", "")
+        self.declare_parameter("map", "", ParameterDescriptor(read_only=True))
         # The pose gate's bounds describe one specific map, so they have no
         # defaults: ``map:=`` fills them, and a launch without either fails
         # validation instead of applying another map's rectangle.
@@ -468,7 +472,8 @@ class LocalizationManager(Node):
 
     def _publish_status(self, now_ns):
         status = self.gate.as_dict(now_ns)
-        status.update(dict(trajectory_id=-1 if self.trajectory_id is None else int(self.trajectory_id),
+        status.update(dict(map_id=self.map_id,
+                           trajectory_id=-1 if self.trajectory_id is None else int(self.trajectory_id),
                            reference_trajectory_id=int(self.reference_trajectory_id),
                            scan_topic=self.scan_topic,
                            map_available=self._map_grid is not None,
