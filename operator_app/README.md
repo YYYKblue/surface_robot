@@ -104,7 +104,7 @@ python main.py --mock
 
 Mock 支持建图/保存/列表/预览/选图、初始位姿、模拟稳定窗口、任务开始/暂停/停止/取消、模拟轨迹/墙距和约 8 秒后的完成，始终不连接硬件。它不证明真实定位或清洗效果。
 
-Qt 自动化测试（安装 pytest；Linux 无显示环境设置 `QT_QPA_PLATFORM=offscreen`）：
+Qt 自动化测试从**仓库根目录**运行（若仍在 `operator_app/`，先 `cd ..`；安装 pytest，Linux 无显示环境设置 `QT_QPA_PLATFORM=offscreen`）。它们不由 `colcon test` 收集：
 
 ```bash
 python -m pytest operator_app/test -q

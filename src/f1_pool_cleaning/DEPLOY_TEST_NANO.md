@@ -1,8 +1,10 @@
 # Nano：阶段 4 矩形四边自动清洁一周部署与验收
 
-文档核对：2026-10-29。本页适用于矩形任务；大 L 使用[独立任务入口与地图](../f1_l_cleaning/README.md)。通过 Qt App 操作时，自动任务停止应使用“暂停任务”或“取消任务”，红色“停止全部”只释放网关的手动租约。
+文档核对：2026-10-31。本页适用于矩形任务；大 L 使用[独立任务入口与地图](../f1_l_cleaning/README.md)。通过 Qt App 操作时，自动任务使用“停止任务”“暂停任务”或“取消任务”；顶部红色“停止手动输出”只释放网关的手动租约。App 建图、选图和共享定位使用[受管入口](../f1_operator_gateway/README.md)，与下述完整 bringup 择一运行。
 
-更新：2026-10-26。阶段 4 使用冻结地图定位，默认从 `edge_0`（第一条长边）启动，并按顺时针完成四条边，自动完成三次换边后进入 `COMPLETE`。船体按长 50 cm、宽 45 cm 建模，左侧唯一滚刷的稳定中心墙距为 32–36 cm，目标 34 cm。粗略放船并在 RViz2 发布大致初始位姿后，Cartographer 稳定输出 `map → base_link`，控制器检查 `edge_0` 可用后先关闭滚刷靠墙并纠正航向，再调整到边入口；边端点中心距前墙 30 cm 后，关闭滚刷并进入停止指令、0.5 s 后退右推和右转流程。转向误差允许 ±20°，转向和整段换边时间超时默认关闭。本文同时覆盖无输出预览、单次换边和矩形一周实机记录；当前代码完成不等于已归档实船清洁效果证据。
+当前任务使用冻结地图定位，默认 `start_policy=nearest_reachable`：优先尝试当前船体左侧可达墙边，再尝试其他墙边，每组按墙段距离和航向调整量排序。定位就绪后关刷导航至起点，沿顺时针墙边清洗，必要时回补起始段和遗漏区间；全部要求区间覆盖后才进入 `COMPLETE`，终点不固定为 `edge_3`。
+
+船体按长 50 cm、宽 45 cm 建模，左刷稳定中心墙距为 32–36 cm，目标 34 cm。相邻换边仍使用中心距前墙 30 cm 停止、0.5 s 后退右推和地图航向反馈右转，转向容差 ±20°，转向和整段换边时间超时默认关闭。非相邻边及补洗转场使用关刷导航。本文覆盖软件预览和现场记录要求；软件完成不等于已归档实船清洁效果证据。
 
 ## 1. 同步和构建
 
@@ -29,12 +31,14 @@ source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-up-to f1_pool_cleaning
 source install/local_setup.bash
 ros2 run f1_pool_cleaning pool_demo
-RMW_IMPLEMENTATION=rmw_cyclonedds_cpp colcon test \
+export ROS_LOCALHOST_ONLY=1 ROS_DOMAIN_ID=173 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export CYCLONEDDS_URI="file://$PWD/src/f1_pool_cleaning/test/cyclonedds_localhost.xml"
+colcon test --executor sequential \
   --packages-select f1_localization f1_pool_cleaning --return-code-on-test-failure
 colcon test-result --verbose
 ```
 
-每个实景终端加载：
+关闭测试终端后，每个实景终端加载（不要继承上述测试专用 DDS 配置）：
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -75,13 +79,15 @@ bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano start
 
 没有 `LOCALIZATION_READY` 时 `/pool_cleaning/start` 会拒绝申请任务租约。定位跳变、TF/雷达过期或轨迹结束会关闭输出并进入 `PAUSED`；检查原因后调用 `cancel`，重新标定初始位姿，再次 `start`。
 
-`start` 返回后可再次运行 `status`，检查 `lease_held=true`、`current_edge_id` 和实际阶段。`APPROACH_WALL` 表示第五路正在把中心墙距调整到 32–36 cm；`APPROACH_EDGE` 表示墙距稳定后正在驶向当前边入口；`FOLLOW`/`CORRECT_HEADING` 是沿边清洗阶段；`EDGE_STOP` 表示船中心到当前边前方墙约 0.30 m，已关闭输出；随后依次进入 `MOVE_INWARD`、`TURN_TO_NEXT_EDGE` 和 `APPROACH_NEXT_EDGE`。端点判断使用当前边投影的船中心沿程距离，不等待物理停稳。
+`start` 返回后再次运行 `status`，检查 `lease_held=true` 和实际阶段。初始阶段为 `PLANNING → NAVIGATING → SETTLING → ACQUIRE_WALL → DOCK_WALL`；规划完成后才确定 `current_edge_id`，正式贴墙前不要求有效左墙线。`FOLLOW`/`CORRECT_HEADING` 是沿边清洗阶段；相邻换边沿用 `EDGE_STOP → MOVE_INWARD → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`。端点判断使用地图边投影，不等待物理停稳。规划失败或补洗仍有缺口时会暂停，应检查 `reason`。
 
-暂停、取消仍在终端 B 执行：
+暂停、取消仍在终端 B 执行；快捷脚本尚无 `stop` 子命令，停止任务使用 ROS 服务：
 
 ```bash
 bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano pause
 bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano cancel
+# 已加载运行环境的终端：
+ros2 service call /pool_cleaning/stop std_srvs/srv/Trigger '{}'
 ```
 
 终端 A 按 `Ctrl+C` 会退出本次统一入口启动的节点；通过跳过参数复用的外部节点继续运行。
@@ -116,14 +122,15 @@ ros2 service call /pool_cleaning/set_initial_pose f1_interfaces/srv/SetInitialPo
 
 `/pool_cleaning/localization_status` 会区分轨迹已创建和定位真正就绪；轨迹创建成功本身不代表定位正确。通过已知 A 墙、实际船头方向和尺量距离核对地图位姿，必要时在 RViz2 叠加 scan/map。错误朝向、地图外位姿、过期 TF、雷达断流和跳变都必须停留在 `LOCALIZATION_CHECK` 或 `PAUSED`，不能启动清洗。
 
-源地图和参数矩形必须匹配。当前长宽是约 2.883 × 1.520 m 的墙带估计；换地图后需重新给出 origin/axis/length/width。当前默认任务从 `edge_0` 启动，需要船位于该边允许的走廊、朝向匹配且墙在左侧；不能仅凭位于任意一侧长墙就开始四边任务。后续边由状态机自动切换，左墙距离和角度仍以实时雷达观测为准。
+定位和控制器必须传入同一 `map:=`。默认配置从地图推导 origin/axis/length/width、四边边界和定位范围，不需要手填旧地图尺寸；使用现场配置时应移除不再适用的显式几何覆盖。默认自动选边无需预先放在 `edge_0`；如需固定起始边，启动时加 `start_policy:=specified default_edge_id:=edge_0`。指定边仍会规划接近路径，不可达时暂停，不会自动改选其他边。
 
 ## 4. 无输出预览与矩形一周验收
 
 终端 C：
 
 ```bash
-ros2 launch f1_pool_cleaning pool_cleaning.launch.py
+ros2 launch f1_pool_cleaning pool_cleaning.launch.py \
+  map:=/home/nvidia/surface_ws/maps/lidar_20261021_145054.pbstream
 ```
 
 终端 D：
@@ -135,14 +142,14 @@ ros2 topic echo /pool_cleaning/status
 ros2 topic echo /pool_cleaning/command_preview
 ```
 
-人工将船粗略放在目标边附近，初始中心距墙可在约 0.32–0.50 m 范围，使用 RViz2 发布大致位姿，待 `LOCALIZATION_READY` 后核对：
+人工将船放在地图中的可达空闲水域，使用 RViz2 发布初始位姿，待 `LOCALIZATION_READY` 后核对：
 
-- `current_edge_id` 已选择且 `edge_target` 有效；目标墙仍为船左侧墙，不能用反向边或符号反转模拟右侧刷墙。
-- 左墙 `valid=true`，距离与夹角符合尺量；`front_observed=false` 是现有安装的预期，不修改该标记。
-- `feedback_error` 为空，`localization_state=LOCALIZATION_READY`，地图位姿和墙线均新鲜。TF 不含协方差时，`pose_covariance_available=false` 是明确的能力限制。
+- `can_start=true`、`start_blockers=[]`，定位、地图位姿和原始扫描均新鲜。启动前 `current_edge_id` 可为空；规划后才检查所选边与 `edge_target`，清洗时墙必须在左侧。
+- 左墙线在导航完成后重新获取；有效时距离与夹角应符合尺量。`front_observed=false` 不阻止自动任务开始，不手工修改该标记。
+- `localization_state=LOCALIZATION_READY`。TF 不含协方差时，`pose_covariance_available=false` 是明确的能力限制。
 - `output_enabled=false`、`lease_held=false`，预览 token 为空。
 
-调用 `start` 后人工小幅移动/摆角观察（不连接执行器）：
+调用 `start` 后先检查规划、导航与找墙状态；预览不会驱动船体，需要合成反馈或人工移动才能推进流程。以下沿墙输出预期适用于已进入贴墙清洗阶段（不连接执行器）：
 
 ```bash
 ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
@@ -161,14 +168,14 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 | 丢墙超过 1.5 秒 | `PAUSED`，`reason` 包含感知原因，需 cancel/start |
 | 可见左墙被遮挡，仅剩后方短墙 | 在恢复窗口内保持墙关联约束，禁止将短墙重标为左墙继续纠偏 |
 | 当前边投影达到 `edge_stop_m` | `EDGE_STOP`，随后执行一个停止指令周期、后退右推和右转；状态切换到下一条边 |
-| 依次完成 `edge_0`、`edge_1`、`edge_2`、`edge_3` | 最后一条边完成后进入 `COMPLETE`，`completed_edges` 包含四条边，所有输出关闭 |
+| 执行四条边并补齐要求区间 | `remaining_contact_intervals` 无超容差缺口后进入 `COMPLETE`，`completed_edges` 包含四条边，所有输出关闭；仍有缺口时回补或暂停 |
 | 停止雷达或定位 | PAUSED；反馈恢复不自动续跑 |
 | 地图位姿正常更新 | 更新边进度和前墙距离，并通过 `EdgeTarget` 维持当前目标墙关联 |
 | 地图位姿发生超阈值跳变 | 定位管理器锁存 `PAUSED`，控制器关闭输出；反馈恢复后不自动续跑 |
 
 本版没有 0.36 m 最小墙距暂停门槛；墙距偏小时由第五路向外纠正。超出 ±10° 可以启动任务，先纠偏再开刷。暂停后执行 `cancel` 和 `start`。
 
-诊断单次启动后暂停：`ros2 topic echo /pool_cleaning/status --once --full-length`，查看 `phase`、`reason`、`wall_valid`、`wall_reason`。状态前部的 `left_wall_distance_cm` 是船中心到左墙的距离（厘米）；无有效墙线时显示 `null`。`WAIT_WALL` 可以自动恢复；`PAUSED` 不会自行恢复。初次启动仍需要有效墙线，不能用重试服务代替确认感知状态。
+诊断单次启动后暂停：`ros2 topic echo /pool_cleaning/status --once --full-length`，查看 `phase`、`reason`、`wall_valid`、`wall_reason`。状态前部的 `left_wall_distance_cm` 是船中心到左墙的距离（厘米）；无效或过期时显示 `null`。`WAIT_WALL` 可以自动恢复；`PAUSED` 不会自行恢复。带地图自动任务初次启动不要求有效墙线，但必须有新鲜原始扫描；找墙和正式清洗阶段仍须核对墙线。
 
 状态前部同时显示 `wall_angle_deg` 和 `direction`：0=STOP、3=LEFT、4=RIGHT。船头向左墙偏转时，应观察到负墙角和 RIGHT。遇到疑似反向，完整保存 `/pool_cleaning/status` 与 `/f1/control_state`，核对感知符号、请求方向和固件目标，不能只凭 `CORRECT_HEADING` 阶段名称推断方向。
 
@@ -189,7 +196,8 @@ ros2 launch f1_nano_bridge bridge.launch.py \
 另一个终端启动实机模式，启动节点本身不启动任务；在检查终端另行调用 start：
 
 ```bash
-ros2 launch f1_pool_cleaning pool_cleaning.launch.py output_enabled:=true
+ros2 launch f1_pool_cleaning pool_cleaning.launch.py \
+  map:=/home/nvidia/surface_ws/maps/lidar_20261021_145054.pbstream output_enabled:=true
 # 另一个已加载环境的终端：
 ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 ```
@@ -214,9 +222,10 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 ```bash
 ros2 bag record -o rectangle_one_loop_trial \
   /pavo2_scan /tf /tf_static /pool_cleaning/wall_observation \
+  /pool_cleaning/localization_status /pool_cleaning/edge_target \
   /pool_cleaning/status /pool_cleaning/command_preview /f1/control_state
 ```
 
 记录 `edge_0` 到 `edge_3` 的实际墙距、夹角、靠墙和入口调整时间、30% 刷盘是否能推进、第五路双向纠偏是否振荡、每次 `EDGE_STOP` 触发位置、后退右推位移、转向误差、每条边的 `cleaned_intervals`、最终 `completed_edges` 和未覆盖原因。刷尖约距中心 0.33 m，34 cm 作为名义中心值；实际接触压缩仍需实船测量。
 
-一周任务的现场记录至少应包含：起始初始位姿与地图版本、四条边的起止轨迹、三次换边的停止原因和漂移、暂停/取消/遥控接管记录、刷盘开关状态，以及最终状态中的 `phase=COMPLETE`、`completed_edges` 和按边覆盖区间。角部留白和短边有效清洗长度应单独标注，不能只凭最终 `COMPLETE` 声明全池面积已覆盖。
+一周任务的现场记录至少应包含：起始初始位姿、地图版本、实际选中起始边与 `run_id`，四条边及回补段的轨迹、相邻换边和关刷导航的停止原因与漂移，暂停/停止/取消/遥控接管记录，以及最终状态中的 `phase`、`completed_edges`、要求区间、已覆盖区间和剩余缺口。角部留白和短边有效清洗长度应单独标注，不能只凭最终 `COMPLETE` 声明全池面积已覆盖。

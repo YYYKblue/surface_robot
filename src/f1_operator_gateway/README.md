@@ -1,6 +1,6 @@
 # f1_operator_gateway
 
-更新：2026-10-31。Windows Qt App 的 Nano 侧 WebSocket 入口，提供手动控制、双任务操作、初始位姿服务和状态转发。
+更新：2026-10-31。Windows Qt App 的 Nano 侧 WebSocket 入口，提供手动控制、双任务操作、初始位姿、状态转发，以及受管建图、地图保存与选择。模块职责与入口对比见[架构导读](../../docs/ARCHITECTURE.md)。
 
 ## 构建
 
@@ -60,6 +60,8 @@ ros2 launch f1_operator_gateway operator_system.launch.py \
 `reply` 的列表结果含 `maps`、`maps_directory`，预览含 `preview`，保存含 `saved: {name, paths}`。`telemetry.runtime` 包含 `mode/phase/session_id/current_map/target_map/message/busy/scan_fresh/map_available/pose_fresh/operation/last_operation/last_saved/maps_directory`。操作被接受不代表扫描匹配精度或船体已静止；建图状态与固定地图定位就绪独立。
 
 原有单独网关和下面的静态组合入口保持兼容，不声明 `mapping/map_catalog`。
+
+启动权限需按入口区分：上述 launch 默认预览，但仓库 `deploy/f1-operator.service` 模板设置 `F1_OUTPUT_ENABLED=true`。安装模板前应按部署目标核对该值；开机仍只待机，不自动恢复旧任务。完整步骤见[开机服务部署](../../DEPLOY_NANO.md#app-建图选图与开机服务)。
 
 ## 兼容：指定已有地图启动 App 清洗系统
 
@@ -165,6 +167,8 @@ colcon test-result --verbose
 上述 DDS 文件**仅用于本机测试**，使用 localhost 单播与 1200 字节报文/1024 字节分片，不用于连接 Nano。当前开发环境曾出现“能发现节点，但接收不到清洗状态”：独立字符串测试中 10/1000 字节消息正常，3000/10000 字节消息丢失；使用此配置后四种大小均可接收。实机终端不要继承这份测试配置。
 
 ### 本次验证记录（2026-10-30）
+
+以下分节为各次修改当时的记录，不是本轮文档核对重新执行的结果；七包记录早于雷达驱动纳入工作空间，当前完整构建为八包。测试数也受每次选择的包和用例范围影响，不应相加作为当前总量。
 
 - `colcon build --packages-up-to f1_operator_gateway`：七个包构建成功。
 - 四个受影响 ROS 包通过 CTest：定位 30、矩形清洗 193、L 清洗 22、网关 37 个 pytest 用例，共 282 个，零失败；使用上述仅限本机的 DDS 配置。

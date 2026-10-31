@@ -82,7 +82,7 @@ Windows App 现已支持任务类型选择、初始位姿发布、启动条件�
 | `relocalize` | `std_srvs/Trigger`，结束当前定位轨迹并要求重新标定 |
 | `command_preview` | `f1_interfaces/ActuatorCommand`，无令牌预览 |
 | `status` | `std_msgs/String`，JSON 状态 |
-| `start`、`pause`、`cancel` | `std_srvs/Trigger`，任务控制 |
+| `start`、`pause`、`stop`、`cancel` | `std_srvs/Trigger`，任务控制；停止与取消均不支持断点续跑 |
 | `set_edge` | `f1_interfaces/SetEdge`，显式指定当前地图边 |
 | `edge_target` | `f1_interfaces/EdgeTarget`，地图位姿生成的目标墙上下文 |
 
@@ -158,10 +158,11 @@ bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano start
 bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano bringup start_rviz:=true
 ```
 
-在 RViz2 中确认 Fixed Frame 为 `map`，显示 Map、LaserScan、TF，然后点击 `2D Pose Estimate` 在地图中标定船体位置和船头方向。确认 `/pool_cleaning/localization_status` 的 `state` 变为 `LOCALIZATION_READY` 后，再运行 `status` 和 `start`。定位和 bridge 已运行时，在终端 A 命令末尾增加 `bringup start_localization:=false start_bridge:=false`，只启动缺少的部分；已有清洗控制器应先退出。快捷脚本默认开启硬件输出许可，默认 ROS 域为 33；已设置的域和 RMW 环境会保留。也可加载环境后运行 `ros2 launch f1_pool_cleaning pool_bringup.launch.py output_enabled:=true`。原分开启动入口继续保留，默认预览不申请租约：
+在 RViz2 中确认 Fixed Frame 为 `map`，显示 Map、LaserScan、TF，然后点击 `2D Pose Estimate` 在地图中标定船体位置和船头方向。确认 `/pool_cleaning/localization_status` 的 `state` 变为 `LOCALIZATION_READY` 后，再运行 `status` 和 `start`。定位和 bridge 已运行时，在终端 A 命令末尾增加 `bringup start_localization:=false start_bridge:=false`，只启动缺少的部分；已有清洗控制器应先退出。快捷脚本默认开启硬件输出许可，默认 ROS 域为 33；已设置的域和 RMW 环境会保留。也可加载环境后运行 `ros2 launch f1_pool_cleaning pool_bringup.launch.py map:=/绝对路径/现场地图.pbstream output_enabled:=true`。原分开启动入口继续保留，默认预览不申请租约：
 
 ```bash
-ros2 launch f1_pool_cleaning pool_cleaning.launch.py
+ros2 launch f1_pool_cleaning pool_cleaning.launch.py \
+  map:=/home/nvidia/surface_ws/maps/lidar_20261021_145054.pbstream
 ros2 topic echo /pool_cleaning/status
 ros2 topic echo /pool_cleaning/command_preview
 ```
@@ -171,7 +172,8 @@ ros2 topic echo /pool_cleaning/command_preview
 实机使用同一个入口，显式开启输出，再启动任务：
 
 ```bash
-ros2 launch f1_pool_cleaning pool_cleaning.launch.py output_enabled:=true
+ros2 launch f1_pool_cleaning pool_cleaning.launch.py \
+  map:=/home/nvidia/surface_ws/maps/lidar_20261021_145054.pbstream output_enabled:=true
 # 另一终端：
 ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 # 暂停、停止或取消：

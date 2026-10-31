@@ -1,12 +1,12 @@
 # 沿墙清洗流程图
 
-本文档按当前仓库中的 `f1_pool_cleaning` 实现整理，描述从定位就绪、启动任务、左墙跟随，到四条边自动换边并结束的实际软件流程。图中的状态名与 `Mission.phase`、话题名和服务名保持一致。
+核对：2026-10-31。本文描述带地图的 `AutonomousMission` 与共享 `Mission` 沿墙子流程。矩形有四条边，L 有两条边；完整任务以要求接触区间覆盖为完成条件。定位状态、规划阶段和沿墙阶段属于不同模块，不能把子流程结束当成整场任务完成。
 
 ## 总体流程
 
 ```mermaid
 flowchart TD
-    A[启动 operator_bringup 或独立清洗入口] --> B[固定地图定位]
+    A[operator_system 加载地图\n或启动静态组合/独立清洗入口] --> B[固定地图定位]
     B --> B1[Windows App 发布初始位姿\n或 RViz 2D Pose Estimate]
     B1 --> B2[启动 Cartographer 纯定位轨迹]
     B2 --> B3{定位门控通过?}
@@ -26,29 +26,36 @@ flowchart TD
     B5 --> C
     W0 --> C
     W1 --> C
-    C --> C1[构造任务路线\nnearest_reachable 或指定起始边]
+    Q --> C1[后台选边和规划\nnearest_reachable 或指定起始边]
     C1 --> C2[发布 EdgeTarget\n保持左墙身份]
     C2 --> T
     C --> S[/pool_cleaning/start/]
     S --> G{启动门控通过?}
     G -- 否 --> R[拒绝启动\n输出关闭]
     G -- 是 --> Q[获取 bridge lease\n或进入 preview]
-    Q --> N[关刷规划和导航到可达起点]
+    C1 --> N[关刷导航到可达起点]
     N --> F[找墙及沿墙清洗状态机]
     F --> O[/command_preview\n及 live lease 输出/]
     O --> H[status JSON\nphase / run_id / can_start / coverage / reason]
     H --> UI[网关推送 App\n启动条件及任务阶段]
     F --> COVER{全部要求区间已覆盖?}
-    COVER -- 否 --> N
+    COVER -- 否 --> MORE{还有待执行段或可回补?}
+    MORE -- 是 --> TRANSIT[相邻换边或关刷导航]
+    TRANSIT --> F
+    MORE -- 否 --> GAP[PAUSED\n回补后仍有缺口]
     COVER -- 是 --> DONE[COMPLETE\n输出关闭并显示任务完成]
 
-    X[/pause 或 /cancel/] --> E[输出关闭]
-    E --> E1[PAUSED 或 CANCELLED\n不会自动续跑]
+    X[/pause / stop / cancel/] --> E[输出关闭并释放任务租约]
+    E --> E1[PAUSED / STOPPED / CANCELLED\n不会自动续跑]
 ```
 
 定位门控由 [localization.py](../../src/f1_localization/f1_localization/localization.py) 负责；墙线提取和关联由 [perception.py](../../src/f1_pool_cleaning/f1_pool_cleaning/perception.py) 负责；任务服务、数据新鲜度检查、租约和输出由 [controller_node.py](../../src/f1_pool_cleaning/f1_pool_cleaning/controller_node.py) 负责。
 
 Windows App 的任务类型选择只切换 `/pool_cleaning/*` 与 `/l_cleaning/*`，不切换地图。组合入口使用一套 `/f1_localization/*` 定位，控制器共享定位状态。网关与控制器重新检查启动条件，App 在定位未稳定或状态过期时禁用开始。暂停后需取消再开始；完成后可开始新的自动任务，使用新的 `run_id` 区分完成结果。
+
+自动启动前检查定位、位姿、原始扫描及硬件许可，不要求已有目标墙线。选边和路径规划在 start 之后执行；live 模式取得租约后才提交规划，preview 不申请租约。导航阶段为 `PLANNING → NAVIGATING → SETTLING → ACQUIRE_WALL → DOCK_WALL`，进入沿墙前重新确认目标墙线。
+
+每段结束后外层调度决定：相邻边沿用后退右推和右转，非相邻转场/补洗使用关刷导航；初始边前段也纳入覆盖。所有要求区间满足默认 5 cm 容差后才结束，默认最多补洗 2 轮，仍有缺口则暂停。此逻辑位于 [autonomous.py](../../src/f1_pool_cleaning/f1_pool_cleaning/autonomous.py) 与 [coverage.py](../../src/f1_pool_cleaning/f1_pool_cleaning/coverage.py)。
 
 ## 沿墙清洗与自动换边状态机
 
@@ -56,9 +63,8 @@ Windows App 的任务类型选择只切换 `/pool_cleaning/*` 与 `/l_cleaning/*
 
 ```mermaid
 flowchart TD
-    IDLE([IDLE]) --> START[/start/]
-    START --> CHECK{定位、pose、wall\n数据流均新鲜?}
-    CHECK -- 否 --> REJECT[拒绝 start\n保持输出关闭]
+    READY[导航找墙完成\n或相邻换边后重新靠墙] --> CHECK{定位、pose、所需 wall\n数据流均新鲜?}
+    CHECK -- 否 --> REJECT[暂停\n保持输出关闭]
     CHECK -- 是 --> SELECT{当前边可用?}
     SELECT -- 否 --> REJECT
     SELECT -- 是 --> AW[APPROACH_WALL\n调整到左墙 0.32–0.36 m]
@@ -91,7 +97,7 @@ flowchart TD
     RECOVER -- 否 --> PAUSE[PAUSED\n左墙持续丢失，输出关闭]
 
     ESTOP --> NEXT{存在下一条边?}
-    NEXT -- 否 --> COMPLETE([COMPLETE\n完成 edge_0..edge_3\n输出关闭])
+    NEXT -- 否 --> COMPLETE([返回外层调度\n导航转场、回补或 COMPLETE])
     NEXT -- 是 --> MI[MOVE_INWARD\n0.5 s: reverse + 向右侧推\n滚刷关闭]
     MI --> TURN[TURN_TO_NEXT_EDGE\n只按地图航向反馈右转]
     TURN --> YAW{目标航向误差\n<= ±20°?}
@@ -117,7 +123,7 @@ flowchart TD
 | 丢墙恢复 | `WAIT_WALL` 最多等待 `1.5 s`；期间输出中位命令，超时转 `PAUSED`。 |
 | 端点判断 | 使用地图边投影的船中心到边端距离；小于等于 `0.30 m` 进入 `EDGE_STOP`。雷达前方观测只作为辅助安全信息。 |
 | 自动换边 | `EDGE_STOP → MOVE_INWARD → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`；换边期间旧墙目标无效，转弯完成后重新关联新墙。 |
-| 一周结束 | `PoolModel.next_edge()` 返回空时，当前边记录完成并进入 `COMPLETE`，不再转移。 |
+| 整场完成 | `AutonomousMission._finish_leg()` 检查剩余段和覆盖缺口；全部要求区间满足容差后才 `COMPLETE`。不能只根据 `PoolModel.next_edge()` 返回空判断。 |
 | 输出门控 | `controller_node.py` 在每个 tick 检查数据流、定位和 lease；异常进入 `PAUSED` 并调用 `_stop_outputs()`。 |
 
 ## 关键接口
@@ -129,6 +135,7 @@ flowchart TD
 /pool_cleaning/edge_target          当前地图边生成的目标墙上下文
 /pool_cleaning/start                启动任务
 /pool_cleaning/pause                暂停并关闭输出
+/pool_cleaning/stop                 停止并保留进度快照；再次 start 是新任务
 /pool_cleaning/cancel               取消并清除边关联
 /pool_cleaning/command_preview      执行器命令预览；live 模式另经 lease 发往 bridge
 /pool_cleaning/status               状态、原因、边进度和覆盖区间
@@ -136,4 +143,6 @@ flowchart TD
 
 状态机的主要实现位于 [mission.py](../../src/f1_pool_cleaning/f1_pool_cleaning/mission.py)，默认参数位于 [pool_cleaning.yaml](../../src/f1_pool_cleaning/config/pool_cleaning.yaml)。
 
-> 说明：`COMPLETE` 表示软件状态机完成 `edge_0` 到 `edge_3` 的边段任务；`cleaned_intervals` 的统计基准是左侧滚刷接触中心线，不应单独解释为池底面积覆盖率。实船漂移、角部留白和实际清洁效果仍需现场验收记录。
+组合入口的定位状态为 `/f1_localization/localization_status`；L 任务的控制接口为 `/l_cleaning/*`。`stop/cancel` 均不支持断点续跑，App 的 `manual_stop` 仅停止手动会话。
+
+> 说明：`COMPLETE` 表示本次全部要求接触区间满足覆盖容差；`cleaned_intervals` 的统计基准是左侧滚刷接触中心线，不应单独解释为池底面积覆盖率。实船漂移、角部留白和实际清洁效果仍需现场验收记录。

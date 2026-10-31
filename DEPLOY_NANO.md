@@ -180,12 +180,13 @@ export ROS_LOCALHOST_ONLY=1
 export ROS_DOMAIN_ID=173
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 cd /home/nvidia/surface_ws
+export CYCLONEDDS_URI="file://$PWD/src/f1_operator_gateway/test/cyclonedds_localhost.xml"
 colcon test --executor sequential --return-code-on-test-failure \
   --ctest-args -E '^firmware(_imu)?$'
 colcon test-result --verbose
 ```
 
-此命令排除 `firmware` 和 `firmware_imu` 两组测试，两者都需要仓库外的 STM32 固件源码；其余用例包含网关协议、大 L 路线、清洗状态机和本机 ROS 检查，应无失败、无错误。测试使用合成输入和本机通信，不连接执行器。测试后关闭该终端，实景终端按第 6 节加载环境。
+此命令排除 `firmware` 和 `firmware_imu` 两组测试，两者都需要仓库外的 STM32 固件源码；其余用例包含网关协议、大 L 路线、清洗状态机和本机 ROS 检查，应无失败、无错误。测试使用合成输入和本机通信，不连接执行器。指定的 DDS 配置只供 localhost 测试，处理本地大消息分片接收问题，不能用于跨机运行。测试后关闭该终端，实景终端按第 6 节加载环境。Qt App 测试在 PC 另行执行，不计入 colcon 结果。
 
 如要运行完整测试，在 PC 单独同步只读测试所需的固件目录：
 
@@ -359,7 +360,7 @@ colcon test --executor sequential \
 colcon test-result --verbose
 ```
 
-测试完成后关闭测试终端，实机另开终端加载正常运行环境。单独部署定位可只构建 `--packages-up-to f1_localization`；不会构建清洗包或 bridge。地图配套文件仍需独立同步。
+测试完成后关闭测试终端，实机另开终端加载正常运行环境。单独部署定位可只构建 `--packages-up-to f1_localization`；当前包含接口、雷达驱动、建图配置和定位四包，不会构建清洗包或 bridge，也不会自动启动驱动。地图配套文件仍需独立同步。
 
 ## Windows App 清洗功能升级（2026-10-30）
 

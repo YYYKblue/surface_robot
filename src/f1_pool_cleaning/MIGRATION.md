@@ -64,7 +64,8 @@ colcon test-result --test-result-base build/f1_pool_cleaning --verbose
 默认预览（需要外部雷达与定位输入，但不连接硬件桥输出）：
 
 ```bash
-ros2 launch f1_pool_cleaning pool_cleaning.launch.py
+ros2 launch f1_pool_cleaning pool_cleaning.launch.py \
+  map:="$PWD/maps/lidar_20261021_145054.pbstream"
 ros2 topic echo /pool_cleaning/status --once --full-length
 ```
 

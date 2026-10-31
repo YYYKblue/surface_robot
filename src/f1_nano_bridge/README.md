@@ -16,8 +16,8 @@ App 的启动方式和协议见 [`f1_operator_gateway`](../f1_operator_gateway/R
 | 接口 | 类型与用途 |
 |---|---|
 | `/f1/actuator_command` | `f1_interfaces/ActuatorCommand`，方向、档位、轮组、辅助目标及期限 |
-| `/f1/acquire_control` | `f1_interfaces/AcquireControl`，由 Nano 网关内部自动使用 |
-| `/f1/release_control` | `f1_interfaces/ReleaseControl`，由 Nano 网关在停止、断线和超时时使用 |
+| `/f1/acquire_control` | `f1_interfaces/AcquireControl`，由网关手动会话或清洗控制器申请单一控制租约 |
+| `/f1/release_control` | `f1_interfaces/ReleaseControl`，持有租约的网关或清洗控制器释放控制权 |
 | `/f1/stop` | `std_srvs/srv/Trigger`，全局停止请求，不能覆盖 RC |
 | `/f1/control_state` | `f1_interfaces/ControlState`，设备、ACK、控制源和故障状态 |
 | `/f1/imu/data_raw` | `sensor_msgs/msg/Imu` |
@@ -47,7 +47,7 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py bind_address:=0.0.0.0
 - App 发送最新手动输入，不发送 token，也不调用 ROS 服务。
 - 网关只保留一个活动操作端；其他连接可接收遥测，但不能发送手动或任务操作。
 - `allow_fifth_thruster` 默认在 `config/bridge.yaml` 中启用，因此 Qt App 可使用第五电推的 `-100%` 到 `100%` 输入；如需硬件锁定可改为 `false`。
-- App 停止发送输入、WebSocket 断开或网关退出时，网关释放自己的手动会话。自动任务的租约由任务控制器管理，需通过其 `pause/cancel` 停止；App 的 `manual_stop` 不调用 `/f1/stop`。
+- App 停止发送输入、WebSocket 断开或网关退出时，网关释放自己的手动会话。自动任务的租约由任务控制器管理，需通过其 `pause/stop/cancel` 停止；App 的 `manual_stop` 不调用 `/f1/stop`。
 - 重连后不会恢复上一次动作；必须重新产生新输入。
 - RC 接管、epoch 改变、串口错误、CTRL/ACK 超时和原始命令过期仍会停止输出。
 

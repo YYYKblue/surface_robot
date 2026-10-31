@@ -13,7 +13,7 @@ ros2 launch f1_localization localization.launch.py \
   map:=/path/to/reference.pbstream start_rviz:=true
 ```
 
-仓库内只需 `f1_interfaces`、`f1_mapping_bringup` 和本包。Cartographer、ROS 等系统依赖通过 rosdep 安装；PAVO2 驱动需另行运行，默认输入 `/pavo2_scan`。
+按当前 `package.xml` 依赖，以上命令构建四个仓库包：`f1_interfaces`、`f1_lidar_driver`、`f1_mapping_bringup` 和本包；雷达驱动是建图配置包的间接依赖。不依赖清洗包或 bridge。Cartographer、ROS 等系统依赖通过 rosdep 安装；定位入口不启动 PAVO2 驱动，仍需另行运行，默认输入 `/pavo2_scan`。
 
 `map:=` 接受 `.pbstream` 或配套 `.yaml` 路径。纯定位需要 `.pbstream`，定位范围计算还需要 YAML 和栅格图；请一起同步同名 `.pbstream`、`.yaml`、`.pgm`，不能只复制状态文件。支持现有 `load_state_filename:=` 兼容参数。
 
@@ -84,6 +84,8 @@ colcon test-result --test-result-base build/f1_localization --verbose
 测试包括定位门控、独立地图读取、launch 组装，以及使用模拟 Cartographer 服务和合成 TF/扫描的 ROS 定位管理器测试。后者验证初始位姿、就绪、扫描过期、重定位及接口重映射，不启动硬件，也不证明实船定位精度。清洗任务接入另运行 `f1_pool_cleaning` 和 `f1_l_cleaning` 的测试。
 
 ### 本次拆包验证记录（2026-10-30）
+
+以下保留拆包当时的结果和包数量。后续网关联调记录了本机 DDS 大消息接收问题及使用隔离配置后的回归通过结果，见[网关验证记录](../f1_operator_gateway/README.md#验证)；不应将下述历史超时当作当前仍未解决的结论，也不能将后续本机测试视为实船验收。
 
 - 在独立构建/安装目录仅构建本包及两个仓库依赖，确认没有清洗包或 bridge 时定位节点仍可导入；随后完成清洗包构建，并重建当前工作空间的三个受影响包。
 - 通过 CTest 执行：定位包 14/14 项通过，矩形清洗 182/183 项通过，大 L 21/22 项通过。两个未通过用例均为组合启动后未收到任务状态；用拆分前提交 `2528c72` 的控制器、地图工具和启动文件在同一环境中也复现了同类超时，因此本次不能报告完整回归全通过。超时根因尚未确定。
