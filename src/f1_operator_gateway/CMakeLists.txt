@@ -20,6 +20,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(task_control test/test_task_control.py)
   ament_add_pytest_test(task_ros test/test_task_ros.py TIMEOUT 30)
   ament_add_pytest_test(bringup test/test_bringup.py TIMEOUT 60)
+  ament_add_pytest_test(clock_gate test/test_clock_gate.py TIMEOUT 15)
 endif()
 
 ament_package()

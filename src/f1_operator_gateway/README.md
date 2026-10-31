@@ -26,6 +26,8 @@ ros2 launch f1_operator_gateway operator_system.launch.py \
 
 参数：`workspace_root` 必填绝对路径；`map_timezone` 默认 `Asia/Shanghai`；`mapping_resolution` 默认 `0.05` m；可配置 `scan_topic`、`publish_lidar_tf`、`bridge_config`、`rectangle_config`、`l_config`、`localization_config`。`maps/` 不能是符号链接。`workspace_root/maps/.operator-runtime.lock` 防止同工作空间重复运行管理实例。
 
+Nano 的 `deploy/f1-operator.service` 在启动前通过 `wait-operator-clock.py` 等待网络校时完成并连续稳定 5 秒，避免串口桥在开机校时跳变后锁定 `FAULT`。没有可用时间源时保持等待，可用 `journalctl -u f1-operator.service -f` 查看原因；不会到时强行启动。此检查只负责启动条件，运行中的时钟故障仍保持锁定，需要校时稳定后重启服务。服务模板开启串口及运动许可，并使用 `Restart=always` 恢复为待机；直接 launch 不经过该校时检查。详见[部署说明](../../DEPLOY_NANO.md#app-建图选图与开机服务)。
+
 - 开始建图检查连续扫描的帧名、时间戳、角度元数据和有效回波。进入建图后使用现有手动操船；不以固定地图定位就绪作为建图条件。
 - 清洗运行/操作结果未确认时拒绝切换；在模式切换、保存操作前停止手动输出并等待租约交接。
 - 只停止本管理器启动的进程组。旧进程退出后等待 DDS 清除旧地图/节点，发现外部地图发布者或已知冲突节点则拒绝启动。

@@ -393,6 +393,12 @@ ros2 launch f1_operator_gateway operator_system.launch.py \
 
 仓库提供 `src/f1_operator_gateway/deploy/f1-operator.service` 和 `start-operator.sh`。服务模板按 Nano 用户 `nvidia`、工作空间 `/home/nvidia/surface_ws` 编写；安装前按实际路径修改 `User/WorkingDirectory/F1_WORKSPACE/ExecStart`。当前船体部署按操作者要求设置 `F1_OUTPUT_ENABLED=true`，开启串口、运动及第五路控制许可；单独执行 launch 的默认值仍为 false。仅预览时将服务环境变量改为 false。服务使用 `Restart=always`，也覆盖子节点退出后 ROS launch 返回成功的情况；执行 `systemctl stop` 不会触发自动重启。开机或重启后进入待机，不恢复旧动作。
 
+`ExecStartPre` 运行 `deploy/wait-operator-clock.py`，等待 `NTPSynchronized=yes` 且系统时钟相对单调时钟连续稳定 5 秒后，才启动网关和串口桥。检查期间时钟偏移变化超过 20 ms、采样被长时间抢占或同步状态丢失都会重新计时；仅看到日期正常或校时进程已运行不算就绪。未完成校时时，服务保持 `activating (start-pre)`，每 30 秒输出等待原因，不超时放行。现场没有可用时间源时，需要先恢复校时来源；本配置没有自动绕过检查的离线模式。
+
+这是对开机校时晚于桥接启动问题的修复。运行中的 50 ms 时间跳变故障保护仍保留：若启动后人为改时或再次发生明显跳变，桥接会停止输出并锁定故障。处理时先确认时间已稳定，再重启 `f1-operator.service`；重启后重新选图和定位，不自动恢复之前任务。直接执行 ROS launch 不经过这个 systemd 启动检查。
+
+2026-10-31 校时检查部署验证：13 个本地测试通过；Nano 临时 systemd 测试模拟未校时，确认后续进程未启动。正式服务在 15:06:22 开始检查，15:06:27 通过后启动；随后连续 15 秒的 151 条遥测均为 `READY`，CTRL/ACK、IMU 和雷达数据正常，船体保持停止。此次验证没有修改系统时间或重启整机。原服务备份位于 Nano 的 `deploy_backups/clock-gate-20261031_150457/`。
+
 以下为目标机的一次性安装步骤；执行前关闭已占用同端口/同硬件的手工入口：
 
 ```bash

@@ -1,7 +1,7 @@
 [Unit]
 Description=F1 operator gateway and map runtime
-After=network-online.target
-Wants=network-online.target
+After=network-online.target systemd-timesyncd.service
+Wants=network-online.target systemd-timesyncd.service
 
 [Service]
 Type=simple
@@ -12,7 +12,10 @@ Environment=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 Environment=F1_WORKSPACE=/home/nvidia/surface_ws
 # This boat is configured for live serial and actuator control.
 Environment=F1_OUTPUT_ENABLED=true
+# A running NTP daemon is insufficient: wait for synchronization and stability.
+ExecStartPre=/usr/bin/python3 /home/nvidia/surface_ws/src/f1_operator_gateway/deploy/wait-operator-clock.py
 ExecStart=/bin/bash /home/nvidia/surface_ws/src/f1_operator_gateway/deploy/start-operator.sh
+TimeoutStartSec=infinity
 # ROS launch may exit successfully after a child exits. Restore the idle system.
 Restart=always
 RestartSec=5
