@@ -77,9 +77,9 @@ rsync -av --progress \
   nvidia@192.168.1.188:/home/nvidia/surface_ws/
 ```
 
-源目录末尾的 `/` 表示传工作空间的目录内容，目标是 `/home/nvidia/surface_ws/`，源码会落入其 `src/`，不会变成 `surface_ws/surface_ws/src`。本命令同时传输 README、App 和部署文档；没有使用 `--delete`。本轮新建目录无需删除远端文件。
+源目录末尾的 `/` 表示传工作空间的目录内容，目标是 `/home/nvidia/surface_ws/`，源码会落入其 `src/`，不会变成 `surface_ws/surface_ws/src`。本命令传输源码、地图和部署文档，排除 Windows App 的 `operator_app/`；Nano 所需的 `src/f1_operator_gateway/` 仍会同步。没有使用 `--delete`，远端独有文件会保留，但同名文件可能被 PC 版本覆盖。
 
-`maps/` 被 Git 忽略且被上述同步命令排除，需要单独提供地图。启动时用 `map:=实际绝对路径` 指定本次要用的地图，池尺寸、边界和 L 路线都会由它推导，不必再改 YAML；只传 `map:=xxx.yaml` 时，同名 `.pbstream` 必须存在，因为固定地图定位需要 Cartographer 状态而不只是栅格图。地图传输示例见各任务文档。
+`maps/` 被 Git 忽略，克隆仓库不会得到地图；上述 rsync 会同步本地已有的地图。每份地图的同名 `.pbstream`、`.yaml`、`.pgm` 直接放在工作空间 `maps/` 下，App 地图列表不递归扫描子目录。YAML 的 `image` 使用同目录 PGM 文件名，例如 `image: lidar_20261021_145054.pgm`，避免绑定 PC 或 Nano 的绝对路径。命令行启动时用 `map:=实际绝对路径` 指定本次地图，池尺寸、边界和 L 路线由它推导；只传 `map:=xxx.yaml` 时，同名 `.pbstream` 也必须存在。以后仅更新源码、需要保留 Nano 的同名地图时，在同步命令中额外加入 `--exclude='/maps/'`。
 
 不要直接复制 PC 的整个工作空间生成目录到 Nano。PC 的 `build/` 包含本机绝对路径、CMake 缓存和生成索引，`install/` 也包含本机生成的文件与链接。这里的排除规则只阻止本次传输，不会清理 Nano 上已经存在的生成目录。若曾误传，或遇到缓存/JSON 索引错误，按[第 10 节](#10-同步后-cmake-缓存或-json-索引报错)备份并重新生成。
 
@@ -233,7 +233,7 @@ ros2 run f1_mapping_bringup scan_check --samples 100
 
 App 受管入口继续复用独立雷达服务，切换建图/定位不重启雷达。服务故障时同时检查 `journalctl -u pavo2-scan.service` 和 `/home/nvidia/pavo2_scan_driver.log`。详细配置、回退与验收边界见[驱动说明](src/f1_lidar_driver/README.md)。
 
-历史地图备份约定为 PC 的 `/home/bboss/new-nano/backups/nano_maps`；使用前确认实际文件存在，或从本地 `maps/` 单独同步。
+当前使用的地图统一放在 PC 和 Nano 各自工作空间的 `maps/` 根目录；历史 `backups/nano_maps` 仅作归档，不作为默认运行路径。
 
 ## 9. rosdep 更新报错处理
 
@@ -402,6 +402,6 @@ systemctl status f1-operator.service --no-pager
 journalctl -u f1-operator.service -n 80 --no-pager
 ```
 
-服务使用 control-group 停止策略，退出时收回受管子进程。开机无地图时只待机，不自动恢复运动、建图或清洗。地图写入 Nano `maps/`，该目录仍被默认同步排除，不会因源码更新而覆盖已有地图。
+服务使用 control-group 停止策略，退出时收回受管子进程。开机无地图时只待机，不自动恢复运动、建图或清洗。地图写入 Nano 的 `F1_WORKSPACE/maps/`。本文同步命令包含地图；仅更新源码时可加入 `--exclude='/maps/'`，避免覆盖 Nano 上的同名地图。
 
 本地集成测试只能使用隔离域和 localhost DDS 配置；不能让模拟雷达进入实机域。新增 `runtime_ros` 测试用合成扫描驱动真实 Cartographer，验证 WebSocket 建图、断线重连、三件套保存和重新加载，硬件输出始终关闭。

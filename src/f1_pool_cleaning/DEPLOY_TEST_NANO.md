@@ -12,13 +12,13 @@
 
 统一启动入口依赖 `f1_localization` 和 `f1_nano_bridge`；`--packages-up-to f1_pool_cleaning` 会一起构建。依赖通过 rosdep 安装。
 
-地图副本路径约定为 `/home/nvidia/surface_ws/maps/20261021_145054/lidar_20261021_145054.pbstream`。PC 同步示例：
+地图路径为 `/home/nvidia/surface_ws/maps/lidar_20261021_145054.pbstream`，同名 YAML 和 PGM 也直接放在 `maps/` 下；YAML 的 `image` 使用同目录 PGM 文件名。PC 单独同步该地图的示例：
 
 ```bash
-ssh nvidia@192.168.1.188 'mkdir -p /home/nvidia/surface_ws/maps/20261021_145054'
+ssh nvidia@192.168.1.188 'mkdir -p /home/nvidia/surface_ws/maps'
 rsync -av --ignore-existing \
-  /home/bboss/new-nano/backups/nano_maps/20261021_145054/ \
-  nvidia@192.168.1.188:/home/nvidia/surface_ws/maps/20261021_145054/
+  /home/bboss/new-nano/surface_ws/maps/lidar_20261021_145054.{pbstream,yaml,pgm} \
+  nvidia@192.168.1.188:/home/nvidia/surface_ws/maps/
 ```
 
 Nano 构建、离线测试：
@@ -55,7 +55,7 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano
 ```
 
-这条命令统一启动冻结地图、定位管理器、bridge、墙面感知和清洗控制器。定位启动时不会在没有初始位姿时创建轨迹；默认地图仍为 `maps/20261021_145054/lidar_20261021_145054.pbstream`。它启用串口、运动、主电机方向确认和第五路许可，但清洗任务保持 `IDLE`，等待 RViz2 标定定位并手动 `start`。
+这条命令统一启动冻结地图、定位管理器、bridge、墙面感知和清洗控制器。定位启动时不会在没有初始位姿时创建轨迹；默认地图为 `maps/lidar_20261021_145054.pbstream`。它启用串口、运动、主电机方向确认和第五路许可，但清洗任务保持 `IDLE`，等待 RViz2 标定定位并手动 `start`。
 
 脚本不自动判断已有节点。若定位和 bridge 已经运行，改用：
 
@@ -89,7 +89,8 @@ bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano cancel
 已加载环境时，也可直接使用 ROS 启动入口；它默认无硬件输出，实机显式加 `output_enabled:=true`：
 
 ```bash
-ros2 launch f1_pool_cleaning pool_bringup.launch.py output_enabled:=true
+ros2 launch f1_pool_cleaning pool_bringup.launch.py \
+  map:=/home/nvidia/surface_ws/maps/lidar_20261021_145054.pbstream output_enabled:=true
 ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 ```
 

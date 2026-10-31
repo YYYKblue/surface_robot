@@ -17,7 +17,7 @@
 | [`f1_l_cleaning`](src/f1_l_cleaning/README.md) | 复用清洗控制器的开放大 L 路线，执行 A → B → C 两段墙 |
 | [`f1_operator_gateway`](src/f1_operator_gateway/README.md) | App 的 WebSocket 手动控制、任务服务和遥测入口 |
 | [`operator_app/`](operator_app/README.md) | Qt 操作员界面，包含建图/选图、地图、雷达、手动输入和任务按钮 |
-| `maps/` | 本地地图资料；被 Git 忽略，克隆仓库和默认部署同步均不包含 |
+| `maps/` | 地图三件套直接存放于此；被 Git 忽略，克隆仓库不包含，当前部署同步命令会传输 |
 | `docs/`、`tools/` | 开发验收、历史试验记录和离线路线示意工具 |
 
 仓库共有八个 ROS 功能包。PAVO2 驱动与 SDK 已迁入 `f1_lidar_driver`；STM32 固件源码和地图仍需单独准备。雷达本次完成 PC 端封装，Nano 编译与服务切换按[驱动说明](src/f1_lidar_driver/README.md)由操作者执行。旧 ZMQ 网关和旧 UI 协议已移除。

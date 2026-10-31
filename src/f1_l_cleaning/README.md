@@ -58,11 +58,11 @@ ros2 run f1_pool_cleaning map_profile "$PWD/maps/lidar_20261026_170703.pbstream"
 参数优先于地图推导。
 
 地图文件由现场提供，不打包进源码。
-`maps/` 被 Git 忽略，根部署命令也排除了它；即使本地已有地图，Nano 仍需单独同步。在 PC 确认源文件存在后执行：
+`maps/` 被 Git 忽略；当前根部署命令会同步它。每份地图的同名 `.pbstream`、`.yaml`、`.pgm` 直接放在 `maps/` 下，YAML 的 `image` 使用同目录 PGM 文件名。若需要单独传输大 L 地图，在 PC 确认三份文件存在后执行：
 
 ```bash
 ssh nvidia@192.168.1.188 'mkdir -p /home/nvidia/surface_ws/maps'
-rsync -av /home/bboss/new-nano/surface_ws/maps/lidar_20261026_170703.pbstream \
+rsync -av /home/bboss/new-nano/surface_ws/maps/lidar_20261026_170703.{pbstream,yaml,pgm} \
   nvidia@192.168.1.188:/home/nvidia/surface_ws/maps/
 ```
 
