@@ -76,11 +76,13 @@ def test_manual_coalescing_preserves_all_discrete_commands(app):
     assert worker.send_packet(pose) is False  # Explicit failure, never silent loss.
 
 
-def test_mock_workflow_localization_start_completion_and_stale_gate(app):
+@pytest.mark.parametrize("kind, edge_count", [("l", 2), ("rectangle", 4)])
+def test_mock_workflow_localization_start_completion_and_stale_gate(app, kind, edge_count):
     window = OperatorWindow("unused", mock=True)
     window.show()
     try:
         QTest.qWait(250)
+        window.task_combo.setCurrentIndex(window.task_combo.findData(kind))
         assert not window.task_buttons["start"].isEnabled()
         window.pose_button.setChecked(True)
         window._pose_selected(dict(x=1., y=1., yaw=0., map_revision=1))
@@ -96,10 +98,71 @@ def test_mock_workflow_localization_start_completion_and_stale_gate(app):
         assert "任务完成" in window.task_status.text()
         assert "完成时间" in window.result_label.text()
         assert len(window.seen_completions) == 1
+        assert window.canvas.task_overlay["actual_track"]["point_count"] > 30
+        assert len(window.canvas.task_overlay["expected_track"]["cleaning_segments"]) == edge_count
+        assert not window.canvas.task_overlay["expected_track"]["navigation_path"]
+        assert "35.0 cm" in window.wall_distance.text()
         window.last_telemetry_at = time.monotonic()-2
         window._refresh_controls()
         assert not window.task_buttons["start"].isEnabled()
         assert "未知" in window.task_status.text()
         assert window.canvas.telemetry["pose"] is None
+        assert window.canvas.task_overlay["actual_track"]["point_count"] > 30
+        assert all(not dashed for _, _, dashed in window.canvas._track_layers())
+        assert "过期" in window.track_status.text()
+        assert "无有效观测" in window.wall_distance.text()
+    finally:
+        window.close()
+
+
+def test_track_layers_keep_l_open_and_reject_mismatched_frames_and_runs(app):
+    canvas = MapCanvas()
+    canvas.set_telemetry(mapping(math.pi/2))
+    task = dict(map_id="map-a", run_id="run",
+        expected_track=dict(map_id="map-a", frame_id="map", cleaning_segments=[
+            dict(points=[[-2., 3.], [-2., 4.]]), dict(points=[[-2., 4.], [-3., 4.]])],
+            navigation_path=[[-2.5, 3.], [-2., 3.]]),
+        actual_track=dict(map_id="map-a", frame_id="map", run_id="run",
+                          segments=[[[-2., 3.], [-2., 3.5]], [[-2., 4.], [-2.5, 4.]]]))
+    canvas.set_task_overlay(task, live=True)
+    assert len(canvas._track_layers()) == 5
+    assert all(len(points) == 2 for points, _, _ in canvas._track_layers())
+    canvas.grab()  # Exercise painting with rotated origin and independent segments.
+    canvas.set_task_overlay(task, live=False)
+    assert len(canvas._track_layers()) == 2  # Historic path survives telemetry expiry.
+    task["actual_track"]["run_id"] = "old-run"
+    assert not canvas._track_layers()
+    task["expected_track"]["frame_id"] = "odom"
+    canvas.set_task_overlay(task, live=True)
+    assert not canvas._track_layers()
+
+
+def test_stop_cancel_and_wall_distance_follow_robot_state(app, monkeypatch):
+    monkeypatch.setattr(SocketWorker, "start", lambda self: None)
+    window = OperatorWindow("unused")
+    try:
+        window._message(dict(type="hello", client_id="test", capabilities=[
+            "task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks"]))
+        window._message(mapping())
+        state = dict(type="telemetry", active_client="test", task_busy=True, active_tasks=["l"],
+                     localization=dict(map_id="map-a", fresh=True), tasks=dict(l=dict(
+                         map_id="map-a", fresh=True, phase="FOLLOW", run_id="run", wall_valid=True,
+                         wall_fresh=True, center_wall_distance_m=.342)))
+        window._message(state)
+        assert window.task_buttons["stop"].isEnabled()
+        assert "34.2 cm" in window.wall_distance.text()
+        window._task("stop")
+        sent = window.worker._take_outgoing()[-1]
+        assert sent["action"] == "stop" and sent["task_type"] == "l"
+        assert not window.task_buttons["cancel"].isEnabled()
+        window._message(dict(type="reply", request_id=sent["request_id"], success=True))
+        state.update(task_busy=False, active_tasks=[])
+        state["tasks"]["l"].update(phase="STOPPED", wall_fresh=False)
+        window._message(state)
+        assert not window.task_buttons["stop"].isEnabled()
+        assert window.task_buttons["cancel"].isEnabled()
+        assert "无有效观测" in window.wall_distance.text()
+        window._task("cancel")
+        assert window.worker._take_outgoing()[-1]["action"] == "cancel"
     finally:
         window.close()

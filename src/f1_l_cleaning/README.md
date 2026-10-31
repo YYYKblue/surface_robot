@@ -110,9 +110,9 @@ L 路线的末端到起始段之间不执行清洗，也不构造虚假的闭合
 
 ## Qt App 接入
 
-App 已支持任务类型选择、初始位姿发布、定位门控与任务完成显示。已有大 L bringup 时，网关设置 `localization_prefix:=/l_cleaning`；不再重映射任务的 `status/start/pause/cancel`。也可以使用[网关组合入口](../f1_operator_gateway/README.md)统一启动，定位共享 `/f1_localization/*`，本任务消费同一定位状态。
+App 已支持任务类型选择、初始位姿发布、定位门控与任务完成显示。已有大 L bringup 时，网关设置 `localization_prefix:=/l_cleaning`；不再重映射任务的 `status/start/pause/stop/cancel`。也可以使用[网关组合入口](../f1_operator_gateway/README.md)统一启动，定位共享 `/f1_localization/*`，本任务消费同一定位状态。
 
-自动任务停止使用“暂停任务”或“取消任务”。App 顶部“停止手动输出”按钮只释放手动会话。暂停后需先取消再重新开始；带地图的自动任务完成后可直接开始新任务。
+自动任务使用“停止任务”“取消任务”或“暂停任务”。App 顶部“停止手动输出”按钮只释放手动会话。暂停后需先取消再重新开始；带地图的自动任务完成后可直接开始新任务。
 
 ## 验证边界
 
@@ -126,3 +126,9 @@ colcon test-result --verbose
 实际余转、角部净空、定位稳定性及刷盘接触效果；进入 `COMPLETE` 表示软件记录的
 要求接触区间已覆盖，不证明实际去污效果。原控制器的盲区限制仍然存在。
 自动选边、导航参数和覆盖状态字段见[共享实现说明](../f1_pool_cleaning/README.md)。
+
+## App 轨迹、停止与墙距扩展（2026-10-31）
+
+本包复用矩形控制器的 `expected_track`、`center_wall_distance_m` 与墙观测新鲜度字段，但目标轨迹只有两条独立清洗段，保持开放的 L 路线，不增加回到起点的闭合边。历史轨迹按 L 任务的 map_id/run_id 单独记录，不与矩形任务混合。
+
+新增 Trigger `/l_cleaning/stop`，进入 STOPPED、关闭输出、释放租约并保留进度；`/l_cleaning/cancel` 另清除当前边关联。再次开始是新任务，不支持断点续跑。界面、历史保留范围与左墙距离定义见[App 说明](../../operator_app/README.md)。

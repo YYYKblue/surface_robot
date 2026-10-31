@@ -229,3 +229,69 @@ def test_unknown_start_result_stays_locked_until_explicit_cancel():
     g._operation_request("app", task(action="cancel", request_id="cancel"))
     respond(g.task_clients["l"]["cancel"])
     assert not g.task_locks and not g.uncertain_tasks
+
+
+@pytest.mark.parametrize("action", ["pause", "stop", "cancel"])
+def test_stop_action_after_late_start_response(action):
+    g = Gateway()
+    g._operation_request("app", task())
+    g._operation_request("app", task(action=action, request_id="halt-1"))
+    assert not g.task_clients["l"][action].calls
+    respond(g.task_clients["l"]["start"])
+    assert len(g.task_clients["l"][action].calls) == 1
+    assert not g.task_clients["rectangle"][action].calls
+    respond(g.task_clients["l"][action])
+    assert g.command_pending is None
+
+
+def pose_at(seconds, x=0., y=0.):
+    return dict(x=x, y=y, stamp=dict(sec=int(seconds), nanosec=round(seconds % 1 * 1e9)))
+
+
+def test_history_breaks_on_gaps_jumps_relocalization_and_keeps_terminal_snapshot():
+    from operator_gateway.tracks import TaskTrack
+    h = TaskTrack(limit=6)
+    def update(t, x, **kw):
+        h.update("map-a", "run-a", pose_at(t, x), recording=True, **kw)
+    update(1., 0., epoch=1)
+    update(1.25, .1, epoch=1)
+    update(1.5, .1, epoch=1)  # No duplicate stationary points.
+    assert h.count == 2
+    update(2.5, .2, epoch=1)  # Missing localization.
+    update(2.75, 1., epoch=1)  # Jump.
+    update(3., 1.1, epoch=2)  # Localization restarted.
+    assert [len(s) for s in h.snapshot()["segments"]] == [2, 1, 1, 1]
+    before = h.snapshot()
+    h.update("map-a", "run-a", pose_at(4., 2.), recording=False)
+    assert h.snapshot() == before
+    update(4.25, 2.1, epoch=2)
+    update(4.5, 2.2, epoch=2)
+    assert h.count == 6 and h.truncated
+    assert h.snapshot()["segments"][0] == [[.1, 0.]]
+    h.update("map-a", "new-run", pose_at(5., 0.), recording=True)
+    assert h.count == 1 and not h.truncated
+    h.update("map-b", "new-run", None, recording=False)
+    assert h.count == 0
+
+
+def test_task_telemetry_records_only_current_run_with_ready_localization():
+    g = Gateway()
+    g.pose = pose_at(1.)
+    g.status("l", phase="FOLLOW", run_id="run")
+    snapshot = g._task_telemetry()
+    assert snapshot["tasks"]["l"]["actual_track"]["point_count"] == 1
+    assert snapshot["tasks"]["rectangle"]["actual_track"]["point_count"] == 0
+    g.localization_received -= 1
+    g.pose = pose_at(1.25, .1)
+    assert g._task_telemetry()["tasks"]["l"]["actual_track"]["point_count"] == 1
+    g.ready()
+    g.status("l", phase="FOLLOW", run_id="run")
+    g.pose = pose_at(1.5, .2)
+    track = g._task_telemetry()["tasks"]["l"]["actual_track"]
+    assert track["segments"] == [[[0., 0.]], [[.2, 0.]]]
+    g.status("l", phase="STOPPED", run_id="run")
+    g.pose = pose_at(1.75, .3)
+    assert g._task_telemetry()["tasks"]["l"]["actual_track"] == track
+    # A source-stale packet cannot replace this run's history.
+    g.status("l", run_id="old", stamp_ns=time.time_ns()-10**9)
+    assert g._task_telemetry()["tasks"]["l"]["actual_track"] == track

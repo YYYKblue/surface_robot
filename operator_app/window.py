@@ -92,7 +92,13 @@ class OperatorWindow(QMainWindow):
         body = QHBoxLayout(); body.setSpacing(14); layout.addLayout(body, 1)
         map_card = QFrame(); map_card.setObjectName("card"); map_layout = QVBoxLayout(map_card)
         map_title = QHBoxLayout(); map_title.addWidget(QLabel("作业地图")); map_title.addStretch(); self.data_age = QLabel("等待遥测"); self.data_age.setObjectName("muted"); map_title.addWidget(self.data_age); map_layout.addLayout(map_title)
-        self.canvas = MapCanvas(); map_layout.addWidget(self.canvas, 1); body.addWidget(map_card, 3)
+        self.canvas = MapCanvas(); map_layout.addWidget(self.canvas, 1)
+        self.wall_distance = QLabel("船体中心距左墙：无有效观测")
+        self.wall_distance.setToolTip("base_link 原点到雷达拟合左墙线的垂直距离；不是滚刷间隙或任意最近障碍物距离")
+        map_layout.addWidget(self.wall_distance)
+        self.track_status = QLabel("轨迹：等待任务数据")
+        self.track_status.setWordWrap(True); map_layout.addWidget(self.track_status)
+        body.addWidget(map_card, 3)
         self.canvas.initial_pose_selected.connect(self._pose_selected)
         self.canvas.map_changed.connect(self._map_changed)
         side = QFrame(); side.setObjectName("card"); side_layout = QVBoxLayout(side); body.addWidget(side, 1)
@@ -184,17 +190,29 @@ class OperatorWindow(QMainWindow):
         self.task_reason = QLabel("")
         self.task_reason.setWordWrap(True); box.addWidget(self.task_reason)
         self.task_buttons = {}
-        for label, action in (("开始清洗", "start"), ("暂停任务", "pause"), ("取消任务", "cancel")):
+        task_actions = QGridLayout()
+        for index, (label, action) in enumerate((("开始清洗", "start"), ("暂停任务", "pause"),
+                                                 ("停止任务", "stop"), ("取消任务", "cancel"))):
             button = QPushButton(label)
             if action == "start":
                 button.setObjectName("primary")
+            elif action == "stop":
+                button.setObjectName("stop")
             button.setEnabled(False)
             button.clicked.connect(lambda checked=False, a=action: self._task(a))
-            box.addWidget(button); self.task_buttons[action] = button
+            button.setToolTip({
+                "start": "启动新的清洗任务",
+                "pause": "关闭输出，取消后可重新开始",
+                "stop": "关闭输出并保留记录；再次开始创建新任务",
+                "cancel": "关闭输出并清除当前边关联；历史轨迹保留",
+            }[action])
+            task_actions.addWidget(button, index//2, index % 2)
+            self.task_buttons[action] = button
+        box.addLayout(task_actions)
         self.result_label = QLabel("")
         self.result_label.setWordWrap(True); box.addWidget(self.result_label)
         box.addStretch()
-        note = QLabel("暂停后需取消再重新开始。\n顶部红色按钮仅停止手动输出。")
+        note = QLabel("暂停后需取消再重新开始。\n停止保留任务记录；取消另清除当前边关联。\n再次开始会创建新任务，不会续跑。\n顶部红色按钮仅停止手动输出。")
         note.setWordWrap(True); box.addWidget(note)
         self.pose_button.setEnabled(False)
         self.publish_pose_button.setEnabled(False)
@@ -268,14 +286,38 @@ class OperatorWindow(QMainWindow):
         self.task_buttons["start"].setEnabled(fresh and supported and operator and not local_pending and not selecting and task.get("can_start") is True)
         active = packet.get("active_tasks", [])
         pending_start = any(p.get("action") == "start" for _, p in self.pending_requests.values())
-        stopping = any(p.get("action") in ("pause", "cancel") for _, p in self.pending_requests.values())
+        stopping = any(p.get("action") in ("pause", "stop", "cancel") for _, p in self.pending_requests.values())
         stoppable = bool(active or pending_start or (task_fresh and task.get("phase") == "PAUSED"))
         self.task_buttons["pause"].setEnabled(fresh and operator and stoppable and not stopping)
-        self.task_buttons["cancel"].setEnabled(fresh and operator and stoppable and not stopping)
+        self.task_buttons["stop"].setEnabled(fresh and operator and stoppable and not stopping
+                                              and "task_stop" in self.capabilities)
+        cancellable = stoppable or (task_fresh and task.get("run_id")
+                                    and task.get("phase") not in ("IDLE", "CANCELLED"))
+        self.task_buttons["cancel"].setEnabled(fresh and operator and bool(cancellable) and not stopping)
         loc = packet.get("localization", {})
         map_id = loc.get("map_id", "")
         self.map_status.setText("地图：" + (map_id.rsplit("/", 1)[-1] if map_id else "未确认"))
         self.map_status.setToolTip(map_id)
+        same_map = bool(map_id and map_id == task.get("map_id"))
+        # Retain last known history on disconnect, without reusing it for controls.
+        overlay_task = self.telemetry.get("tasks", {}).get(kind, {})
+        overlay_map = self.telemetry.get("localization", {}).get("map_id")
+        overlay_matches = bool(overlay_map and overlay_map == overlay_task.get("map_id"))
+        self.canvas.set_task_overlay(overlay_task if overlay_matches else {}, live=fresh and task_fresh)
+        distance = task.get("center_wall_distance_m")
+        valid_wall = (fresh and task_fresh and same_map and task.get("wall_fresh") is True
+                      and task.get("wall_valid") is True and isinstance(distance, (int, float))
+                      and math.isfinite(distance) and distance > 0)
+        self.wall_distance.setText(f"船体中心距左墙：{distance:.3f} m（{distance*100:.1f} cm）"
+                                  if valid_wall else "船体中心距左墙：无有效观测")
+        track = overlay_task.get("actual_track", {}) if overlay_matches else {}
+        if track.get("run_id") != overlay_task.get("run_id"):
+            track = {}
+        count = track.get("point_count", 0)
+        suffix = "（已截断，仅显示最近轨迹）" if track.get("truncated") else ""
+        self.track_status.setText(f"{TASK_NAMES[kind]} · 本次任务历史轨迹：{count} 点{suffix}"
+                                  + (" · 当前轨迹数据已过期" if not fresh or not task_fresh else "")
+                                  if "task_tracks" in self.capabilities else "轨迹功能需要升级网关")
         if not loc.get("fresh"):
             text = "定位：状态未收到或已过期"
         elif not loc.get("initial_pose_received"):

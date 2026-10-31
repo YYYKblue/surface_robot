@@ -12,7 +12,7 @@ MAX_PAYLOAD = 128 * 1024
 OPERATIONS = {"hello", "manual_input", "manual_stop", "task", "initial_pose"}
 DIRECTIONS = {"STOP", "FORWARD", "REVERSE", "LEFT", "RIGHT"}
 MODES = {"FRONT", "BOTH", "BACK"}
-TASKS = {"start", "pause", "cancel"}
+TASKS = {"start", "pause", "stop", "cancel"}
 
 
 @dataclass(frozen=True)

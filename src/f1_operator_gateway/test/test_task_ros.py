@@ -26,7 +26,7 @@ def test_websocket_initial_pose_task_routing_completion_and_localization_loss():
     executor.add_node(gateway)
     executor.add_node(peer)
     pool = ThreadPoolExecutor(max_workers=1)
-    state = dict(initial=False, pose_stamp=0, publish_loc=True, started=None)
+    state = dict(initial=False, pose_stamp=0, publish_loc=True, started=None, auto_complete=True)
     calls = []
     statuses = {kind: dict(task_type=kind, phase="IDLE", run_id="", can_start=True,
         start_blockers=[], map_id="test-map", output_enabled=False, edge_count=2 if kind == "l" else 4)
@@ -60,12 +60,12 @@ def test_websocket_initial_pose_task_routing_completion_and_localization_loss():
                 statuses[kind].update(phase="PLANNING", run_id=uuid.uuid4().hex)
                 state["started"] = time.monotonic()
             else:
-                statuses[kind]["phase"] = "CANCELLED" if action == "cancel" else "PAUSED"
+                statuses[kind]["phase"] = {"pause": "PAUSED", "stop": "STOPPED", "cancel": "CANCELLED"}[action]
             response.success, response.message = True, "accepted"
             return response
         return callback
     for kind, prefix in (("l", "/l_cleaning"), ("rectangle", "/pool_cleaning")):
-        for action in ("start", "pause", "cancel"):
+        for action in ("start", "pause", "stop", "cancel"):
             peer.create_service(Trigger, prefix + "/" + action, task_callback(kind, action))
 
     def publish():
@@ -74,7 +74,7 @@ def test_websocket_initial_pose_task_routing_completion_and_localization_loss():
             loc_pub.publish(String(data=json.dumps(dict(stamp_ns=now, map_id="test-map",
                 initial_pose_received=state["initial"], initial_pose_stamp_ns=state["pose_stamp"],
                 ready=state["initial"], state="LOCALIZATION_READY" if state["initial"] else "LOCALIZATION_CHECK"))))
-        if state["started"] and time.monotonic()-state["started"] > .3:
+        if state["auto_complete"] and state["started"] and time.monotonic()-state["started"] > .3:
             statuses["l"]["phase"] = "COMPLETE"
         for kind, pub in pubs.items():
             pub.publish(String(data=json.dumps(dict(statuses[kind], stamp_ns=now))))
@@ -103,6 +103,15 @@ def test_websocket_initial_pose_task_routing_completion_and_localization_loss():
             await until(lambda p: p.get("request_id") == "start" and p.get("success"))
             done = await until(lambda p: p.get("type") == "telemetry" and p["tasks"]["l"].get("phase") == "COMPLETE")
             assert done["tasks"]["l"]["run_id"]
+            state["auto_complete"] = False
+            await send(dict(op="task", request_id="second-start", task_type="l", action="start"))
+            await until(lambda p: p.get("request_id") == "second-start" and p.get("success"))
+            await send(dict(op="task", request_id="stop", task_type="l", action="stop"))
+            await until(lambda p: p.get("request_id") == "stop" and p.get("success"))
+            stopped = await until(lambda p: p.get("type") == "telemetry" and p["tasks"]["l"].get("phase") == "STOPPED")
+            assert stopped["tasks"]["l"]["run_id"] != done["tasks"]["l"]["run_id"]
+            await send(dict(op="task", request_id="cancel", task_type="l", action="cancel"))
+            await until(lambda p: p.get("request_id") == "cancel" and p.get("success"))
             state["publish_loc"] = False
             await asyncio.sleep(.8)
             await until(lambda p: p.get("type") == "telemetry" and not p["localization"]["fresh"])
@@ -117,6 +126,7 @@ def test_websocket_initial_pose_task_routing_completion_and_localization_loss():
         assert future.done()
         future.result()
         assert ("l", "start") in calls
+        assert ("l", "stop") in calls and ("l", "cancel") in calls
         assert ("rectangle", "start") not in calls
         pose = next(value for kind, value in calls if kind == "pose")
         assert pose.pose.header.frame_id == "map"

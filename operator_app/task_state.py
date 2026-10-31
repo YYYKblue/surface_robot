@@ -1,6 +1,6 @@
 """UI labels and derived task state; no robot control decisions live here."""
 PHASES = {
-    "IDLE": "待启动", "CANCELLED": "已取消", "STOPPED": "已停止", "PAUSED": "已暂停（取消后可重新开始）",
+    "IDLE": "待启动", "CANCELLED": "已取消", "STOPPED": "任务已停止（重新开始将创建新任务）", "PAUSED": "已暂停（取消后可重新开始）",
     "COMPLETE": "任务完成", "ACQUIRING": "正在获取控制权", "PLANNING": "正在规划路线",
     "NAVIGATING": "正在导航到清洗起点", "SETTLING": "正在调整姿态", "ACQUIRE_WALL": "正在寻找左墙",
     "DOCK_WALL": "正在靠墙对齐", "APPROACH_EDGE": "正在接近清洗边",

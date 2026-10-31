@@ -9,6 +9,8 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
+from .tracks import TaskTrack
+
 TASK_PREFIXES = {"rectangle": "/pool_cleaning", "l": "/l_cleaning"}
 TERMINAL = {"IDLE", "CANCELLED", "STOPPED", "COMPLETE", "PAUSED"}
 MAX_AGE = .6
@@ -24,9 +26,10 @@ class TaskControl:
         self.task_unavailable_reasons = json.loads(self.get_parameter("task_unavailable_reasons").value)
         self.task_clients = {
             kind: {action: self.create_client(Trigger, f"{namespace}/{action}")
-                   for action in ("start", "pause", "cancel")}
+                   for action in ("start", "pause", "stop", "cancel")}
             for kind, namespace in TASK_PREFIXES.items()}
         self.tasks, self.task_received = {}, {}
+        self.task_tracks = {kind: TaskTrack() for kind in TASK_PREFIXES}
         self.localization, self.localization_received = {}, 0.
         self.command_pending = None
         self.operation_replies = OrderedDict()
@@ -152,7 +155,7 @@ class TaskControl:
         if pending:
             # A stop arriving during start is applied AFTER its asynchronous
             # reply, so a late start callback cannot undo the user's stop.
-            if packet["op"] == "task" and packet["action"] in ("pause", "cancel"):
+            if packet["op"] == "task" and packet["action"] in ("pause", "stop", "cancel"):
                 if pending["packet"].get("action") == "start" and pending["packet"].get("task_type") == packet["task_type"]:
                     if pending.get("stop_after"):
                         self._rpc_reply(client_id, packet, False, "停止请求处理中")
@@ -284,7 +287,7 @@ class TaskControl:
         kind = pending["packet"].get("task_type")
         action = pending["packet"].get("action")
         if kind and ((action == "start" and not result.success)
-                     or (action in ("pause", "cancel") and result.success)):
+                     or (action in ("pause", "stop", "cancel") and result.success)):
             self.uncertain_tasks.discard(kind)
             # A response confirms the service ran; an observed active phase
             # remains locked until the next fresh terminal status.
@@ -305,7 +308,20 @@ class TaskControl:
 
     def _task_telemetry(self):
         loc = self._localization_view()
-        return dict(tasks={kind: self._task_view(kind) for kind in TASK_PREFIXES},
+        tasks = {kind: self._task_view(kind) for kind in TASK_PREFIXES}
+        for kind, task in tasks.items():
+            history = self.task_tracks[kind]
+            # Ignore stale identities: an old packet must not erase a new run.
+            if task["fresh"]:
+                history.update(task.get("map_id"), task.get("run_id"),
+                    getattr(self, "pose", None),
+                    recording=(task.get("phase") not in TERMINAL and loc["ready"]
+                               and loc.get("map_id") == task.get("map_id")),
+                    epoch=(loc.get("trajectory_id"), loc.get("initial_pose_stamp_ns")))
+            else:
+                history.last_seen = history.last_recorded = None
+            task["actual_track"] = history.snapshot()
+        return dict(tasks=tasks,
                     localization=loc, task_busy=self._tasks_busy(),
                     active_tasks=sorted(self.task_locks), operation_pending=bool(self.command_pending),
                     can_set_initial_pose=(not self._tasks_busy() and self.map_data is not None

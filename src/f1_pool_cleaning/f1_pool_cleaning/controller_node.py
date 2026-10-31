@@ -146,6 +146,7 @@ class PoolController(Node):
         self.task_services = [
             self.create_service(Trigger, "/pool_cleaning/start", self._start),
             self.create_service(Trigger, "/pool_cleaning/pause", self._pause),
+            self.create_service(Trigger, "/pool_cleaning/stop", self._stop_task),
             self.create_service(Trigger, "/pool_cleaning/cancel", self._cancel),
             self.create_service(SetEdge, "/pool_cleaning/set_edge", self._set_edge),
         ]
@@ -521,6 +522,11 @@ class PoolController(Node):
         response.success, response.message = True, self.mission.reason
         return response
 
+    def _stop_task(self, request, response):
+        self._halt("user stopped task; start creates a new run", "STOPPED")
+        response.success, response.message = True, self.mission.reason
+        return response
+
     def _cancel(self, request, response):
         self._halt("user cancelled", "CANCELLED")
         if self.edge_task_enabled:
@@ -609,6 +615,23 @@ class PoolController(Node):
         if self.lease:
             self.lease.stop()
 
+    def _expected_track(self):
+        """Independent boat-centre segments; never invent corner/transit joins."""
+        segments = []
+        if self.edge_task_enabled:
+            required = self.mission.required if self.automatic else {}
+            for edge in self.pool.edges:
+                low, high = required.get(edge.id, (edge.clean_start_s_m, edge.clean_end_s_m))
+                points = [[edge.start[i] + edge.tangent[i]*(contact-self.config.brush_x_m)
+                           - edge.left_normal[i]*self.config.wall_target_m for i in (0, 1)]
+                          for contact in (low, high)]
+                segments.append(dict(edge_id=edge.id, points=points))
+        navigation = []
+        if self.automatic and self.mission.phase in ("NAVIGATING", "SETTLING"):
+            navigation = [[point.x, point.y] for point in self.mission.path]
+        return dict(frame_id=self.config.map_frame, map_id=self.map_id,
+                    cleaning_segments=segments, navigation_path=navigation)
+
     def _status(self):
         f = self._feedback()
         now = self.get_clock().now().nanoseconds
@@ -634,7 +657,10 @@ class PoolController(Node):
                 uncovered.append([cursor, edge.clean_end_s_m])
         elif edge:
             uncovered = [[edge.clean_start_s_m, edge.clean_end_s_m]]
-        left_distance = (self.wall.distance if self.wall and self.wall.valid
+        wall_age = None if self.wall is None else (now-self.wall.stamp_ns)/1e9
+        wall_fresh = (wall_age is not None and 0 <= wall_age < self.config.wall_max_age_sec
+                      and time.monotonic()-self.received.get("wall", 0) < self.config.wall_max_age_sec)
+        left_distance = (self.wall.distance if wall_fresh and self.wall.valid
                          and math.isfinite(self.wall.distance) and self.wall.distance > 0 else None)
         if self.mission.phase == "COMPLETE" and self.completed_at_ns is None:
             self.completed_at_ns = now
@@ -644,6 +670,9 @@ class PoolController(Node):
                       run_id=self.run_id, completed_at_ns=self.completed_at_ns,
                       map_id=self.map_id, stamp_ns=now,
                       can_start=not blockers, start_blockers=blockers,
+                      expected_track=self._expected_track(),
+                      wall_fresh=wall_fresh, wall_age_sec=wall_age,
+                      center_wall_distance_m=left_distance,
                       edge_task_enabled=self.edge_task_enabled,
                       left_wall_distance_cm=round(left_distance * 100, 1) if left_distance is not None else None,
                       wall_angle_deg=round(math.degrees(self.wall.angle), 2) if self.wall and self.wall.valid
@@ -655,7 +684,7 @@ class PoolController(Node):
                       brush_enabled=bool(valid and effort.brush_percent),
                       logical_side_left_percent=effort.side_left_percent if valid else 0.,
                       wall_distance_m=left_distance,
-                      wall_valid=bool(self.wall and self.wall.valid),
+                      wall_valid=bool(wall_fresh and self.wall.valid),
                       wall_reason=self.wall.reason if self.wall else "wall observation missing",
                       wall_recovery_sec=self.config.wall_recovery_sec,
                       heading_band_deg=math.degrees(self.config.heading_deadband_rad),

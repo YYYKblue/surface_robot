@@ -19,6 +19,8 @@ class MapCanvas(QWidget):
         super().__init__(parent)
         self.setMinimumSize(680, 500)
         self.telemetry = {}
+        self.task_overlay = {}
+        self.overlay_live = False
         self.map_image = None
         self.map_revision = None
         self.picking = False
@@ -49,6 +51,27 @@ class MapCanvas(QWidget):
         # None explicitly invalidates old TF/scans instead of displaying them forever.
         self.telemetry.update({key: value for key, value in packet.items() if key != "map"})
         self.update()
+
+    def set_task_overlay(self, task, *, live):
+        self.task_overlay, self.overlay_live = task, live
+        self.update()
+
+    def _track_layers(self):
+        """Return independent polylines, never close L routes or bridge gaps."""
+        task = self.task_overlay
+        frame = (self.telemetry.get("map") or {}).get("frame_id")
+        expected = task.get("expected_track") or {}
+        actual = task.get("actual_track") or {}
+        layers = []
+        if (self.overlay_live and expected.get("frame_id") == frame
+                and expected.get("map_id") == task.get("map_id")):
+            layers += [(segment.get("points", []), "#2866cc", True)
+                       for segment in expected.get("cleaning_segments", [])]
+            layers.append((expected.get("navigation_path", []), "#9c49b5", True))
+        if (actual.get("frame_id") == frame and actual.get("map_id") == task.get("map_id")
+                and actual.get("run_id") == task.get("run_id")):
+            layers += [(segment, "#00877e", False) for segment in actual.get("segments", [])]
+        return layers
 
     @staticmethod
     def _make_map_image(mapping):
@@ -165,6 +188,25 @@ class MapCanvas(QWidget):
             target = self.map_image.scaled(round(width*scale), round(height*scale),
                                            Qt.IgnoreAspectRatio, Qt.FastTransformation)
             painter.drawImage(round(ox), round(oy-height*scale), target)
+            painter.setBrush(Qt.NoBrush)
+            for points, color, dashed in self._track_layers():
+                pen = QPen(QColor(color), 2 if dashed else 3)
+                if dashed:
+                    pen.setStyle(Qt.DashLine)
+                painter.setPen(pen)
+                # Invalid coordinates break a line rather than connecting over them.
+                polyline = QPolygonF()
+                for point in points:
+                    if len(point) == 2 and all(math.isfinite(v) for v in point):
+                        polyline.append(self.map_to_screen(*point))
+                    else:
+                        if len(polyline) > 1:
+                            painter.drawPolyline(polyline)
+                        polyline = QPolygonF()
+                if len(polyline) > 1:
+                    painter.drawPolyline(polyline)
+                elif len(polyline) == 1:
+                    painter.drawPoint(polyline[0])
             scan = self.telemetry.get("scan") or {}
             if scan.get("frame_id") == "map":
                 painter.setPen(QPen(QColor("#df8b35"), 2))
@@ -177,4 +219,4 @@ class MapCanvas(QWidget):
             if self.candidate:
                 self._arrow(painter, self.candidate, "#9553c6")
         painter.setPen(QPen(QColor("#637783"), 1))
-        painter.drawText(28, 22, "map · 橙色：雷达 · 绿色：船头 · 紫色：待发布初始位姿")
+        painter.drawText(28, 22, "蓝虚线：清洗目标 · 紫虚线：当前导航 · 绿实线：历史轨迹 · 橙点：雷达")

@@ -51,7 +51,7 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
   bind_address:=0.0.0.0 localization_prefix:=/l_cleaning
 ```
 
-**不再重映射 `/pool_cleaning/status/start/pause/cancel` 到 L 接口。** 网关同时管理两种任务，旧重映射命令会混淆任务类型。`localization_prefix` 只选择共享定位管理器的接口；若手动组合两个控制器，应给它们设置相同的 `localization_status_topic`。
+**不再重映射 `/pool_cleaning/status/start/pause/stop/cancel` 到 L 接口。** 网关同时管理两种任务，旧重映射命令会混淆任务类型。`localization_prefix` 只选择共享定位管理器的接口；若手动组合两个控制器，应给它们设置相同的 `localization_status_topic`。
 
 原有矩形与 L bringup 独立使用仍兼容各自的定位前缀。
 
@@ -63,13 +63,13 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
 | `/f1/control_state` | 控制源、通信、执行器许可 |
 | `/map`、TF、`/pavo2_scan` | 地图、船体位姿、按扫描时间转换的地图雷达点 |
 | `/pool_cleaning/status`、`/l_cleaning/status` | 两种任务的独立状态 |
-| 两组任务的 `start/pause/cancel` | 任务操作 |
+| 两组任务的 `start/pause/stop/cancel` | 任务操作 |
 | `${localization_prefix}/set_initial_pose` | 提交 map 坐标系初始位姿 |
 | `${localization_prefix}/localization_status` | 定位诊断、稳定窗口与就绪状态 |
 
 控制器状态新增 `task_type`、`map_id`、`stamp_ns`、`run_id`、`completed_at_ns`、`can_start`、`start_blockers`。启动检查复用于自动任务的 `/start` 和状态发布；在获取租约后仍复查定位/反馈。规划和找墙发生在开始以后，不把贴墙条件强加到自动启动前。
 
-网关检查定位/任务的接收时间和 ROS 源时间戳（0.6 秒），校验地图与任务类型。某任务状态过期不会把已知运行任务视为结束。启动请求串行处理；先停止手动会话，等待待返回的手动申请/释放和控制器状态更新，再发 start。等待超过 3 秒但尚未发送时放弃启动；已发出的操作超时保持结果待确认，不自动重发。开始服务成功后，还需收到新的 `run_id` 状态才确认启动。启动过程中收到暂停/取消会按时序处理，防止迟到的启动响应覆盖停止意图。
+网关检查定位/任务的接收时间和 ROS 源时间戳（0.6 秒），校验地图与任务类型。某任务状态过期不会把已知运行任务视为结束。启动请求串行处理；先停止手动会话，等待待返回的手动申请/释放和控制器状态更新，再发 start。等待超过 3 秒但尚未发送时放弃启动；已发出的操作超时保持结果待确认，不自动重发。开始服务成功后，还需收到新的 `run_id` 状态才确认启动。启动过程中收到暂停/停止/取消会按时序处理，防止迟到的启动响应覆盖停止意图。
 
 初始位姿服务成功只表示请求已接受；新初始位姿确认前不复用旧定位就绪状态。任务运行期间禁止网关发布新初始位姿。RViz/其他 ROS 客户端仍可直接操作 ROS 服务，控制器原有定位失效停机检查保留。
 
@@ -86,11 +86,22 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
 {"op":"initial_pose","x":1.2,"y":3.4,"yaw":1.57,"map_revision":1,"request_id":"另一请求编号"}
 ```
 
-`task_type` 为 `rectangle/l`；`action` 为 `start/pause/cancel`。位姿使用米、弧度，yaw 在 [-π, π]；`map_revision` 必须匹配当前地图。网关生成 ROS 时间戳、平面四元数和默认协方差。
+`task_type` 为 `rectangle/l`；`action` 为 `start/pause/stop/cancel`。位姿使用米、弧度，yaw 在 [-π, π]；`map_revision` 必须匹配当前地图。网关生成 ROS 时间戳、平面四元数和默认协方差。
 
 `reply` 回传 `request_id`、`success`、`message`，可能带 `pending=true`（尚未确认）。网关缓存每客户端最近的请求结果，重复编号不重复执行；App 不自动重试操作。
 
 `telemetry` 包含 `state/pose/scan/tasks/localization/active_tasks/task_busy/operation_pending/can_set_initial_pose/active_client`。`tasks` 分别保存 `rectangle/l` 及其新鲜度和启动条件；`scan` 是 `frame_id=map` 的点列表，缺少对应时间 TF 或扫描过期时为 null。保留 `task` 字段作为矩形旧版状态兼容入口。
+
+## 轨迹与距离遥测（2026-10-31）
+
+`hello.capabilities` 新增 `task_stop`、`task_tracks`。任务 `stop` 调用对应控制器的 Trigger `/stop`，进入 `STOPPED`，保留任务进度；`cancel` 另外清除当前边关联。两者均关闭输出、释放租约，不支持断点续跑；显式 start 创建新 run_id。开始服务尚未返回时的停止也参与既有串行操作机制。
+
+每个 `tasks[kind]` 新增：
+- `expected_track: {frame_id, map_id, cleaning_segments: [{edge_id, points: [[x,y], ...]}], navigation_path: [[x,y], ...]}`：来自真实控制器的船体中心清洗目标段和当前导航路径；不是闭合的全程运动轨迹。
+- `actual_track: {frame_id, map_id, run_id, segments: [[[x,y], ...], ...], point_count, truncated}`：网关从有效的 map→base_link TF 采样，分段避免连接定位缺失/跳变。
+- `center_wall_distance_m`、`wall_fresh`、`wall_age_sec`：有效左墙线到 base_link 原点的垂直距离及源数据新鲜度；距离不可用时为 null。
+
+历史按任务类型、地图、run_id 隔离；约 5 Hz 上限、3 cm 位移阈值，最多 2000 点。定位失效、重定位、时间回退、超过 0.6 秒采样缺口或超过 0.35 m 跳变时分段；任务停止/取消/完成后不继续记录手动运动。网关持续运行期间保留最近一次任务，支持 App 重连；网关重启丢失缓存。新任务或地图身份变化重置，点数上限达到后丢弃最早数据并设置 truncated。该轨迹用于观察，不作为覆盖完成判据。
 
 ## 验证
 
@@ -114,3 +125,10 @@ colcon test-result --verbose
 - Qt 无显示环境测试 6 个通过，覆盖旋转地图坐标转换、初始朝向拖拽、命令队列、定位门控、完成展示及遥测过期。
 - 本地真实地图 `lidar_20261026_170703.pbstream` 的完整组合启动检查通过：一套 Cartographer/定位、一套 bridge、L 任务和网关；地图尺寸 1054×863，WebSocket 初始位姿经真实定位服务接受。没有扫描输入时定位始终未就绪，开始条件保持关闭；所有硬件输出禁用，退出正常。
 - 未进行 Windows 原生打包、跨机 Wi-Fi 或实船验收；本地真实地图检查不证明定位精度和实际清洗效果。
+
+### 轨迹与停止扩展验证（2026-10-31）
+
+- 三个受影响包构建成功；矩形清洗 199、L 清洗 23、网关 45 个 pytest 用例经 CTest 全部通过，共 267 个，无失败/跳过。
+- Qt 无显示环境 9 个用例通过，分别覆盖 L/矩形轨迹与完成流程、停止/取消、墙距失效和断线历史保留；人工检查模拟界面中的图层与按钮布局。
+- 网关集成测试覆盖 WebSocket → ROS 服务的新任务启动、停止、取消与状态回传。本机缺少 WebSocket 依赖时曾导致集成测试启动失败，补充到 `/tmp/f1-operator-deps` 并设置 PYTHONPATH 后重跑通过；部署依赖仍由 package.xml/requirements.txt 声明。
+- 使用前述 localhost DDS 配置，不连接实船。未进行 Windows 原生打包或现场运动/测距验收。

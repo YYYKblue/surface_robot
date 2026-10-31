@@ -98,7 +98,7 @@ class SocketWorker(QThread):
     def _mock_loop(self):
         """Interactive UI fixture only; never opens a hardware connection."""
         import uuid
-        self.message.emit({"type": "hello", "client_id": "mock", "capabilities": ["task_selection", "initial_pose", "start_conditions"]})
+        self.message.emit({"type": "hello", "client_id": "mock", "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks"]})
         self.message.emit({"type": "map", "map": {"resolution": .02, "width": 160, "height": 100,
             "frame_id": "map", "revision": 1, "origin": {"x": 0, "y": 0, "yaw": 0}, "data": [0]*16000}})
         initialized = None
@@ -107,6 +107,14 @@ class SocketWorker(QThread):
         tasks = {kind: dict(task_type=kind, phase="IDLE", run_id="", output_enabled=False,
                            map_id="mock-map", edge_count=2 if kind == "l" else 4) for kind in ("l", "rectangle")}
         pose = dict(x=1.15, y=1., yaw=0.)
+        route = [[.45, 1.65], [2.75, 1.65], [2.75, .35], [.45, .35], [.45, 1.65]]
+        for kind, task in tasks.items():
+            task["expected_track"] = dict(frame_id="map", map_id="mock-map",
+                cleaning_segments=[dict(edge_id=str(i), points=route[i:i+2])
+                                   for i in range(task["edge_count"])], navigation_path=[])
+            task["actual_track"] = dict(frame_id="map", map_id="mock-map", run_id="",
+                                        segments=[], point_count=0, truncated=False)
+        start_pose = dict(pose)
         while not self.stop_requested.wait(.1):
             now = time.monotonic()
             ready = initialized is not None and now-initialized >= 1.
@@ -121,8 +129,11 @@ class SocketWorker(QThread):
                     if action == "start" and ready and active is None:
                         active, started = kind, now
                         tasks[kind].update(phase="NAVIGATING", run_id=uuid.uuid4().hex)
-                    elif action in ("pause", "cancel"):
-                        tasks[kind]["phase"] = "PAUSED" if action == "pause" else "CANCELLED"
+                        start_pose = dict(pose)
+                        tasks[kind]["actual_track"].update(run_id=tasks[kind]["run_id"],
+                            segments=[[[pose["x"], pose["y"]]]], point_count=1)
+                    elif action in ("pause", "stop", "cancel"):
+                        tasks[kind]["phase"] = {"pause": "PAUSED", "stop": "STOPPED", "cancel": "CANCELLED"}[action]
                         active = None
                     else:
                         success, message = False, "模拟启动条件未满足"
@@ -131,6 +142,18 @@ class SocketWorker(QThread):
                 self.message.emit(dict(type="reply", request_id=packet.get("request_id"), op=op,
                                        success=success, message=message))
             if active:
+                elapsed = now-started
+                if elapsed < 3:
+                    a, b, fraction = [start_pose["x"], start_pose["y"]], route[0], elapsed/3
+                else:
+                    progress = min((elapsed-3)/5, 1.)*tasks[active]["edge_count"]
+                    index = min(int(progress), tasks[active]["edge_count"]-1)
+                    a, b, fraction = route[index], route[index+1], progress-index
+                pose = dict(x=a[0]+(b[0]-a[0])*fraction, y=a[1]+(b[1]-a[1])*fraction,
+                            yaw=math.atan2(b[1]-a[1], b[0]-a[0]))
+                history = tasks[active]["actual_track"]
+                history["segments"][0].append([pose["x"], pose["y"]])
+                history["point_count"] += 1
                 if now-started > 8:
                     tasks[active].update(phase="COMPLETE", completed_at_ns=time.time_ns())
                     active = None
@@ -142,10 +165,15 @@ class SocketWorker(QThread):
                     blockers.append(dict(code="localization", message="等待定位稳定"))
                 if active or task["phase"] == "PAUSED":
                     blockers.append(dict(code="phase", message="任务运行中或需要先取消暂停任务"))
-                task.update(fresh=True, can_start=not blockers, start_blockers=blockers)
+                task.update(fresh=True, can_start=not blockers, start_blockers=blockers,
+                            wall_fresh=ready, wall_valid=ready,
+                            center_wall_distance_m=.35 if ready else None)
+                task["expected_track"]["navigation_path"] = (
+                    [[start_pose["x"], start_pose["y"]], route[0]]
+                    if task["phase"] == "NAVIGATING" else [])
             self.message.emit(dict(type="telemetry", state=dict(state="READY", connected=True,
                 source="NANO", motion_authorized=False, allow_fifth_thruster=True), control_fresh=True,
-                pose=pose, scan=None, tasks={k: dict(v) for k,v in tasks.items()}, task_busy=bool(active),
+                pose=pose, scan=None, tasks=json.loads(json.dumps(tasks)), task_busy=bool(active),
                 operation_pending=False, active_tasks=[active] if active else [], active_client="mock",
                 can_set_initial_pose=active is None,
                 localization=dict(fresh=True, ready=ready, initial_pose_received=initialized is not None,

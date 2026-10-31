@@ -617,3 +617,77 @@ def test_automatic_start_rejects_recently_received_but_old_localization(tmp_path
         assert not response.success and "source timestamp" in response.message
     finally:
         node.destroy_node()
+
+
+def test_stop_cuts_outputs_retains_coverage_and_restart_creates_new_run(tmp_path):
+    node = automatic_controller(tmp_path)
+    try:
+        automatic_feedback(node)
+        assert node._start(None, Trigger.Response()).success
+        run = node.run_id
+        node.mission.cleaned_by_edge = {"edge_0": [(1., 2.)]}
+        node._set_selected_edge(node.pool.edges[0])
+        stopped = []
+        node._stop_outputs = lambda: stopped.append(True)
+        assert node._stop_task(None, Trigger.Response()).success
+        assert stopped and node.mission.phase == "STOPPED"
+        assert node.mission.last_effort is None and not node.mission.active
+        assert node.mission.cleaned_by_edge == {"edge_0": [(1., 2.)]}
+        assert node.selected_edge is not None
+        automatic_feedback(node)
+        assert node._start(None, Trigger.Response()).success
+        assert node.run_id != run and not node.mission.cleaned_by_edge
+        node._set_selected_edge(node.pool.edges[0])
+        assert node._cancel(None, Trigger.Response()).success
+        assert node.selected_edge is None and node.mission.edge is None
+        automatic_feedback(node)
+        assert node._start(None, Trigger.Response()).success
+        assert node.run_id != run and not node.mission.cleaned_by_edge
+    finally:
+        node.destroy_node()
+
+
+def test_expected_tracks_are_boat_center_segments_and_only_active_navigation(tmp_path):
+    from f1_pool_cleaning.navigation import Waypoint
+    node = automatic_controller(tmp_path)
+    try:
+        track = node._expected_track()
+        assert track["map_id"] == node.map_id and track["frame_id"] == "map"
+        assert len(track["cleaning_segments"]) == 4
+        for edge, segment in zip(node.pool.edges, track["cleaning_segments"]):
+            point = node.mission.navigator.edge_pose(edge, edge.clean_start_s_m, node.config.wall_target_m)
+            assert segment["points"][0] == pytest.approx([point.x, point.y])
+        node.mission.path = [Waypoint(1., 2., 0.), Waypoint(3., 4., 0.)]
+        node.mission.phase = "NAVIGATING"
+        assert node._expected_track()["navigation_path"] == [[1., 2.], [3., 4.]]
+        node._stop_task(None, Trigger.Response())
+        assert not node._expected_track()["navigation_path"]
+    finally:
+        node.destroy_node()
+
+
+@pytest.mark.parametrize("failure", ["source_age", "receive_age", "invalid", "nan"])
+def test_center_wall_distance_never_reuses_invalid_or_stale_observation(tmp_path, failure):
+    from types import SimpleNamespace
+    from f1_pool_cleaning.perception import Observation
+    node = automatic_controller(tmp_path)
+    try:
+        snapshots = []
+        node.status_pub = SimpleNamespace(publish=lambda msg: snapshots.append(json.loads(msg.data)))
+        now = node.get_clock().now().nanoseconds
+        node.wall = Observation(now, valid=True, distance=.34)
+        node.received["wall"] = time.monotonic()
+        node._status()
+        assert snapshots[-1]["center_wall_distance_m"] == .34
+        if failure == "source_age":
+            node.wall = replace(node.wall, stamp_ns=now-2_000_000_000)
+        elif failure == "receive_age":
+            node.received["wall"] -= 2
+        elif failure == "invalid":
+            node.wall = replace(node.wall, valid=False)
+        else:
+            node.wall = replace(node.wall, distance=float("nan"))
+        node._status()
+        assert snapshots[-1]["center_wall_distance_m"] is None
+    finally:
+        node.destroy_node()

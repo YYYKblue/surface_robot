@@ -33,9 +33,10 @@ def test_duplicate_keys_rejected():
         decode(b'{"op":"hello","op":"manual_stop"}')
 
 
-def test_task_selection_and_request_identity_survive_decoding():
-    packet = decode(json.dumps(dict(op="task", action="start", task_type="l", request_id="start-1")))
-    assert packet == dict(op="task", action="start", task_type="l", request_id="start-1")
+@pytest.mark.parametrize("action", ["start", "pause", "stop", "cancel"])
+def test_task_selection_and_request_identity_survive_decoding(action):
+    packet = decode(json.dumps(dict(op="task", action=action, task_type="l", request_id="start-1")))
+    assert packet == dict(op="task", action=action, task_type="l", request_id="start-1")
 
 
 @pytest.mark.parametrize("fields", [dict(x=float("nan")), dict(yaw=4.), dict(map_revision=0),

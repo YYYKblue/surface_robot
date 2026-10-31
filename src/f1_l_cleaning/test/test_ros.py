@@ -138,3 +138,18 @@ def test_localization_launch_requires_a_map_and_applies_l_topics(tmp_path):
         assert manager.ready_pub.topic_name == "/l_cleaning/localization_ready"
     finally:
         manager.destroy_node()
+
+
+def test_l_track_is_open_and_stop_service_is_isolated():
+    node = LController(parameter_overrides=controller_parameters())
+    try:
+        track = node._expected_track()
+        assert len(track["cleaning_segments"]) == 2
+        assert all(len(segment["points"]) == 2 for segment in track["cleaning_segments"])
+        services = {name for name, _ in node.get_service_names_and_types_by_node(node.get_name(), "/")}
+        assert "/l_cleaning/stop" in services
+        assert "/pool_cleaning/stop" not in services
+        assert node._stop_task(None, Trigger.Response()).success
+        assert node.mission.phase == "STOPPED" and not node.mission.active
+    finally:
+        node.destroy_node()

@@ -2,7 +2,7 @@
 
 POOL_ENDPOINTS = (
     "wall_observation", "wall_marker", "edge_target", "reset_observation",
-    "map_pose", "command_preview", "status", "start", "pause", "cancel",
+    "map_pose", "command_preview", "status", "start", "pause", "stop", "cancel",
     "set_edge", "localization_status", "localization_ready",
     "set_initial_pose", "relocalize",
 )
