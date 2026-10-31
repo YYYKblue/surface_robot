@@ -67,7 +67,7 @@ colcon build --symlink-install --parallel-workers 1 \
   --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 ```
 
-当前源码应列出七个包：`f1_interfaces`、`f1_nano_bridge`、`f1_mapping_bringup`、`f1_localization`、`f1_pool_cleaning`、`f1_l_cleaning` 和 `f1_operator_gateway`，额外雷达驱动另计。构建成功后，在运行终端加载新的 `install/local_setup.bash`。
+当前源码应列出八个包：`f1_interfaces`、`f1_nano_bridge`、`f1_lidar_driver`、`f1_mapping_bringup`、`f1_localization`、`f1_pool_cleaning`、`f1_l_cleaning` 和 `f1_operator_gateway`。PAVO2 驱动已纳入仓库；既有雷达服务按[驱动说明](src/f1_lidar_driver/README.md)由操作者在 Nano 编译后切换。构建成功后，在运行终端加载新的 `install/local_setup.bash`。
 
 ```bash
 source /opt/ros/humble/setup.bash

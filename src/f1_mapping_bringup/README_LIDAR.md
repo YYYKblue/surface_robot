@@ -30,7 +30,7 @@ TF 的 z/roll/pitch=0 是二维建模约定，不代表实测高度或倾角。
 
 ## 同步与构建
 
-Nano 旧工作空间已删除，首次部署请完整执行[从零部署指南](../../DEPLOY_NANO.md)，统一创建 `/home/nvidia/surface_ws`。Cartographer 通过系统软件包安装，五个项目包在该工作空间内构建。
+首次部署或升级执行[Nano 部署指南](../../DEPLOY_NANO.md)，使用 `/home/nvidia/surface_ws`。Cartographer 通过系统软件包安装，八个项目包（含 `f1_lidar_driver`）在该工作空间内构建。
 
 部署完成后，另开 Nano 运行终端：
 
@@ -41,7 +41,7 @@ export ROS_DOMAIN_ID=33
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ```
 
-后续更新源码仍使用部署指南中的同步和编译步骤。实机验证前先恢复 PAVO2 驱动，当前仓库没有附带驱动源码。
+后续更新源码仍使用部署指南中的同步和编译步骤。PAVO2 驱动源码已纳入 [`f1_lidar_driver`](../f1_lidar_driver/README.md)；实机验证前按其说明在 Nano 构建并切换服务。
 
 ## 先检查实际回波
 
@@ -62,7 +62,7 @@ ros2 run f1_mapping_bringup scan_check --samples 100
 
 ## 启动纯雷达建图
 
-先确认 PAVO2 驱动与 `pavo2-scan.service` 已恢复、真实扫描可用；本入口只启动 SLAM，不启动雷达驱动。
+先确认 PAVO2 驱动与 `pavo2-scan.service` 已部署、真实扫描可用；本入口只启动 SLAM，不启动雷达驱动。
 
 ```bash
 ros2 launch f1_mapping_bringup lidar_mapping.launch.py
@@ -86,7 +86,7 @@ ros2 run tf2_ros tf2_echo base_link pavo2s_frame
 
 ## 验证边界
 
-PC 当前没有 Cartographer，本地已验证包构建、消息检查逻辑和启动动作组成。
+早期本地验证仅覆盖包构建、消息检查逻辑和启动动作组成；后续 App 的真实 Cartographer 合成扫描集成验证见[网关验证记录](../f1_operator_gateway/README.md)。这些验证不能替代实机扫描与建图验收。
 2026-10-20 用户在 Nano 实机反馈（车体中心 TF 改动前）：纯雷达 Lua 已成功加载，轨迹 0 和子图 (0, 0) 已创建，
 算法接收约 20.16 Hz 扫描，并发布 0.05 m/格的地图；用户反馈整体建图较稳定。
 这些结果确认了基本运行链路，闭环误差、绝对尺寸及完整区域覆盖仍需现场验收。

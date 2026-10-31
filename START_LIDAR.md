@@ -2,7 +2,7 @@
 
 本文对应 `surface_ws` 当前的 PAVO2 + Cartographer 2D 配置，默认在 Nano 上运行建图，在 PC 上按需查看地图。
 
-Nano 旧工作空间已删除，先按[Nano 从零部署指南](DEPLOY_NANO.md)重新传输、安装依赖和编译。
+首次部署或升级按[Nano 部署指南](DEPLOY_NANO.md)传输、安装依赖和编译。新雷达包为 `f1_lidar_driver`；已有旧雷达服务需在 Nano 构建后按说明切换，暂时保留旧 `ros2_ws`。
 首次部署先完成第 1 节；已部署并构建过的设备，每次从第 2 节开始。
 
 | 项目 | 当前使用值 |
@@ -34,7 +34,7 @@ Nano 旧工作空间已删除，先按[Nano 从零部署指南](DEPLOY_NANO.md)�
 
 ## 1. 首次部署或源码更新后：同步与构建
 
-首次部署统一按 [DEPLOY_NANO.md](DEPLOY_NANO.md) 完成七个项目包的传输、依赖安装和编译。只加载系统 ROS `/opt/ros/humble`，Cartographer 由系统软件包提供。
+首次部署统一按 [DEPLOY_NANO.md](DEPLOY_NANO.md) 完成八个项目包的传输、依赖安装和编译。只加载系统 ROS `/opt/ros/humble`，Cartographer 由系统软件包提供。
 
 完成后，在 Nano 检查：
 
@@ -46,7 +46,7 @@ ros2 pkg prefix rmw_cyclonedds_cpp
 ros2 launch f1_mapping_bringup lidar_mapping.launch.py --show-args
 ```
 
-应找到 `cartographer_node` 及 `cartographer_occupancy_grid_node` 或 `occupancy_grid_node`。部署指南也说明了雷达驱动恢复：当前仓库不含 PAVO2 驱动，删除旧目录后不能假定原驱动服务仍可用。
+应找到 `cartographer_node` 及 `cartographer_occupancy_grid_node` 或 `occupancy_grid_node`。PAVO2 驱动源码现已随 `f1_lidar_driver` 提供；按部署指南在 Nano 构建并切换现有服务后，驱动不再依赖旧 `ros2_ws`。
 
 后续修改源码时，重新执行部署指南中的同步、rosdep 与构建步骤；日常启动无需重复编译。
 
@@ -65,7 +65,7 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 ### 3.1 检查雷达服务
 
-历史上雷达驱动由 `pavo2-scan.service` 提供。当前须先按[驱动恢复说明](DEPLOY_NANO.md#8-实机雷达单独恢复驱动)确认驱动已恢复、服务不再引用被删除路径；建图入口不会启动驱动。
+雷达驱动继续由 `pavo2-scan.service` 常驻提供。按[驱动迁移说明](DEPLOY_NANO.md#8-实机雷达单独恢复驱动)在 Nano 构建并将服务改为启动 `f1_lidar_driver`；建图入口不会额外启动驱动。PC 端的源码迁移不会自动修改 Nano 现有服务。
 
 ```bash
 systemctl status pavo2-scan.service --no-pager

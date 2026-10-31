@@ -1,0 +1,28 @@
+[Unit]
+Description=PAVO2 ROS2 LaserScan driver (surface_ws/f1_lidar_driver)
+After=NetworkManager.service network.target
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+User=nvidia
+Group=nvidia
+WorkingDirectory=/home/nvidia/surface_ws
+Environment=F1_LIDAR_WORKSPACE=/home/nvidia/surface_ws
+Environment=ROS_DOMAIN_ID=33
+Environment=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+Environment=RCUTILS_LOGGING_USE_STDOUT=1
+Environment=PYTHONUNBUFFERED=1
+# Keep the existing startup wait, using the same YAML as the driver.
+ExecStartPre=/usr/bin/python3 /home/nvidia/surface_ws/install/f1_lidar_driver/share/f1_lidar_driver/deploy/wait-lidar.py
+ExecStart=/bin/bash /home/nvidia/surface_ws/install/f1_lidar_driver/share/f1_lidar_driver/deploy/start-lidar.sh
+Restart=always
+RestartSec=3
+KillSignal=SIGINT
+KillMode=control-group
+TimeoutStopSec=8
+StandardOutput=append:/home/nvidia/pavo2_scan_driver.log
+StandardError=append:/home/nvidia/pavo2_scan_driver.log
+
+[Install]
+WantedBy=multi-user.target

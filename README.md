@@ -10,6 +10,7 @@
 |---|---|
 | [`f1_interfaces`](src/f1_interfaces/README.md) | 统一执行器、控制状态、墙观测、目标边消息与服务 |
 | [`f1_nano_bridge`](src/f1_nano_bridge/README.md) | F103 串口协议、CTRL/ACK、控制租约、超时保护和 IMU 遥测 |
+| [`f1_lidar_driver`](src/f1_lidar_driver/README.md) | PAVO2 驱动与 SDK、雷达参数、独立启动及开机服务模板 |
 | [`f1_mapping_bringup`](src/f1_mapping_bringup/README.md) | Cartographer 2D 纯雷达建图、静态雷达 TF 和扫描检查 |
 | [`f1_localization`](src/f1_localization/README.md) | 固定地图定位、初始位姿、轨迹管理和定位就绪门控 |
 | [`f1_pool_cleaning`](src/f1_pool_cleaning/README.md) | 墙感知、关刷导航、沿墙控制、矩形四边任务及覆盖记录 |
@@ -19,7 +20,7 @@
 | `maps/` | 本地地图资料；被 Git 忽略，克隆仓库和默认部署同步均不包含 |
 | `docs/`、`tools/` | 开发验收、历史试验记录和离线路线示意工具 |
 
-仓库共有七个 ROS 功能包。PAVO2 驱动、STM32 固件源码和地图需要单独准备；旧 ZMQ 网关和旧 UI 协议已移除。
+仓库共有八个 ROS 功能包。PAVO2 驱动与 SDK 已迁入 `f1_lidar_driver`；STM32 固件源码和地图仍需单独准备。雷达本次完成 PC 端封装，Nano 编译与服务切换按[驱动说明](src/f1_lidar_driver/README.md)由操作者执行。旧 ZMQ 网关和旧 UI 协议已移除。
 
 ## 数据与控制链路
 
@@ -67,7 +68,7 @@ source install/local_setup.bash
 colcon list --names-only
 ```
 
-按需构建可使用 `--packages-up-to f1_l_cleaning f1_operator_gateway`，当前依赖关系下会覆盖七个包。网关为组合启动声明了 bridge、定位及清洗包的运行依赖，`--packages-up-to f1_operator_gateway` 会一并构建这些依赖。
+按需构建可使用 `--packages-up-to f1_l_cleaning f1_operator_gateway`，当前依赖关系下会覆盖八个包。网关为完整部署声明了雷达驱动、bridge、定位及清洗包的运行依赖，`--packages-up-to f1_operator_gateway` 会一并构建这些依赖。
 
 ## 启动入口
 
@@ -80,7 +81,9 @@ export ROS_DOMAIN_ID=33
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ```
 
-纯雷达建图需要外部驱动已发布 `/pavo2_scan`：
+雷达由独立服务常驻运行；迁移后的服务使用本仓库 `f1_lidar_driver`，切换说明见[驱动部署](src/f1_lidar_driver/README.md#nano-由操作者切换现有开机服务)。没有服务实例时可单独执行 `ros2 launch f1_lidar_driver lidar.launch.py`，不要重复启动。
+
+确认驱动已发布 `/pavo2_scan` 后建图：
 
 ```bash
 ros2 run f1_mapping_bringup scan_check --samples 100

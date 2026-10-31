@@ -1,0 +1,144 @@
+###################################
+PAVO2 ROS package 2.1.2
+###################################
+修改记录
+1. [20240423] 修复应为读取不到"电机转速寄存器"、“分辨率能力寄存器”、“角度范围寄存器”，导致ROS Driver不能与老版本雷达兼容的问题。
+2. [20240423] 对ROS Driver工作过程中出现的提示信息进行规范化
+3. [20240422 v1.3.5] 对所有的参数进行确认和检查
+4. [20240422 v1.3.6] 解决关闭强度信息后，解析不正确的问题
+5. [20240508 V1.4.6] 增加ptp功能
+6. [20240520 V1.5.0] 
+   (1). 增加Node: pavo2_pcd2, 以发布PointCloud2格式数据
+   (2). 对ROS代码进行重新组织，提高可读性
+   (3). frame_id由“laser_frame”更改为"pavo2_frame"
+   (4). topic由"laser_scan"更改为"pavo2_scan"; 由"cloud"更改为"pavo2_cloud"
+7. [20240521 V1.5.1]
+   更改rviz選項，兼容不同版本ROS操作系統 
+8. [20240527 V1.5.2]
+   对scan_node, pcd_node, pcd2_node添加注释
+9. [20240619 V1.5.3]
+   (1)更新pavo2_scan_twin_view.rviz以可以同时显示2个雷达
+   (2)修改scan_node，以正确发布scanMsg.time_increment数据
+10. [20240619 V1.5.4]
+    sdk增加读取设备温度接口
+11. [20241014 V1.5.5]
+    sdk增加设置雷达mask, gateway接口
+    sdk增加近端高反识别接口
+    sdk增加绑定本地ip地址和端口接口
+12. [20241014 V1.5.6]
+    sdk修改pavo2_is_open实现方式
+
+13. [20241104 V1.5.7]
+    sdk简化参数获取实现方式
+    
+14. [20241113 V1.5.8]
+    sdk解决”高反识别“寄存器配置错误的问题
+    ros增加配置主机"IP"和"端口"接口
+    
+15. [20241119 V1.5.9]
+    1. ros 增加近端高反识别接口
+    2. 将配置参数hr_filter修改为far_hr_filter
+
+16. [20241119 V1.6.0]
+    1. 解决高反识别参数不打印的问题
+    2. local_ip参数默认为空
+
+17. [20250120 V2.0.0]
+    1. 增加udp相应接口
+
+18. [20250218 V2.0.1]
+    1. udp读取设备转速时,将等待延时从10s修改为100ms(因为下位机修改后，已经能快速响应)
+
+19. [20250225 V2.0.2]
+    1. 将所有定义放在namespace 'pavo2'中
+
+20. [20250307 v2.0.3]
+    1. pavo2sdk 接收数据包时，将最后一个包的时间戳作为整个帧的时间戳
+
+21. [20250315 v2.0.4]
+    1. 解决检校模式下，点云显示不完全的问题：在显示角度范围内，只显示前一半点云的问题
+    2. 解决角度范围在使用udp协议时，不打印的问题
+
+22. [20250410 v2.1.0]
+    1. 增加接口 is_ptp_supported
+    2. 增加接口 is_near_hr_supported
+
+23. [202500427 v2.1.1]
+    1. 更改SDK中udp绑定本地ip地址方式，改“在所有网卡上监听”为“在用户以ip地址指定的网卡上监听”
+    2. 更改获取ptp能力和near_hr能力的方式
+
+24. [202500427 v2.1.2]
+    1. 解决在更改转速时，反而出现更“改角度范围错误”的提示
+
+使用方法：
+1.在系统中安装ros环境，具体安装方法参考下面连接：
+  安装链接：http://wiki.ros.org/kinetic/Installation/Ubuntu
+  搭建ros工程链接：http://wiki.ros.org/cn/ROS/Tutorials/InstallingandConfiguringROSEnvironment
+  
+2.将pavo2_ros复制到ros工作目录下的src目录
+
+3.编译工程
+  catkin_make
+  
+4.设置环境变量
+  source devel/setup.sh
+  
+5.配置上位机IP
+  与雷达连接的网卡IP：默认上位机IP配置为10.10.10.100
+  
+6.配置雷达参数
+  打开pavo2_ros_v1.0.3/launch/pavo2_scan.launch 进行参数配置
+  参数说明：
+  1.frame_id 雷达id，default=laser_frame
+  2.scan_topic 雷达的topic名称，default=scan
+  3.range_min 最小距离，单位米，default=0.10
+  4.range_max 最大距离，单位米，default=50.0
+  5.angle_start 雷达起始角度，default=4000，即40度
+  6.angle_end 雷达结束角度，default=32000，即320度
+  7.motor_speed 雷达转速，单位Hz，default=50Hz，不可配置
+  7.inverted 是否设置翻转，取值范围true，false . default=false
+  9.intensity 强度使能，取值范围true，false . default=true
+  10.angle_resolution 雷达角分辨率，单位0.01度，default=32，即0.32度
+  11.lidar_ip 所要连接的雷达IP地址，即通过Simiview设置的雷达IP地址，默认为10.10.10.121.
+  12.lidar_port 所要连接的雷达端口号，默认为2368.
+  13.host_ip 所要连接的雷达IP地址，即通过Simiview设置的雷达IP地址，默认为10.10.10.121.
+  14.host_port 所要连接的雷达端口号，默认为2368.
+  15.echo_mode 二回波使能，使能二回波true，不使能二回波false，default=true 
+  
+7.启动PAVO2 ros节点
+  1)发布LaserScan消息
+    1.roslaunch pavo2_ros pavo2_scan.launch
+    2.roslaunch pavo2_ros pavo2_scan_view.launch (使用rviz显示）
+ 2)发布PointCloud消息
+    1.roslaunch pavo2_ros pavo2_pcd.launch
+    2.roslaunch pavo2_ros pavo2_pcd_view.launch (使用rviz显示）
+ 3)启动多个雷达节点
+    1.source devel/setup.bash
+    2.roslaunch pavo2_ros pavo2_scan_twin_view.launch
+8.建图
+  1)使用gmapping建图
+    1.安装gmapping
+     sudo apt-get install ros-kinetic-slam-gmapping（ubuntu16.04）
+     sudo apt-get install ros-indigo-slam-gmapping  (ubuntu14.04)
+    2.安装laser_scan_matcher，此包用于根据雷达数据的匹配来估计雷达的位置运动，发布geometry_msgs/Pose2D信息
+     sudo apt-get install ros-kinetic-scan-tools（ubuntu16.04）
+     sudo apt-get install ros-indigo-scan-tools（ubuntu14.04）
+    3.运行gmapping，在src目录下
+     source devel/setup.bash
+     roslaunch pavo2_ros pavo2_gmapping.launch
+
+  2)使用hector实时建图
+    1.安装hector
+     sudo apt-get install ros-kinetic-hector-slam（ubuntu16.04）
+     sudo apt-get install ros-indigo-hector-slam  (ubuntu14.04)
+    2.运行hector算法实时构建地图，在src目录下
+     source devel/setup.bash  
+     roslaunch pavo2_ros pavo2_hector.launch
+9.动态参数配置
+    1.终端1
+    启动雷达ros节点
+    roslaunch pavo2_ros pavo2_scan_view.launch
+    
+    2.终端2
+    rosrun rqt_reconfigure rqt_reconfigure
+    可以在界面中动态设置参数

@@ -10,7 +10,7 @@ ros2 launch f1_mapping_bringup lidar_mapping.launch.py
 ros2 launch f1_mapping_bringup lidar_mapping.launch.py use_rviz:=true
 ```
 
-入口启动 Cartographer、栅格地图节点及雷达平面安装 TF；雷达驱动需要单独运行。
+入口启动 Cartographer、栅格地图节点及雷达平面安装 TF；雷达驱动由项目内 [`f1_lidar_driver`](../f1_lidar_driver/README.md) 独立运行，默认由 `pavo2-scan.service` 管理。构建依赖会包含驱动，建图入口不会重复启动它。
 默认输出 `map -> odom -> base_link -> pavo2s_frame`，栅格分辨率为 0.05 m。
 安装参数由 `config/lidar_planar.yaml` 提供；z/roll/pitch=0 是二维建模约定，
 实际雷达须基本水平，机器人运动须基本位于平面内。

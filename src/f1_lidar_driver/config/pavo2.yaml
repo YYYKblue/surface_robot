@@ -1,0 +1,15 @@
+# Migrated from the Nano's pavo2_ros2/launch/pavo2_scan.launch.py.
+# local_ip binds the driver socket; configure the Ethernet IP separately.
+pavo2_scan_node:
+  ros__parameters:
+    lidar_ip: "10.10.10.121"
+    lidar_port: 2368
+    local_ip: "10.10.10.100"
+    local_port: 0
+    conn_protocol: 0
+    frame_id: "pavo2s_frame"
+    topic: "pavo2_scan"
+    range_min: 0.10
+    range_max: 100.0
+    inverted: false
+    timeout: 180

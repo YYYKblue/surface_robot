@@ -13,7 +13,7 @@ export ROS_DOMAIN_ID=33
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ```
 
-包的运行依赖包含组合启动需要的 bridge、定位和两个清洗包，`--packages-up-to` 会构建这些依赖。网关运行需要 `python3-websockets`，通过 rosdep 或 `sudo apt install python3-websockets` 安装。Windows 依赖见 [App 说明](../../operator_app/README.md)。
+包的运行依赖包含完整部署需要的 `f1_lidar_driver`、bridge、定位和两个清洗包，`--packages-up-to` 会构建这些依赖。网关运行需要 `python3-websockets`，通过 rosdep 或 `sudo apt install python3-websockets` 安装。Windows 依赖见 [App 说明](../../operator_app/README.md)。
 
 ## 推荐：App 管理建图和地图选择
 
@@ -22,7 +22,7 @@ ros2 launch f1_operator_gateway operator_system.launch.py \
   workspace_root:=/home/nvidia/surface_ws bind_address:=0.0.0.0
 ```
 
-不要求 `map:=`，在 `maps/` 为空时也可启动。入口常驻一套 bridge 和网关；网关异步管理 `operator_mode.launch.py` 子进程，在“待机 / 建图 / 固定地图定位与清洗”之间切换，雷达继续使用已有驱动。默认 `output_enabled:=false`；实际输出需显式开启并核对桥配置。不能与原完整 bringup 并行启动；复用 bridge 时设 `start_bridge:=false`。
+不要求 `map:=`，在 `maps/` 为空时也可启动。入口常驻一套 bridge 和网关；网关异步管理 `operator_mode.launch.py` 子进程，在“待机 / 建图 / 固定地图定位与清洗”之间切换，雷达独立运行；迁移到项目内驱动的步骤见 [`f1_lidar_driver`](../f1_lidar_driver/README.md)，本入口不启动第二套驱动。默认 `output_enabled:=false`；实际输出需显式开启并核对桥配置。不能与原完整 bringup 并行启动；复用 bridge 时设 `start_bridge:=false`。
 
 参数：`workspace_root` 必填绝对路径；`map_timezone` 默认 `Asia/Shanghai`；`mapping_resolution` 默认 `0.05` m；可配置 `scan_topic`、`publish_lidar_tf`、`bridge_config`、`rectangle_config`、`l_config`、`localization_config`。`maps/` 不能是符号链接。`workspace_root/maps/.operator-runtime.lock` 防止同工作空间重复运行管理实例。
 

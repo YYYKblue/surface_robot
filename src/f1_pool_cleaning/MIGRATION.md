@@ -59,7 +59,7 @@ RMW_IMPLEMENTATION=rmw_cyclonedds_cpp colcon test \
 colcon test-result --test-result-base build/f1_pool_cleaning --verbose
 ```
 
-当前仓库应发现七个包：`f1_interfaces`、`f1_mapping_bringup`、`f1_localization`、`f1_nano_bridge`、`f1_pool_cleaning`、`f1_l_cleaning`、`f1_operator_gateway`。额外安装的雷达驱动另计；`f1_l_cleaning` 是当前大 L 任务适配包，不属于需要移除的旧包。
+当前仓库应发现八个包：`f1_interfaces`、`f1_lidar_driver`、`f1_mapping_bringup`、`f1_localization`、`f1_nano_bridge`、`f1_pool_cleaning`、`f1_l_cleaning`、`f1_operator_gateway`。PAVO2 驱动已纳入仓库；`f1_l_cleaning` 是当前大 L 任务适配包，不属于需要移除的旧包。
 
 默认预览（需要外部雷达与定位输入，但不连接硬件桥输出）：
 

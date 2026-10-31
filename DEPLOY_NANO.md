@@ -1,6 +1,6 @@
 # Nano 从零部署 surface_ws
 
-更新：2026-10-29。适用于 Nano 上旧 ROS 工作空间已全部删除的情况。当前包含矩形四边清洗、大 L 两段墙清洗及 Qt App 网关；任务操作分别见[矩形四边部署与验收步骤](src/f1_pool_cleaning/DEPLOY_TEST_NANO.md)和[大 L 任务说明](src/f1_l_cleaning/README.md)。直接创建新目录，不执行旧目录改名、迁移或清理命令。若已有旧清洗包，先按 [清洗包合并说明](src/f1_pool_cleaning/MIGRATION.md) 升级，再使用本文当前包列表。
+更新：2026-10-31。适用于 Nano 首次部署或已有 `surface_ws` 升级。当前包含 PAVO2 驱动、建图与定位、硬件桥、两种清洗任务及 Qt App 网关。PC 与 Nano 分别构建；本文命令由操作者在目标设备执行。本次雷达封装没有在 Nano 编译、部署或切换服务。已有旧清洗包升级见[清洗包迁移说明](src/f1_pool_cleaning/MIGRATION.md)，雷达旧服务迁移见第 8 节。
 
 | 项目 | 统一约定 |
 | --- | --- |
@@ -8,6 +8,7 @@
 | Nano 工作空间 | `/home/nvidia/surface_ws` |
 | Nano 登录 | `nvidia@192.168.1.188`，地址变化时替换 |
 | 系统 ROS | `/opt/ros/humble` |
+| 雷达驱动包 | `f1_lidar_driver` |
 | 桥接功能包 | `f1_nano_bridge` |
 | 自定义接口包 | `f1_interfaces` |
 | 沿边清洗功能包 | `f1_pool_cleaning` |
@@ -108,11 +109,12 @@ ssh nvidia@192.168.1.188
 `rosdep update` 使用普通用户执行。该流程依据[官方 rosdep 使用说明](https://docs.ros.org/en/humble/Tutorials/Intermediate/Rosdep.html)，从 `package.xml` 解析依赖；网络或依赖解析失败时先解决错误，再执行下一步。
 括号内启用了失败即停止，避免更新失败后继续使用已有缓存安装依赖。若出现缺失的 `debian.yaml` 或 GitHub 索引超时，按[第 9 节](#9-rosdep-更新报错处理)修复后重试。
 
-未额外加入雷达驱动时，当前应列出七个项目包：
+当前应列出八个项目包（已包含 PAVO2 驱动）：
 
 ```text
 f1_interfaces
 f1_l_cleaning
+f1_lidar_driver
 f1_localization
 f1_mapping_bringup
 f1_nano_bridge
@@ -134,7 +136,7 @@ CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
   --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 ```
 
-同时限制包间和包内并行度，减小 Nano 编译时的内存占用。仅构建本仓库时，成功应看到 `6 packages finished`，且没有 failed/aborted。失败时保留输出，先定位首个报错；只有编译成功后才加载本工作空间环境。
+同时限制包间和包内并行度，减小 Nano 编译时的内存占用。仅构建本仓库时，成功应看到 `8 packages finished`，且没有 failed/aborted。失败时保留输出，先定位首个报错；只有编译成功后才加载本工作空间环境。
 
 ## 6. Nano：检查安装结果
 
@@ -150,6 +152,8 @@ ros2 pkg prefix f1_nano_bridge
 ros2 pkg executables f1_nano_bridge
 ros2 interface show f1_interfaces/msg/ActuatorCommand
 ros2 pkg executables cartographer_ros
+ros2 pkg executables f1_lidar_driver
+ros2 launch f1_lidar_driver lidar.launch.py --show-args
 ros2 launch f1_nano_bridge bridge.launch.py --show-args
 ros2 pkg executables f1_operator_gateway
 ros2 launch f1_operator_gateway operator_gateway.launch.py --show-args
@@ -204,27 +208,30 @@ colcon test-result --verbose
 
 这只在 Nano 编译和运行主机侧 C 测试库，不烧录固件，也不构建目标板 HEX。PC 的通过记录不能代替 Nano 的实际测试结果。
 
-## 8. 实机雷达：单独恢复驱动
+<a id="8-实机雷达单独恢复驱动"></a>
 
-**本仓库不包含 PAVO2 雷达驱动。** 如果驱动曾放在被删除的工作空间里，它也需要从原源码/备份恢复。上述七包编译成功不代表 `/pavo2_scan` 已恢复。
+## 8. 实机雷达：切换到项目内驱动
 
-先检查旧服务是否存在、指向哪里：
+PAVO2 源码及 SDK 已纳入 `src/f1_lidar_driver`，随工作空间构建，不再需要从外部寻找驱动源码。2026-10-31 实机只读检查确认：现有 `pavo2-scan.service` 已开机启用，驱动实际位于 `/home/nvidia/ros2_ws/src/my_robot_stack/pavo2_ros2`；旧目录当前仍存在。不要在新驱动验收前删除它。
 
-```bash
-systemctl cat pavo2-scan.service
-systemctl show pavo2-scan.service -p ExecStart -p WorkingDirectory --no-pager
-```
+PC 已准备配置、启动入口与服务模板；**Nano 的同步、构建和服务切换由你执行**：
 
-服务文件仍存在不等于驱动存在。若入口指向已删除目录，需要恢复对应 ROS 2 驱动源码，并更新服务引用的路径和环境。后续驱动源码也放在 `/home/nvidia/surface_ws/src/` 中，安装依赖并在同一工作空间构建；加入驱动后包数量会多于七个。仓库尚未包含该驱动及服务定义，因此这里不假设其仓库地址、包名或可执行文件。
-
-驱动恢复后，在运行终端检查：
+1. 按前文同步源码，在 Nano 构建 `f1_lidar_driver`（或整个工作空间）。
+2. 核对新包 `config/pavo2.yaml`；保持雷达 `10.10.10.121:2368`、本机有线静态地址 `10.10.10.100/24`、扫描话题 `/pavo2_scan` 和帧名 `pavo2s_frame`。
+3. 按[驱动包的服务切换步骤](src/f1_lidar_driver/README.md#nano-由操作者切换现有开机服务)备份并替换同名 `pavo2-scan.service`。新服务仅加载系统 ROS 与 `surface_ws/install/local_setup.bash`，启动 `f1_lidar_driver lidar.launch.py`。不要同时运行旧、新驱动。
+4. 雷达供电接线后检查实际扫描，随后再运行建图或定位：
 
 ```bash
+systemctl show pavo2-scan.service -p UnitFileState -p ActiveState -p ExecStart --no-pager
 ros2 topic info /pavo2_scan --verbose
 ros2 run f1_mapping_bringup scan_check --samples 100
 ```
 
-确认扫描有效后，再按[纯雷达建图步骤](START_LIDAR.md)启动 SLAM，或按[矩形清洗实景验证](src/f1_pool_cleaning/DEPLOY_TEST_NANO.md)、[大 L 清洗说明](src/f1_l_cleaning/README.md)继续。历史地图备份约定为 PC 的 `/home/bboss/new-nano/backups/nano_maps`；使用前确认实际文件存在，或从本地 `maps/` 单独同步。
+`local_ip` 参数不会替系统设置网卡 IP。既有有线连接已设为自动连接和 `10.10.10.100/24`；没有接线时网口 DOWN、服务连接失败并重试，不代表驱动已完成实机验收。旧 `pavo2s-scan.service` 保持禁用。
+
+App 受管入口继续复用独立雷达服务，切换建图/定位不重启雷达。服务故障时同时检查 `journalctl -u pavo2-scan.service` 和 `/home/nvidia/pavo2_scan_driver.log`。详细配置、回退与验收边界见[驱动说明](src/f1_lidar_driver/README.md)。
+
+历史地图备份约定为 PC 的 `/home/bboss/new-nano/backups/nano_maps`；使用前确认实际文件存在，或从本地 `maps/` 单独同步。
 
 ## 9. rosdep 更新报错处理
 
@@ -316,7 +323,7 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py --show-args
 
 ## 定位拆包升级
 
-2026-10-30 起，定位实现位于 `f1_localization`，源码包含七个项目包。矩形和大 L 的任务启动命令不变，旧定位 launch 与可执行入口保留转发。详见[定位包说明](src/f1_localization/README.md)。
+2026-10-30 起，定位实现位于 `f1_localization`，当时源码包含七个项目包（现已新增雷达驱动，为八包）。矩形和大 L 的任务启动命令不变，旧定位 launch 与可执行入口保留转发。详见[定位包说明](src/f1_localization/README.md)。
 
 首次升级时，先停止运行中的定位和清洗节点，备份现场修改的参数文件。在 PC 将新定位包及两个清洗包同步到 Nano；下列 `--delete` 仅限这三个包目录，用于移除迁走的旧定位源码和配置：
 
