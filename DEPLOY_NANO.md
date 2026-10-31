@@ -66,11 +66,13 @@ mkdir -p /home/nvidia/surface_ws/src
 
 ```bash
 ssh nvidia@192.168.1.188 'mkdir -p /home/nvidia/surface_ws/src'
+
 rsync -av --progress \
   --exclude='/build/' --exclude='/install/' --exclude='/log/' \
   --exclude='.git/' --exclude='.venv/' \
   --exclude='__pycache__/' --exclude='.pytest_cache/' --exclude='*.pyc' \
-  --exclude='/maps/' --exclude='/test_bags/' --exclude='/deploy_backups/' \
+  --exclude='/operator_app/' \
+  --exclude='/test_bags/' --exclude='/deploy_backups/' \
   /home/bboss/new-nano/surface_ws/ \
   nvidia@192.168.1.188:/home/nvidia/surface_ws/
 ```
