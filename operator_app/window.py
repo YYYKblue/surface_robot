@@ -194,6 +194,8 @@ class OperatorWindow(MappingPanel, QMainWindow):
         self.task_status.setWordWrap(True); box.addWidget(self.task_status)
         self.task_reason = QLabel("")
         self.task_reason.setWordWrap(True); box.addWidget(self.task_reason)
+        self.start_details = QLabel("")
+        self.start_details.setWordWrap(True); box.addWidget(self.start_details)
         self.task_buttons = {}
         task_actions = QGridLayout()
         for index, (label, action) in enumerate((("开始清洗", "start"), ("暂停任务", "pause"),
@@ -359,6 +361,18 @@ class OperatorWindow(MappingPanel, QMainWindow):
         self.task_status.setText((PHASES.get(phase, phase or "等待任务状态") + "\n" + mode) if task_fresh else "任务状态未知")
         self.task_status.setStyleSheet("color:#00877e;font-weight:bold;" if task_fresh and phase == "COMPLETE" else "")
         self.task_reason.setText(str(task.get("reason", "")) if task_fresh else "")
+        details = ""
+        if task_fresh and task.get("start_edge_id"):
+            details = f"起始墙：{task['start_edge_id']} · 当前墙：{task.get('current_edge_id') or '—'}"
+            region = task.get("start_region") or {}
+            point = region.get("reference_wall_point")
+            if point and len(point) == 2:
+                details += f"\n起始参考点：({point[0]:.2f}, {point[1]:.2f}) m；紫框为到达范围"
+            if task.get("returning_to_start"):
+                details += "\n正在补齐起始边前半段"
+            if task.get("completion_scope") == "remaining_l_route":
+                details += "\nL 形仅清洗起始位置之后的路线，到终点停止"
+        self.start_details.setText(details)
         result = self.completed_results.get(kind)
         self.result_label.setText(result[1] if result else "")
         self._refresh_mapping(fresh, operator, local_pending)
@@ -479,7 +493,17 @@ class OperatorWindow(MappingPanel, QMainWindow):
                     ns = task.get("completed_at_ns")
                     when = datetime.fromtimestamp(ns/1e9).strftime("%Y-%m-%d %H:%M:%S") if ns else "时间未提供"
                     preview = "预览任务完成" if not task.get("output_enabled") else "任务完成"
-                    text = f"{TASK_NAMES.get(kind, kind)}：{preview}\n完成时间：{when}\n要求区间已覆盖，共 {task.get('edge_count', '—')} 条边"
+                    if task.get("completion_scope") == "remaining_l_route":
+                        result = "本次剩余 L 路线执行完成；不返回、不补洗"
+                    elif task.get("completion_scope") == "rectangle_route":
+                        result = "矩形路线及起始边补齐执行完成"
+                    else:
+                        result = "本次路线执行完成"
+                    if task.get("coverage_complete") is True:
+                        result += "\n记录的本次要求区间已覆盖"
+                    elif task.get("coverage_complete") is False:
+                        result += "\n覆盖记录仍有缺口，未追加补洗"
+                    text = f"{TASK_NAMES.get(kind, kind)}：{preview}\n完成时间：{when}\n{result}"
                     self.completed_results[kind] = (run_id, text)
                     if (kind, run_id) not in self.seen_completions:
                         self.seen_completions.add((kind, run_id))

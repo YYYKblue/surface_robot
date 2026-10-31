@@ -13,7 +13,7 @@
 | [`f1_lidar_driver`](src/f1_lidar_driver/README.md) | PAVO2 驱动与 SDK、雷达参数、独立启动及开机服务模板 |
 | [`f1_mapping_bringup`](src/f1_mapping_bringup/README.md) | Cartographer 2D 纯雷达建图、静态雷达 TF 和扫描检查 |
 | [`f1_localization`](src/f1_localization/README.md) | 固定地图定位、初始位姿、轨迹管理和定位就绪门控 |
-| [`f1_pool_cleaning`](src/f1_pool_cleaning/README.md) | 墙感知、关刷导航、沿墙控制、矩形四边任务及覆盖记录 |
+| [`f1_pool_cleaning`](src/f1_pool_cleaning/README.md) | 墙感知、简单动作靠近、沿墙控制、矩形四边任务及覆盖记录 |
 | [`f1_l_cleaning`](src/f1_l_cleaning/README.md) | 复用清洗控制器的开放大 L 路线，执行 A → B → C 两段墙 |
 | [`f1_operator_gateway`](src/f1_operator_gateway/README.md) | App 的 WebSocket 手动控制、任务服务和遥测入口 |
 | [`operator_app/`](operator_app/README.md) | Qt 操作员界面，包含建图/选图、地图、雷达、手动输入和任务按钮 |
@@ -52,7 +52,7 @@ Qt App ←→ WebSocket :8765 ←→ 网关 → f1_nano_bridge ←→ F103
 
 控制器会将推导结果作为参数默认值；现场 YAML 中显式填写的几何参数仍可覆盖它们。因此更换地图时应检查自定义配置是否残留旧 `boundary_xy`、`route_xy` 或池尺寸。地图推导在读取这些覆盖参数前执行，手工填路线不能绕过不支持的地图校验。
 
-矩形任务包含四条边，大 L 包含两条边且不构造 C→A 清洗墙。默认按当前位姿选择可达起始边，关刷导航到起点，沿墙清洗并按需回补遗漏区间，全部要求区间覆盖后才完成。两种任务都保持墙在船左侧，共享 `/f1/*` 硬件接口；同一机器人仅运行一套 bridge 和定位，网关只允许一个清洗任务活动。组合入口可以让当前地图支持的控制器同时待命。
+矩形任务包含四条边，大 L 包含两条边且不构造 C→A 清洗墙。默认用船体左侧射线选择墙，锁定最近投影点，以旋转、前后移动和侧移进入合理起始范围，再复用旧版沿墙控制。靠近不做路径搜索或环境碰撞检查。矩形绕行后只补齐起始边前段；L 形到终点停，不返回、不补洗。路线完成与覆盖记录分别报告。两种任务都保持墙在船左侧，共享 `/f1/*` 硬件接口；同一机器人仅运行一套 bridge 和定位，网关只允许一个清洗任务活动。组合入口可以让当前地图支持的控制器同时待命。
 
 App 的受管入口支持无地图待机、纯雷达建图、命名保存、地图列表/预览/加载；地图保存到 Nano 工作空间 `maps/`，空名称使用时间戳。App 支持 L／矩形任务选择、地图初始位姿发布、启动条件和完成结果显示。推荐使用[网关组合入口](src/f1_operator_gateway/README.md)启动一套共享定位和当前地图支持的任务；独立大 L bringup 使用网关 `localization_prefix:=/l_cleaning`，不再重映射任务接口。App 的 `manual_stop`、断线和输入超时只停止网关持有的手动会话；自动任务应使用自己的 `pause` / `stop` / `cancel` 服务。
 

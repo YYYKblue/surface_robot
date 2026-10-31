@@ -485,71 +485,87 @@ def test_cancel_during_acquire_releases_late_token():
 def automatic_controller(tmp_path, **overrides):
     from f1_pool_cleaning.synthetic_map import rectangle_map
     values = dict(map=str(rectangle_map(tmp_path)), edge_task_enabled=True,
-                  start_policy="nearest_reachable", use_map_tf=True,
-                  require_localization_ready=True, scan_topic="/test_navigation_scan")
+                  start_policy="left_ray", use_map_tf=True,
+                  require_localization_ready=True)
     values.update(overrides)
     return PoolController(parameter_overrides=[Parameter(k, value=v) for k, v in values.items()])
 
 
-def automatic_feedback(node, *, ready=True):
+def automatic_feedback(node, *, ready=True, x=2.8, y=1.45, yaw=0.):
     from geometry_msgs.msg import TransformStamped
-    from sensor_msgs.msg import LaserScan
     now = node.get_clock().now().nanoseconds
     tf = TransformStamped()
     tf.header.frame_id, tf.child_frame_id = "map", "base_link"
     tf.header.stamp = stamp(now)
-    tf.transform.translation.x, tf.transform.translation.y = 2.8, 1.45
-    tf.transform.rotation.w = 1.
+    tf.transform.translation.x, tf.transform.translation.y = x, y
+    tf.transform.rotation.z, tf.transform.rotation.w = math.sin(yaw/2), math.cos(yaw/2)
     node.tf_buffer.set_transform(tf, "test")
     node._read_tf_pose()
-    scan = LaserScan()
-    scan.header.frame_id, scan.header.stamp = "base_link", stamp(now)
-    scan.angle_min, scan.angle_increment = -math.pi, math.pi/12
-    scan.range_min, scan.range_max = .05, 20.
-    scan.ranges = [10.]*24
-    node._navigation_scan(scan)
     node._localization_status(String(data=json.dumps(dict(
         state="LOCALIZATION_READY" if ready else "LOCALIZATION_CHECK", ready=ready))))
-    return scan
+    return now
 
 
-def test_automatic_start_tf_scan_gate_and_explicit_selection(tmp_path):
+def test_automatic_start_pose_gate_and_explicit_selection_without_raw_scan(tmp_path):
     node = automatic_controller(tmp_path)
     try:
-        scan = automatic_feedback(node, ready=False)
+        automatic_feedback(node, ready=False)
         assert not node._start(None, Trigger.Response()).success
         automatic_feedback(node)
-        assert node.scan_sub.topic_name == "/test_navigation_scan"
+        assert not hasattr(node, "scan_sub")
         assert node._set_edge(SetEdge.Request(edge_id="edge_2"), SetEdge.Response()).success
         assert node._start(None, Trigger.Response()).success
         assert node.mission.requested_edge_id == "edge_2"
-        assert node.requested_start_edge is None  # consumed for this task only
-        node.mission.future.result(timeout=5)
+        assert node.requested_start_edge is None
         automatic_feedback(node)
         node._tick()
         assert node.selected_edge.id == "edge_2"
-        assert node.mission.phase == "NAVIGATING"
+        assert node.mission.phase == "ALIGN_START"
         assert not node.mission.target_wall_enabled
         assert not node.mission.last_effort.brush_percent
-        # A newly invalid scan cannot be hidden behind the receive watchdog.
-        scan.header.stamp = stamp(node.get_clock().now().nanoseconds)
-        scan.ranges = [float("nan")]*24
-        node._navigation_scan(scan)
-        node._tick()
-        assert node.mission.phase == "PAUSED"
         node._cancel(None, Trigger.Response())
         automatic_feedback(node)
         assert node._start(None, Trigger.Response()).success
-        node.mission.future.result(timeout=5)
-        automatic_feedback(node)
         node._tick()
         assert node.selected_edge.id == "edge_0"
     finally:
         node.destroy_node()
 
 
+def test_direct_approach_hands_off_only_after_fresh_target_wall(tmp_path):
+    from f1_pool_cleaning.perception import Observation
+    node = automatic_controller(tmp_path, approach_arrival_hold_sec=.001)
+    try:
+        node.timer.cancel()
+        edge = node.pool.edges[0]
+        point = [edge.start[i]+edge.tangent[i]*edge.length_m/2-edge.left_normal[i]*.34 for i in (0, 1)]
+        def refresh():
+            return automatic_feedback(node, x=point[0], y=point[1], yaw=edge.yaw_rad)
+        refresh()
+        assert node._start(None, Trigger.Response()).success
+        time.sleep(.003)
+        refresh()
+        node._tick()
+        assert node.mission.phase == "ACQUIRE_WALL"
+        assert node.selected_edge.id == edge.id
+        stale = to_observation_message(Observation(node.wall_after_ns, valid=True, distance=.34, angle=0.),
+                                       "base_link", "approach-test", 1)
+        node._wall(stale)
+        assert node.mission.phase == "ACQUIRE_WALL"
+        now = refresh()
+        fresh = to_observation_message(Observation(now, valid=True, distance=.34, angle=0.),
+                                       "base_link", "approach-test", 2)
+        node._wall(fresh)
+        assert node.mission.phase == "APPROACH_WALL"
+        node._tick()
+        assert node.mission.phase == "FOLLOW" and node.mission.last_effort.brush_percent == 30.
+        assert not node.mission.last_effort.direction and not node.mission.last_effort.side_left_percent
+    finally:
+        node.destroy_node()
+
+
 @pytest.mark.parametrize("lose_localization", [False, True])
-def test_automatic_planning_waits_for_lease_and_rechecks_localization(tmp_path, lose_localization):
+def test_automatic_approach_waits_for_lease_and_rechecks_localization(tmp_path, lose_localization):
     from concurrent.futures import Future
     from types import SimpleNamespace
     from f1_interfaces.msg import ControlState
@@ -566,7 +582,7 @@ def test_automatic_planning_waits_for_lease_and_rechecks_localization(tmp_path, 
         bridge.stamp = stamp(node.get_clock().now().nanoseconds)
         lease._bridge(bridge)
         assert node._start(None, Trigger.Response()).success
-        assert node.mission.phase == "ACQUIRING" and node.mission.future is None
+        assert node.mission.phase == "ACQUIRING" and node.mission.last_effort is None
         automatic_feedback(node, ready=not lose_localization)
         bridge.state, bridge.owner, bridge.motion_authorized = "ACTIVE", lease.owner, True
         bridge.stamp = stamp(node.get_clock().now().nanoseconds)
@@ -574,10 +590,10 @@ def test_automatic_planning_waits_for_lease_and_rechecks_localization(tmp_path, 
         pending.set_result(AcquireControl.Response(success=True, token="test-token", epoch=7))
         if lose_localization:
             assert not lease.token and node.mission.phase == "PAUSED"
-            assert node.mission.future is None
+            assert node.mission.last_effort is None
         else:
             assert lease.token == "test-token"
-            assert node.mission.phase in ("PLANNING", "NAVIGATING")
+            assert node.mission.phase in node.mission.APPROACH_PHASES
             assert not node.mission.last_effort.brush_percent
     finally:
         node.destroy_node()
@@ -647,19 +663,22 @@ def test_stop_cuts_outputs_retains_coverage_and_restart_creates_new_run(tmp_path
         node.destroy_node()
 
 
-def test_expected_tracks_are_boat_center_segments_and_only_active_navigation(tmp_path):
-    from f1_pool_cleaning.navigation import Waypoint
+def test_expected_tracks_show_start_region_without_inventing_navigation(tmp_path):
     node = automatic_controller(tmp_path)
     try:
         track = node._expected_track()
         assert track["map_id"] == node.map_id and track["frame_id"] == "map"
         assert len(track["cleaning_segments"]) == 4
         for edge, segment in zip(node.pool.edges, track["cleaning_segments"]):
-            point = node.mission.navigator.edge_pose(edge, edge.clean_start_s_m, node.config.wall_target_m)
-            assert segment["points"][0] == pytest.approx([point.x, point.y])
-        node.mission.path = [Waypoint(1., 2., 0.), Waypoint(3., 4., 0.)]
-        node.mission.phase = "NAVIGATING"
-        assert node._expected_track()["navigation_path"] == [[1., 2.], [3., 4.]]
+            expected = [edge.start[i]+edge.tangent[i]*(edge.clean_start_s_m-node.config.brush_x_m)
+                        -edge.left_normal[i]*node.config.wall_target_m for i in (0, 1)]
+            assert segment["points"][0] == pytest.approx(expected)
+        automatic_feedback(node)
+        assert node._start(None, Trigger.Response()).success
+        track = node._expected_track()
+        assert not track["navigation_path"]
+        assert track["start_region"]["edge_id"] == "edge_0"
+        assert len(track["start_region"]["polygon"]) == 4
         node._stop_task(None, Trigger.Response())
         assert not node._expected_track()["navigation_path"]
     finally:

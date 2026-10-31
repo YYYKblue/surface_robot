@@ -117,7 +117,7 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
 | `${localization_prefix}/set_initial_pose` | 提交 map 坐标系初始位姿 |
 | `${localization_prefix}/localization_status` | 定位诊断、稳定窗口与就绪状态 |
 
-控制器状态新增 `task_type`、`map_id`、`stamp_ns`、`run_id`、`completed_at_ns`、`can_start`、`start_blockers`。启动检查复用于自动任务的 `/start` 和状态发布；在获取租约后仍复查定位/反馈。规划和找墙发生在开始以后，不把贴墙条件强加到自动启动前。
+控制器状态新增 `task_type`、`map_id`、`stamp_ns`、`run_id`、`completed_at_ns`、`can_start`、`start_blockers`。启动检查复用于自动任务的 `/start` 和状态发布；在获取租约后仍复查定位/反馈。射线选墙在启动时锁定，获取租约后以简单动作靠近，进入范围后确认墙面；不把贴墙条件强加到启动前。
 
 网关检查定位/任务的接收时间和 ROS 源时间戳（0.6 秒），校验地图与任务类型。某任务状态过期不会把已知运行任务视为结束。启动请求串行处理；先停止手动会话，等待待返回的手动申请/释放和控制器状态更新，再发 start。等待超过 3 秒但尚未发送时放弃启动；已发出的操作超时保持结果待确认，不自动重发。开始服务成功后，还需收到新的 `run_id` 状态才确认启动。启动过程中收到暂停/停止/取消会按时序处理，防止迟到的启动响应覆盖停止意图。
 
@@ -147,7 +147,7 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
 `hello.capabilities` 新增 `task_stop`、`task_tracks`。任务 `stop` 调用对应控制器的 Trigger `/stop`，进入 `STOPPED`，保留任务进度；`cancel` 另外清除当前边关联。两者均关闭输出、释放租约，不支持断点续跑；显式 start 创建新 run_id。开始服务尚未返回时的停止也参与既有串行操作机制。
 
 每个 `tasks[kind]` 新增：
-- `expected_track: {frame_id, map_id, cleaning_segments: [{edge_id, points: [[x,y], ...]}], navigation_path: [[x,y], ...]}`：来自真实控制器的船体中心清洗目标段和当前导航路径；不是闭合的全程运动轨迹。
+- `expected_track: {frame_id, map_id, cleaning_segments: [{edge_id, points: [[x,y], ...]}], navigation_path: [[x,y], ...]}`：来自控制器的船体中心清洗目标段；新版 `navigation_path` 始终为空，并增加 `start_region` 起始范围。附带 `completion_scope/coverage_complete` 区分路线执行完成和实际覆盖记录。
 - `actual_track: {frame_id, map_id, run_id, segments: [[[x,y], ...], ...], point_count, truncated}`：网关从有效的 map→base_link TF 采样，分段避免连接定位缺失/跳变。
 - `center_wall_distance_m`、`wall_fresh`、`wall_age_sec`：有效左墙线到 base_link 原点的垂直距离及源数据新鲜度；距离不可用时为 null。
 

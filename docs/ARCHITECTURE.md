@@ -11,7 +11,7 @@
 | `f1_lidar_driver` | [pavo2_scan_node.cpp](../src/f1_lidar_driver/src/pavo2_scan_node.cpp)、`vendor/pavo2_sdk/` | 连接雷达、发布扫描，不发布安装 TF |
 | `f1_mapping_bringup` | [lidar_mapping.launch.py](../src/f1_mapping_bringup/launch/lidar_mapping.launch.py)、`config/pavo2_2d.lua` | Cartographer 纯雷达建图、地图发布、平面安装 TF |
 | `f1_localization` | [localization_node.py](../src/f1_localization/f1_localization/localization_node.py)、`localization.py`、`map_io.py` | 冻结地图、初始位姿、轨迹生命周期、定位门控和栅格读取 |
-| `f1_pool_cleaning` | [controller_node.py](../src/f1_pool_cleaning/f1_pool_cleaning/controller_node.py)、`autonomous.py`、`mission.py` | 矩形任务及两类任务共用的控制、导航、覆盖、感知实现 |
+| `f1_pool_cleaning` | [controller_node.py](../src/f1_pool_cleaning/f1_pool_cleaning/controller_node.py)、`autonomous.py`、`mission.py` | 矩形任务及两类任务共用的简单靠近、沿墙、覆盖、感知实现 |
 | `f1_l_cleaning` | [controller_node.py](../src/f1_l_cleaning/f1_l_cleaning/controller_node.py)、`route.py`、`topics.py` | 继承共享控制器，提供开放 L 路线及 `/l_cleaning/*` 接口 |
 | `f1_nano_bridge` | [node.py](../src/f1_nano_bridge/nano_ros_bridge/node.py)、`session.py`、`protocol.py`、`transport.py` | 控制租约、协议编解码、串口、CTRL/ACK、IMU 遥测 |
 | `f1_interfaces` | `msg/`、`srv/` | 公共消息与服务定义；修改后需要重建使用方 |
@@ -26,9 +26,8 @@
 flowchart LR
     L[PAVO2 驱动] -->|/pavo2_scan| SLAM[Cartographer 建图或固定地图定位]
     L --> P[墙线感知]
-    L --> N[关刷导航]
+    SLAM -->|位姿| N[简单动作靠近]
     SLAM -->|地图与 TF| LOC[定位管理器]
-    SLAM --> N
     LOC -->|定位状态| C[清洗控制器]
     P -->|WallObservation| C
     C -->|EdgeTarget| P
@@ -74,11 +73,11 @@ flowchart LR
 
 ## 5. 自动任务和停止语义
 
-`AutonomousMission` 负责选起始边、后台规划、关刷导航、找墙及覆盖回补；`Mission` 负责沿墙纠偏和相邻边后退右推/右转。详细状态流见[清洗流程图](pool_cleaning/WALL_CLEANING_FLOW.md)。
+`AutonomousMission` 负责左侧射线选墙、锁定最近投影点、关刷简单动作靠近和矩形起始边补齐；`Mission` 负责沿墙纠偏和相邻边后退右推/右转。详细状态流见[清洗流程图](pool_cleaning/WALL_CLEANING_FLOW.md)。
 
-默认自动选边先尝试船体当前左侧墙，再尝试其他墙，各组按有限墙段距离、航向差、边 ID 排序。显式 `set_edge` 或 `start_policy=specified` 使用指定边，不可达时不改选其他边。开始前检查定位、位姿和原始扫描，开始后才规划并获取目标墙线；`can_start=true` 不保证规划一定成功。
+默认 `left_ray` 沿船体 +y 选择第一面命中的有限墙段；公共角点按清洗方向与船头夹角选墙。无交点拒绝启动，不延长墙或回退最近墙。显式 `set_edge` 或 `start_policy=specified` 可覆盖。开始前检查定位和位姿，锁定墙及最近投影点，取得控制权后旋转、前后移动和侧移进入旧版合理起始范围，再确认墙面。没有路径搜索、足迹或雷达环境碰撞检查；控制租约、定位与通信期限仍生效。
 
-覆盖由 `coverage.py` 和 `AutonomousMission` 统计左刷接触中心线区间。当前默认缺口容差为 0.05 m，最多回补 2 轮；仍有缺口则 `PAUSED`，全部要求区间满足后才 `COMPLETE`。L 只有两条清洗墙，末端返回起点使用关刷导航，不增加 C→A 墙边。
+覆盖由 `coverage.py` 和 `AutonomousMission` 统计左刷接触中心线区间，默认缺口容差 0.05 m。矩形顺时针绕行后只补齐首次有效开刷位置之前的起始边，并重叠 0.10 m；不再规划其他缺口的补洗。L 形只执行选中段之后到 C 的路线，不返回、不补洗。`COMPLETE` 表示本次路线执行结束，`coverage_complete` 和剩余缺口单独报告。
 
 | 操作或状态 | 行为 |
 |---|---|

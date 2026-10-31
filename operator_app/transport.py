@@ -178,7 +178,16 @@ class SocketWorker(QThread):
                     kind, action = packet["task_type"], packet["action"]
                     if action == "start" and ready and active is None:
                         active, started = kind, now
-                        tasks[kind].update(phase="NAVIGATING", run_id=uuid.uuid4().hex)
+                        region = dict(edge_id="edge_0", reference_wall_point=route[0],
+                                      polygon=[[route[0][0]-.1, route[0][1]],
+                                               [route[0][0]+.1, route[0][1]],
+                                               [route[0][0]+.1, route[0][1]-.85],
+                                               [route[0][0]-.1, route[0][1]-.85]])
+                        tasks[kind].update(phase="APPROACH_START", run_id=uuid.uuid4().hex,
+                                           start_edge_id="edge_0", current_edge_id="edge_0", start_region=region,
+                                           completion_scope="remaining_l_route" if kind == "l" else "rectangle_route",
+                                           coverage_complete=False, returning_to_start=False)
+                        tasks[kind]["expected_track"]["start_region"] = region
                         start_pose = dict(pose)
                         tasks[kind]["actual_track"].update(run_id=tasks[kind]["run_id"],
                             segments=[[[pose["x"], pose["y"]]]], point_count=1)
@@ -205,7 +214,7 @@ class SocketWorker(QThread):
                 history["segments"][0].append([pose["x"], pose["y"]])
                 history["point_count"] += 1
                 if now-started > 8:
-                    tasks[active].update(phase="COMPLETE", completed_at_ns=time.time_ns())
+                    tasks[active].update(phase="COMPLETE", completed_at_ns=time.time_ns(), coverage_complete=True)
                     active = None
                 elif now-started > 3:
                     tasks[active]["phase"] = "FOLLOW"
@@ -218,9 +227,7 @@ class SocketWorker(QThread):
                 task.update(fresh=True, can_start=not blockers, start_blockers=blockers,
                             wall_fresh=ready, wall_valid=ready,
                             center_wall_distance_m=.35 if ready else None)
-                task["expected_track"]["navigation_path"] = (
-                    [[start_pose["x"], start_pose["y"]], route[0]]
-                    if task["phase"] == "NAVIGATING" else [])
+                task["expected_track"]["navigation_path"] = []
             self.message.emit(dict(type="telemetry", state=dict(state="READY", connected=True,
                 source="NANO", motion_authorized=False, allow_fifth_thruster=True), control_fresh=True,
                 pose=pose if runtime["mode"] != "idle" else None, scan=None,

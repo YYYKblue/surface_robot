@@ -19,7 +19,7 @@ def generate_launch_description():
         DeclareLaunchArgument("map_pose_topic", default_value="/pool_cleaning/map_pose"),
         DeclareLaunchArgument("output_enabled", default_value="false", choices=["true", "false"]),
         DeclareLaunchArgument("edge_task_enabled", default_value="true", choices=["true", "false"]),
-        DeclareLaunchArgument("start_policy", default_value="nearest_reachable", choices=["nearest_reachable", "specified"]),
+        DeclareLaunchArgument("start_policy", default_value="left_ray", choices=["left_ray", "specified", "nearest_reachable"]),
         DeclareLaunchArgument("default_edge_id", default_value="edge_0"),
         DeclareLaunchArgument("use_map_tf", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("require_localization_ready", default_value="true", choices=["true", "false"]),

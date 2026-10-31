@@ -73,6 +73,14 @@ class MapCanvas(QWidget):
             layers += [(segment, "#00877e", False) for segment in actual.get("segments", [])]
         return layers
 
+    def _start_region(self):
+        task = self.task_overlay
+        expected = task.get("expected_track") or {}
+        if (not self.overlay_live or expected.get("frame_id") != (self.telemetry.get("map") or {}).get("frame_id")
+                or expected.get("map_id") != task.get("map_id")):
+            return None
+        return expected.get("start_region")
+
     @staticmethod
     def _make_map_image(mapping):
         width, height = int(mapping.get("width", 0)), int(mapping.get("height", 0))
@@ -187,6 +195,20 @@ class MapCanvas(QWidget):
             target = self.map_image.scaled(round(width*scale), round(height*scale),
                                            Qt.IgnoreAspectRatio, Qt.FastTransformation)
             painter.drawImage(round(ox), round(oy-height*scale), target)
+            region = self._start_region()
+            if region:
+                points = region.get("polygon", [])
+                if (len(points) == 4 and all(len(p) == 2 and all(math.isfinite(v) for v in p)
+                                             for p in points)):
+                    painter.setPen(QPen(QColor("#9c49b5"), 2, Qt.DashLine))
+                    painter.setBrush(QColor(156, 73, 181, 30))
+                    painter.drawPolygon(QPolygonF([self.map_to_screen(*p) for p in points]))
+                reference = region.get("reference_wall_point")
+                if reference and len(reference) == 2 and all(math.isfinite(v) for v in reference):
+                    point = self.map_to_screen(*reference)
+                    painter.setPen(QPen(QColor("#9c49b5"), 3))
+                    painter.drawLine(QPointF(point.x()-5, point.y()), QPointF(point.x()+5, point.y()))
+                    painter.drawLine(QPointF(point.x(), point.y()-5), QPointF(point.x(), point.y()+5))
             painter.setBrush(Qt.NoBrush)
             for points, color, dashed in self._track_layers():
                 pen = QPen(QColor(color), 2 if dashed else 3)
@@ -218,4 +240,4 @@ class MapCanvas(QWidget):
             if self.candidate:
                 self._arrow(painter, self.candidate, "#9553c6")
         painter.setPen(QPen(QColor("#637783"), 1))
-        painter.drawText(28, 22, "蓝虚线：清洗目标 · 紫虚线：当前导航 · 绿实线：历史轨迹 · 橙点：雷达")
+        painter.drawText(28, 22, "蓝虚线：清洗目标 · 紫框：起始范围 · 绿实线：历史轨迹 · 橙点：雷达")

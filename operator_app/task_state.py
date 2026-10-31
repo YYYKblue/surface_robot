@@ -8,6 +8,8 @@ PHASES = {
     "CORRECT_HEADING": "正在调整航向", "WAIT_WALL": "等待墙面重新识别",
     "EDGE_STOP": "当前边结束，正在停止输出", "MOVE_INWARD": "正在后退侧移",
     "TURN_TO_NEXT_EDGE": "正在转向下一条边",
+    "APPROACH_START": "正在确认起始范围", "ALIGN_START": "正在调整起始船头方向",
+    "MOVE_START_ALONG": "正在调整沿墙起始位置", "MOVE_START_SIDE": "正在侧移接近起始范围",
 }
 TASK_NAMES = {"l": "L 清洗", "rectangle": "矩形清洗"}
 BLOCKERS = {

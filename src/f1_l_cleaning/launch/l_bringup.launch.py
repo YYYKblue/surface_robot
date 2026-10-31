@@ -30,7 +30,7 @@ def generate_launch_description():
         DeclareLaunchArgument("start_localization", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("start_bridge", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("start_cleaning", default_value="true", choices=["true", "false"]),
-        DeclareLaunchArgument("start_policy", default_value="nearest_reachable", choices=["nearest_reachable", "specified"]),
+        DeclareLaunchArgument("start_policy", default_value="left_ray", choices=["left_ray", "specified", "nearest_reachable"]),
         DeclareLaunchArgument("default_edge_id", default_value="edge_0"),
         DeclareLaunchArgument("output_enabled", default_value="false", choices=["true", "false"]),
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),

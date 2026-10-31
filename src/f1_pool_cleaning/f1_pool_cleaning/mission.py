@@ -22,7 +22,7 @@ class Pose:
 class Feedback:
     wall: Observation
     pose: Pose
-    scan: object = None  # optional raw-scan evidence for map-guided transit
+    scan: object = None  # compatibility only; direct approach does not consume raw scans
 
 
 @dataclass(frozen=True)

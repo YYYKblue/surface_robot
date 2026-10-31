@@ -137,6 +137,45 @@ def test_track_layers_keep_l_open_and_reject_mismatched_frames_and_runs(app):
     assert not canvas._track_layers()
 
 
+def test_start_region_is_drawn_only_for_fresh_matching_map(app):
+    canvas = MapCanvas()
+    canvas.set_telemetry(mapping(math.pi/2))
+    region = dict(reference_wall_point=[-2., 3.5],
+                  polygon=[[-2., 3.4], [-2., 3.6], [-2.8, 3.6], [-2.8, 3.4]])
+    task = dict(map_id="map-a", expected_track=dict(map_id="map-a", frame_id="map", start_region=region))
+    canvas.set_task_overlay(task, live=True)
+    assert canvas._start_region() == region
+    canvas.grab()
+    canvas.set_task_overlay(task, live=False)
+    assert canvas._start_region() is None
+    task["expected_track"]["map_id"] = "map-b"
+    canvas.set_task_overlay(task, live=True)
+    assert canvas._start_region() is None
+
+
+def test_remaining_l_completion_never_claims_full_route_coverage(app, monkeypatch):
+    monkeypatch.setattr(SocketWorker, "start", lambda self: None)
+    window = OperatorWindow("unused")
+    try:
+        window._message(dict(type="hello", client_id="test", capabilities=[
+            "task_selection", "initial_pose", "start_conditions", "task_tracks"]))
+        window._message(mapping())
+        task = dict(map_id="map-a", fresh=True, phase="MOVE_START_SIDE", run_id="run",
+                    start_edge_id="edge_1", current_edge_id="edge_1", completion_scope="remaining_l_route",
+                    start_region=dict(reference_wall_point=[-2., 3.5]), coverage_complete=False)
+        state = dict(type="telemetry", active_client="test", task_busy=True, active_tasks=["l"],
+                     localization=dict(map_id="map-a", fresh=True), tasks=dict(l=task))
+        window._message(state)
+        assert "侧移" in window.task_status.text() and "edge_1" in window.start_details.text()
+        task.update(phase="COMPLETE", completed_at_ns=time.time_ns())
+        window._message(state)
+        assert "剩余 L 路线" in window.result_label.text()
+        assert "覆盖记录仍有缺口" in window.result_label.text()
+        assert "要求区间已覆盖" not in window.result_label.text()
+    finally:
+        window.close()
+
+
 def test_stop_cancel_and_wall_distance_follow_robot_state(app, monkeypatch):
     monkeypatch.setattr(SocketWorker, "start", lambda self: None)
     window = OperatorWindow("unused")

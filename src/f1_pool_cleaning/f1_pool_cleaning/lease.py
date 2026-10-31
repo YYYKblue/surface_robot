@@ -96,8 +96,14 @@ class Lease:
         # Explicit start already required a valid wall. If a fresh fit is lost
         # during acquisition, enter bounded neutral recovery instead of latching
         # PAUSED before the first actuator command.
-        ok, reason = (False, error) if error else self.node.mission.start(
-            self.node._feedback(), now, allow_wall_recovery=True)
+        if error:
+            ok, reason = False, error
+        elif hasattr(self.node.mission, "resume_after_acquire"):
+            # Keep the ray-selected wall and its reference point locked across
+            # async acquisition, even if the boat drifted before the reply.
+            ok, reason = self.node.mission.resume_after_acquire(self.node._feedback(), now)
+        else:
+            ok, reason = self.node.mission.start(self.node._feedback(), now, allow_wall_recovery=True)
         if not ok:
             self._release(reply.token)
             self.node._halt(reason)

@@ -268,6 +268,40 @@ class PoolModel:
         index = self.edges.index(edge)
         return self.edges[index + 1] if index + 1 < len(self.edges) else None
 
+    def select_left_ray(self, pose, corner_tolerance_m=.01):
+        """First finite wall hit by base_link +y; corner ties prefer heading.
+
+        Only endpoints within the corner tolerance are shared candidates.
+        There is no nearest-wall fallback or extension of an open L route.
+        """
+        ray = (-math.sin(pose.yaw), math.cos(pose.yaw))
+        def cross(a, b):
+            return a[0]*b[1] - a[1]*b[0]
+        hits = []
+        for edge in self.edges:
+            offset = (edge.start[0]-pose.x, edge.start[1]-pose.y)
+            denominator = cross(ray, edge.tangent)
+            if abs(denominator) <= 1e-10:
+                continue  # parallel/collinear is not an identifiable left wall
+            distance = cross(offset, edge.tangent)/denominator
+            along = cross(offset, ray)/denominator
+            if distance <= 1e-8 or not 0. <= along <= edge.length_m:
+                continue
+            hits.append((distance, edge, along))
+        if not hits:
+            raise ValueError("left ray does not intersect a task wall; adjust heading and restart")
+        distance, edge, along = min(hits, key=lambda hit: (hit[0], hit[1].id))
+        candidates = [edge]
+        # Include the adjoining edge when the first hit is within the corner
+        # band, even if floating-point error put its own intersection outside.
+        corner = (edge.start if along <= corner_tolerance_m else
+                  edge.end if edge.length_m-along <= corner_tolerance_m else None)
+        if corner is not None:
+            candidates += [other for other in self.edges if other is not edge
+                           and min(math.dist(corner, other.start),
+                                   math.dist(corner, other.end)) <= 1e-8]
+        return min(candidates, key=lambda e: (round(abs(wrap(e.yaw_rad-pose.yaw)), 12), e.id))
+
     def pose_edge_clearance(self, pose, edge, hull_half_length, hull_half_width,
                             brush_x_m=None, brush_tip_y_m=None):
         """Return the signed clearance of a pose envelope from one boundary edge."""

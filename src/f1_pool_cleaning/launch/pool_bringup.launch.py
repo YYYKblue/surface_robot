@@ -38,7 +38,7 @@ def generate_launch_description():
         DeclareLaunchArgument("output_enabled", default_value="false", choices=["true", "false"],
                               description="Enable bridge hardware permissions and cleaning output"),
         DeclareLaunchArgument("edge_task_enabled", default_value="true", choices=["true", "false"]),
-        DeclareLaunchArgument("start_policy", default_value="nearest_reachable", choices=["nearest_reachable", "specified"]),
+        DeclareLaunchArgument("start_policy", default_value="left_ray", choices=["left_ray", "specified", "nearest_reachable"]),
         DeclareLaunchArgument("default_edge_id", default_value="edge_0"),
         DeclareLaunchArgument("config", default_value=str(share / "config/pool_cleaning.yaml")),
         DeclareLaunchArgument("bridge_config", default_value=str(bridge / "config/bridge.yaml")),

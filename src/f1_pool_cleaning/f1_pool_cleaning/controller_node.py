@@ -12,7 +12,6 @@ from rclpy.time import Time
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from geometry_msgs.msg import PoseWithCovarianceStamped
-from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from f1_interfaces.msg import ActuatorCommand, EdgeTarget, WallObservation
@@ -23,8 +22,7 @@ from .config import Config
 from .geometry import PoolModel
 from .mission import Mission, Feedback, Pose, Effort, command_fields
 from .lease import Lease
-from .autonomous import AutonomousMission
-from .navigation import Navigator, NavigationConfig, NavigationScan
+from .autonomous import AutonomousMission, ApproachConfig
 
 
 class PoolController(Node):
@@ -82,30 +80,31 @@ class PoolController(Node):
             "boundary_xy", self.derived_geometry.get("boundary_xy") or [0.0])
         self.default_edge_id = self._declare_readonly("default_edge_id", "edge_0")
         self.start_policy = self._declare_readonly("start_policy", "specified")
-        if self.start_policy not in ("specified", "nearest_reachable"):
-            raise ValueError("start_policy must be specified or nearest_reachable")
+        # Accept the old configuration spelling, but never invoke its planner.
+        if self.start_policy == "nearest_reachable":
+            self.get_logger().warning("nearest_reachable is retired; using left_ray")
+            self.start_policy = "left_ray"
+        if self.start_policy not in ("specified", "left_ray"):
+            raise ValueError("start_policy must be specified or left_ray")
         self.pool = self._build_pool()
         if self.live and (self.get_parameter("use_sim_time").value or not self.config.fifth_left_sign):
             self.destroy_node()
             raise ValueError("hardware output requires system time and known fifth_left_sign")
         self.add_on_set_parameters_callback(self._validate_parameters)
         self.automatic = bool(self.edge_task_enabled and self.map_path)
-        if self.start_policy == "nearest_reachable" and not self.automatic:
-            raise ValueError("nearest_reachable requires map:= and edge_task_enabled=true")
+        if self.start_policy == "left_ray" and not self.automatic:
+            raise ValueError("left_ray requires map:= and edge_task_enabled=true")
         if self.automatic:
-            from .map_profile import load_occupancy
-            navigation = NavigationConfig(**{
-                field.name: self._declare_readonly("navigation_"+field.name, field.default)
-                for field in fields(NavigationConfig)})
-            self.mission = AutonomousMission(
-                self.config, self.pool, Navigator(load_occupancy(self.map_path), self.config, navigation))
+            approach = ApproachConfig(**{
+                field.name: self._declare_readonly("approach_"+field.name, field.default)
+                for field in fields(ApproachConfig)})
+            self.mission = AutonomousMission(self.config, self.pool, approach)
         else:
             # Explicit, map-free fixtures and standalone legacy wall following.
             self.mission = Mission(self.config)
         self.requested_start_edge = None
         self.wall_after_ns = 0
         self.synced_target_generation = -1
-        self.navigation_scan = None
         self.selected_edge = None
         self.edge_generation = 0
         self.edge_task_id = f"edge-task-{int(time.time() * 1000)}"
@@ -137,9 +136,6 @@ class PoolController(Node):
             self.tf_listener = TransformListener(self.tf_buffer, self)
         if not self.use_map_tf:
             self.pose_sub = self.create_subscription(PoseWithCovarianceStamped, "/pool_cleaning/map_pose", self._pose, qos)
-        if self.automatic:
-            self.scan_sub = self.create_subscription(
-                LaserScan, self._declare_readonly("scan_topic", "/pavo2_scan"), self._navigation_scan, qos)
         self.preview_pub = self.create_publisher(ActuatorCommand, "/pool_cleaning/command_preview", 2)
         self.status_pub = self.create_publisher(String, "/pool_cleaning/status", 5)
         self.lease = Lease(self) if self.live else None
@@ -387,51 +383,14 @@ class PoolController(Node):
         yaw = math.atan2(2*(q.w*q.z + q.x*q.y), 1 - 2*(q.y*q.y + q.z*q.z))
         self._accept_pose(Pose(stamp_ns(tf.header.stamp), t.x, t.y, yaw))
 
-    def _navigation_scan(self, msg):
-        """Raw scan freshness/obstacles are independent of successful wall fitting."""
-        from tf2_ros import TransformException
-        source_stamp = stamp_ns(msg.header.stamp)
-        if self.navigation_scan and source_stamp <= self.navigation_scan.stamp_ns:
-            return
-        if (source_stamp <= 0 or not msg.header.frame_id or len(msg.ranges) < 12
-                or not all(math.isfinite(v) for v in (msg.angle_min, msg.angle_increment, msg.range_min, msg.range_max))
-                or msg.angle_increment == 0 or not 0 <= msg.range_min < msg.range_max):
-            self.navigation_scan = None
-            return
-        x = y = yaw = 0.
-        if msg.header.frame_id != self.config.base_frame:
-            try:
-                tf = self.tf_buffer.lookup_transform(self.config.base_frame, msg.header.frame_id,
-                                                     Time.from_msg(msg.header.stamp))
-            except TransformException:
-                self.navigation_scan = None
-                return
-            t, q = tf.transform.translation, tf.transform.rotation
-            if (not all(math.isfinite(v) for v in (t.x,t.y,q.x,q.y,q.z,q.w))
-                    or abs(q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w-1.) > .01):
-                self.navigation_scan = None
-                return
-            x,y = t.x,t.y
-            yaw = math.atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z))
-        points = tuple((x+r*math.cos(msg.angle_min+i*msg.angle_increment+yaw),
-                        y+r*math.sin(msg.angle_min+i*msg.angle_increment+yaw))
-                       for i,r in enumerate(msg.ranges) if math.isfinite(r) and msg.range_min <= r <= msg.range_max)
-        if len(points) < max(3, .05*len(msg.ranges)):
-            self.navigation_scan = None
-            return
-        self.navigation_scan = NavigationScan(source_stamp, points)
-        self.received["scan"] = time.monotonic()
-
     def _feedback(self):
-        return Feedback(self.wall, self.pose, self.navigation_scan) if self.pose is not None else None
+        return Feedback(self.wall, self.pose) if self.pose is not None else None
 
     def _stream_error(self, require_wall=None):
         if require_wall is None:
             require_wall = self.mission.wall_required
         now = time.monotonic()
         streams = [("pose", self.config.pose_max_age_sec)]
-        if self.automatic:
-            streams.append(("scan", self.mission.n.scan_max_age_sec))
         if require_wall:
             streams.insert(0, ("wall", self.config.wall_max_age_sec))
         for name, max_age in streams:
@@ -455,7 +414,6 @@ class PoolController(Node):
             now = self.get_clock().now().nanoseconds
             feedback = self._feedback()
             add("pose", self.mission._pose_error(feedback, now))
-            add("scan", self.mission.scan_error(feedback, now))
         if self.lease:
             add("bridge", self.lease.error(acquiring=True))
             if not self.lease.acquire.service_is_ready():
@@ -482,7 +440,7 @@ class PoolController(Node):
                 self.requested_start_edge = None
                 self.selected_edge = None
                 self.edge_generation += 1
-                self._publish_edge_target(valid=False,reason="automatic start: selecting a task wall")
+                self._publish_edge_target(valid=False,reason="start wall locked; pose-controlled approach")
                 if self.lease:
                     response.success, response.message = self.lease.begin()
                     if not response.success:
@@ -621,16 +579,16 @@ class PoolController(Node):
         if self.edge_task_enabled:
             required = self.mission.required if self.automatic else {}
             for edge in self.pool.edges:
+                if required and edge.id not in required:
+                    continue  # An L run only includes the selected edge and its suffix.
                 low, high = required.get(edge.id, (edge.clean_start_s_m, edge.clean_end_s_m))
                 points = [[edge.start[i] + edge.tangent[i]*(contact-self.config.brush_x_m)
                            - edge.left_normal[i]*self.config.wall_target_m for i in (0, 1)]
                           for contact in (low, high)]
                 segments.append(dict(edge_id=edge.id, points=points))
-        navigation = []
-        if self.automatic and self.mission.phase in ("NAVIGATING", "SETTLING"):
-            navigation = [[point.x, point.y] for point in self.mission.path]
         return dict(frame_id=self.config.map_frame, map_id=self.map_id,
-                    cleaning_segments=segments, navigation_path=navigation)
+                    cleaning_segments=segments, navigation_path=[],
+                    start_region=self.mission.start_region() if self.automatic else None)
 
     def _status(self):
         f = self._feedback()

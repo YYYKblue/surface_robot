@@ -20,7 +20,7 @@ def generate_launch_description():
                               description="Frozen map: .pbstream or the map .yaml beside it"),
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),
         DeclareLaunchArgument("localization_status_topic", default_value="/l_cleaning/localization_status"),
-        DeclareLaunchArgument("start_policy", default_value="nearest_reachable", choices=["nearest_reachable", "specified"]),
+        DeclareLaunchArgument("start_policy", default_value="left_ray", choices=["left_ray", "specified", "nearest_reachable"]),
         DeclareLaunchArgument("default_edge_id", default_value="edge_0"),
         DeclareLaunchArgument("output_enabled", default_value="false", choices=["true", "false"]),
         DeclareLaunchArgument("use_sim_time", default_value="false", choices=["true", "false"]),

@@ -1,12 +1,4 @@
-"""Directed cleaning intervals, independent of where a task starts."""
-from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class CleaningLeg:
-    edge_id: str
-    start: float
-    end: float
+"""Observed cleaning interval union and gaps; no repair-route generation."""
 
 
 def merge_intervals(intervals):
@@ -34,21 +26,3 @@ def missing_intervals(required, covered, tolerance):
     if high-cursor > tolerance:
         gaps.append((cursor, high))
     return gaps
-
-
-def initial_legs(edges, required, first_id, contact_s, overlap):
-    """Suffix, all other edges, then the first edge's uncleaned prefix.
-
-    For an open route the last-to-first transition is navigation, never a
-    fictitious closing wall. Edge identities and directions are preserved.
-    """
-    ids = [edge.id for edge in edges]
-    index = ids.index(first_id)
-    low, high = required[first_id]
-    contact_s = min(high, max(low, contact_s))
-    legs = [CleaningLeg(first_id, contact_s, high)]
-    for edge_id in ids[index+1:]+ids[:index]:
-        legs.append(CleaningLeg(edge_id, *required[edge_id]))
-    if contact_s > low:
-        legs.append(CleaningLeg(first_id, low, min(high, contact_s+overlap)))
-    return [leg for leg in legs if leg.end-leg.start > 1e-6]

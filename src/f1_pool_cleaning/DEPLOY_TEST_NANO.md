@@ -2,9 +2,9 @@
 
 文档核对：2026-10-31。本页适用于矩形任务；大 L 使用[独立任务入口与地图](../f1_l_cleaning/README.md)。通过 Qt App 操作时，自动任务使用“停止任务”“暂停任务”或“取消任务”；顶部红色“停止手动输出”只释放网关的手动租约。App 建图、选图和共享定位使用[受管入口](../f1_operator_gateway/README.md)，与下述完整 bringup 择一运行。
 
-当前任务使用冻结地图定位，默认 `start_policy=nearest_reachable`：优先尝试当前船体左侧可达墙边，再尝试其他墙边，每组按墙段距离和航向调整量排序。定位就绪后关刷导航至起点，沿顺时针墙边清洗，必要时回补起始段和遗漏区间；全部要求区间覆盖后才进入 `COMPLETE`，终点不固定为 `edge_3`。
+当前任务使用冻结地图定位，默认 `start_policy=left_ray`：沿船体 +y 射线选墙并锁定最近投影点，关刷旋转、前后移动和侧移进入旧版起始范围；不做路径搜索或环境碰撞检查。随后复用旧版沿墙/换边。矩形仅补齐起始边前段，L 形到终点停且不返回、不补洗。`COMPLETE` 表示路线执行完成，覆盖缺口单独记录。
 
-船体按长 50 cm、宽 45 cm 建模，左刷稳定中心墙距为 32–36 cm，目标 34 cm。相邻换边仍使用中心距前墙 30 cm 停止、0.5 s 后退右推和地图航向反馈右转，转向容差 ±20°，转向和整段换边时间超时默认关闭。非相邻边及补洗转场使用关刷导航。本文覆盖软件预览和现场记录要求；软件完成不等于已归档实船清洁效果证据。
+船体按长 50 cm、宽 45 cm 建模，左刷稳定中心墙距为 32–36 cm，目标 34 cm。相邻换边仍使用中心距前墙 30 cm 停止、0.5 s 后退右推和地图航向反馈右转，转向容差 ±20°，转向和整段换边时间超时默认关闭。矩形仅通过相邻转弯返回起始边补前段，L 形不返回、不补洗。本文覆盖软件预览和现场记录要求；软件完成不等于已归档实船清洁效果证据。
 
 ## 1. 同步和构建
 
@@ -79,7 +79,7 @@ bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano start
 
 没有 `LOCALIZATION_READY` 时 `/pool_cleaning/start` 会拒绝申请任务租约。定位跳变、TF/雷达过期或轨迹结束会关闭输出并进入 `PAUSED`；检查原因后调用 `cancel`，重新标定初始位姿，再次 `start`。
 
-`start` 返回后再次运行 `status`，检查 `lease_held=true` 和实际阶段。初始阶段为 `PLANNING → NAVIGATING → SETTLING → ACQUIRE_WALL → DOCK_WALL`；规划完成后才确定 `current_edge_id`，正式贴墙前不要求有效左墙线。`FOLLOW`/`CORRECT_HEADING` 是沿边清洗阶段；相邻换边沿用 `EDGE_STOP → MOVE_INWARD → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`。端点判断使用地图边投影，不等待物理停稳。规划失败或补洗仍有缺口时会暂停，应检查 `reason`。
+`start` 返回后检查 `lease_held=true`、`start_edge_id` 和实际动作阶段。初始阶段为 `APPROACH_START → ALIGN_START / MOVE_START_ALONG / MOVE_START_SIDE → ACQUIRE_WALL`，随后进入旧版 `APPROACH_WALL/FOLLOW/CORRECT_HEADING`。已在范围内时不离墙。相邻换边仍为 `EDGE_STOP → MOVE_INWARD → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`。L 形终点不返回；矩形只补起始边前段。`coverage_complete` 独立于路线 `COMPLETE`，缺口只显示不追加补洗。
 
 暂停、取消仍在终端 B 执行；快捷脚本尚无 `stop` 子命令，停止任务使用 ROS 服务：
 
@@ -168,7 +168,7 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 | 丢墙超过 1.5 秒 | `PAUSED`，`reason` 包含感知原因，需 cancel/start |
 | 可见左墙被遮挡，仅剩后方短墙 | 在恢复窗口内保持墙关联约束，禁止将短墙重标为左墙继续纠偏 |
 | 当前边投影达到 `edge_stop_m` | `EDGE_STOP`，随后执行一个停止指令周期、后退右推和右转；状态切换到下一条边 |
-| 执行四条边并补齐要求区间 | `remaining_contact_intervals` 无超容差缺口后进入 `COMPLETE`，`completed_edges` 包含四条边，所有输出关闭；仍有缺口时回补或暂停 |
+| 执行四条边及起始边前段 | 路线执行结束进入 `COMPLETE`，所有输出关闭；`coverage_complete` 和 `remaining_contact_intervals` 单独显示覆盖缺口，不追加补洗 |
 | 停止雷达或定位 | PAUSED；反馈恢复不自动续跑 |
 | 地图位姿正常更新 | 更新边进度和前墙距离，并通过 `EdgeTarget` 维持当前目标墙关联 |
 | 地图位姿发生超阈值跳变 | 定位管理器锁存 `PAUSED`，控制器关闭输出；反馈恢复后不自动续跑 |
@@ -228,4 +228,4 @@ ros2 bag record -o rectangle_one_loop_trial \
 
 记录 `edge_0` 到 `edge_3` 的实际墙距、夹角、靠墙和入口调整时间、30% 刷盘是否能推进、第五路双向纠偏是否振荡、每次 `EDGE_STOP` 触发位置、后退右推位移、转向误差、每条边的 `cleaned_intervals`、最终 `completed_edges` 和未覆盖原因。刷尖约距中心 0.33 m，34 cm 作为名义中心值；实际接触压缩仍需实船测量。
 
-一周任务的现场记录至少应包含：起始初始位姿、地图版本、实际选中起始边与 `run_id`，四条边及回补段的轨迹、相邻换边和关刷导航的停止原因与漂移，暂停/停止/取消/遥控接管记录，以及最终状态中的 `phase`、`completed_edges`、要求区间、已覆盖区间和剩余缺口。角部留白和短边有效清洗长度应单独标注，不能只凭最终 `COMPLETE` 声明全池面积已覆盖。
+一周任务的现场记录至少应包含：起始初始位姿、地图版本、实际选中起始边与 `run_id`，四条边及起始边补齐段的轨迹、简单靠近和相邻换边的停止原因与漂移，暂停/停止/取消/遥控接管记录，以及最终状态中的 `phase`、`completed_edges`、要求区间、已覆盖区间和剩余缺口。角部留白和短边有效清洗长度应单独标注，不能只凭最终 `COMPLETE` 声明全池面积已覆盖。

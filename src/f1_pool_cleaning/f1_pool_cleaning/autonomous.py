@@ -1,70 +1,81 @@
-"""Left-preferred wall acquisition and complete interval coverage of a task route.
+"""Left-ray acquisition with pose feedback, followed by the legacy wall control.
 
-Planning runs off the control thread. While waiting, the controller keeps
-publishing STOP with the ordinary lease and deadlines. Transit never brushes.
+Acquisition uses turn/forward/reverse/side commands only. It does not read an
+occupancy grid, search a path or gate motion on hull/brush/laser collisions.
+Rectangle routes close once to clean the starting prefix; open routes never
+return. Lease, pose freshness and wall feedback remain owned by the adapters
+and the original Mission state machine.
 """
-from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 import math
 
-from .coverage import CleaningLeg, initial_legs, merge_intervals, missing_intervals
+from .coverage import merge_intervals, missing_intervals
 from .geometry import wrap
 from .mission import Mission, Effort
-from .navigation import PlanningError, Waypoint
+
+
+@dataclass(frozen=True)
+class ApproachConfig:
+    along_tolerance_m: float = .10
+    heading_tolerance_rad: float = math.radians(20.)
+    arrival_hold_sec: float = .20
+    corner_tolerance_m: float = .01
+    coverage_tolerance_m: float = .05
+    coverage_overlap_m: float = .10
+
+    def validate(self, control):
+        if any(not math.isfinite(v) or v <= 0 for v in vars(self).values()):
+            raise ValueError("approach parameters must be positive and finite")
+        if (self.heading_tolerance_rad >= control.edge_heading_tolerance_rad
+                or self.along_tolerance_m >= control.edge_select_max_distance_m/2
+                or self.coverage_overlap_m < self.coverage_tolerance_m):
+            raise ValueError("invalid approach heading, position or coverage tolerances")
+        return self
 
 
 class AutonomousMission(Mission):
-    NAV_PHASES = ("PLANNING", "NAVIGATING", "SETTLING", "ACQUIRE_WALL", "DOCK_WALL")
+    APPROACH_PHASES = ("APPROACH_START", "ALIGN_START", "MOVE_START_ALONG", "MOVE_START_SIDE")
 
-    def __init__(self, config, pool, navigator):
+    def __init__(self, config, pool, approach=ApproachConfig()):
         super().__init__(config)
-        self.pool, self.navigator, self.n = pool, navigator, navigator.n
-        self.navigator.candidate_edges = pool.edges
-        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wall-navigation")
-        self.future = None
+        self.pool, self.a = pool, approach.validate(config)
+        self.closed = math.dist(pool.edges[-1].end, pool.edges[0].start) <= 1e-8
         self.requested_edge_id = None
         self.target_generation = 0
         self.required = {}
-        self.legs = []
-        self.leg = None
-        self.path = []
-        self.path_index = 0
-        self.repair_pass = 0
-        self.stage_since = 0
-        self.previous_pose = None
-        self.coverage_anchor = None
+        self.start_edge_id = None
+        self.start_s = None
+        self.nearest_wall_point = None
+        self.remaining_edges = []
+        self.finished_edges = []
         self.first_contact = None
+        self.prefix_end = None
+        self.returning_to_start = False
+        self.coverage_anchor = None
+        self.arrived_since = None
         self.wall_after_ns = 0
-        self.settle_since = None
-        self.best_progress = math.inf
-        self.progress_since = 0
-        self.replan_goal = None
-        self.replans = 0
+        self.stage_since = 0
 
     @property
     def active(self):
-        return self.phase in self.NAV_PHASES or super().active
+        return self.phase in self.APPROACH_PHASES + ("ACQUIRE_WALL",) or super().active
 
     @property
     def wall_required(self):
-        if self.phase in self.TRANSFER_PHASES:
-            return super().wall_required
-        return self.phase not in ("PLANNING", "NAVIGATING", "SETTLING", "ACQUIRE_WALL", "ACQUIRING", "IDLE")
+        return super().wall_required
 
     @property
     def target_wall_enabled(self):
-        return self.phase not in ("PLANNING", "NAVIGATING", "SETTLING", "COMPLETE", "CANCELLED")
+        return (self.edge is not None and self.phase not in self.APPROACH_PHASES
+                + ("ACQUIRING", "IDLE", "COMPLETE", "CANCELLED", "STOPPED"))
 
     def close(self):
-        if self.future is not None:
-            self.future.cancel()
-        self.executor.shutdown(wait=False, cancel_futures=True)
+        pass  # no background planning worker
 
     def halt(self, reason, phase="PAUSED"):
         super().halt(reason, phase)
         self.coverage_anchor = None
-        if self.future is not None:
-            self.future.cancel()
-            self.future = None
+        self.arrived_since = None
 
     def configure_edge(self, pool, edge, task_id=""):
         if self.active or self.phase == "ACQUIRING":
@@ -74,14 +85,8 @@ class AutonomousMission(Mission):
         self.requested_edge_id = edge.id
         return True, f"next task starts on {edge.id}"
 
-    def scan_error(self, f, now):
-        scan = getattr(f, "scan", None)
-        if scan is None or scan.stamp_ns <= 0 or not 0 <= now-scan.stamp_ns < self.n.scan_max_age_sec*1e9:
-            return "fresh navigation laser scan required"
-        return ""
-
     def error(self, f, now, allow_invalid_wall=False):
-        error = self._pose_error(f, now) or self.scan_error(f, now)
+        error = self._pose_error(f, now)
         if error or not self.wall_required:
             return error
         return super().error(f, now, allow_invalid_wall)
@@ -89,366 +94,244 @@ class AutonomousMission(Mission):
     def start(self, f, now, allow_wall_recovery=False):
         if self.phase not in ("IDLE", "CANCELLED", "STOPPED", "COMPLETE"):
             return False, "cancel before restarting; paused tasks never resume automatically"
-        error = self._pose_error(f, now) or self.scan_error(f, now)
+        error = self._pose_error(f, now)
         if error:
             return False, error
-        self.halt("selecting a reachable start edge", "PLANNING")
-        self.started_ns = self.last_update_ns = self.stage_since = now
-        self.previous_pose = f.pose
-        self.required, self.cleaned_by_edge, self.completed_edges = {}, {}, []
-        self.cleaned_intervals, self.legs, self.path = [], [], []
-        self.edge = self.leg = self.first_contact = None
-        self.repair_pass = 0
-        self.replans = 0
-        self.replan_goal = None
-        self.plan_start = f.pose
-        self.future = None  # submitted only after a hardware lease is granted
-        self.last_effort = self._stop_effort(now, f.pose)
-        return True, "automatic task accepted; inspect status for planning and wall acquisition"
-
-    def _initial_plan(self, pose, requested):
-        nav = self.navigator
-        required = {edge.id: nav.usable_interval(edge) for edge in self.pool.edges}
-        candidates = []
-        for edge in self.pool.edges:
-            if requested and edge.id != requested:
-                continue
-            low, high = required[edge.id]
-            projection = edge.project(pose, self.c.brush_x_m, self.c.brush_tip_y_m)
-            contact = min(high-self.n.coverage_overlap_m, max(low, projection.contact_s_m))
-            goal = nav.edge_pose(edge, contact, self.n.approach_distance_m)
-            # Prefer walls on the current brush side (base_link +y), then
-            # distance and heading. Ignore numerical noise at the fore/aft
-            # axis; non-left walls remain candidates if left ones cannot be reached.
-            non_left = projection.left_offset_m <= 1e-6
-            candidates.append((non_left, projection.distance_to_segment_m,
-                               abs(wrap(edge.yaw_rad-pose.yaw)), edge.id, edge, contact, goal))
-        failures = []
-        for _, _, _, _, edge, contact, goal in sorted(candidates, key=lambda v: v[:4]):
-            try:
-                path = nav.plan(pose, goal)
-            except PlanningError as exc:
-                failures.append(f"{edge.id}: {exc}")
-                continue
-            legs = initial_legs(self.pool.edges, required, edge.id, contact, self.n.coverage_overlap_m)
-            return required, legs, path
-        raise PlanningError("no reachable task wall: "+"; ".join(failures))
-
-    def _set_leg(self, leg):
-        self.leg = leg
-        self.edge = self.pool.by_id[leg.edge_id]
-        self.edge_index = self.pool.edges.index(self.edge)
-        self.cleaned_intervals = list(self.cleaned_by_edge.get(leg.edge_id, []))
-        self._reset_edge_progress()
-        self.cleaned_intervals = list(self.cleaned_by_edge.get(leg.edge_id, []))
-        self.coverage_anchor = None
-        self.target_generation += 1
-
-    def _planning(self, f, now):
-        if self.future is None:
-            self.plan_start = f.pose
-            if not self.required:
-                self.future = self.executor.submit(self._initial_plan, f.pose, self.requested_edge_id)
-            elif self.replan_goal is not None:
-                self.future = self.executor.submit(self.navigator.plan, f.pose, self.replan_goal,
-                                                   self.departure_edge)
-            else:
-                goal = self.navigator.edge_pose(self.edge, self.leg.start, self.n.approach_distance_m)
-                self.future = self.executor.submit(self.navigator.plan, f.pose, goal, self.departure_edge)
-        if not self.future.done():
-            return self._stop_effort(now, f.pose)
         try:
-            result = self.future.result()
-        except Exception as exc:
-            self.halt(f"route planning failed: {exc}")
-            return None
-        self.future = None
-        if (math.hypot(f.pose.x-self.plan_start.x, f.pose.y-self.plan_start.y) > self.n.position_tolerance_m
-                or abs(wrap(f.pose.yaw-self.plan_start.yaw)) > self.n.heading_tolerance_rad):
-            self.reason = "boat moved during planning; replan from current pose"
-            return self._stop_effort(now, f.pose)
-        if not self.required:
-            self.required, self.legs, self.path = result
-            self._set_leg(self.legs.pop(0))
-        else:
-            self.path = result
-            self.replan_goal = None
-        self.path_index = 0
-        self.phase, self.reason = "NAVIGATING", f"brush off; approaching {self.edge.id}"
-        self.stage_since = self.progress_since = now
-        self.best_progress = math.inf
-        return self._stop_effort(now, f.pose)
+            edge = (self.pool.by_id[self.requested_edge_id] if self.requested_edge_id else
+                    self.pool.select_left_ray(f.pose, self.a.corner_tolerance_m))
+        except (KeyError, ValueError) as exc:
+            return False, str(exc)
+        projection = edge.project(f.pose, self.c.brush_x_m, self.c.brush_tip_y_m)
+        nearest_s = min(edge.length_m, max(0., projection.s_m))
+        low = edge.entry_s_m
+        high = edge.length_m-self.c.front_stop_m-self.a.along_tolerance_m-.01
+        if high < low:
+            return False, f"{edge.id} has no starting interval within the endpoint margins"
+        self.edge, self.start_edge_id = edge, edge.id
+        self.start_s = min(high, max(low, nearest_s))
+        self.nearest_wall_point = [edge.start[i]+edge.tangent[i]*nearest_s for i in (0, 1)]
+        self._reset_route()
+        index = self.pool.edges.index(edge)
+        ordered = list(self.pool.edges[index:])
+        if self.closed:
+            ordered += list(self.pool.edges[:index])
+        self.remaining_edges = [e.id for e in ordered[1:]]
+        self.required = {e.id: (e.clean_start_s_m,
+                               min(e.clean_end_s_m, e.length_m-self.c.front_stop_m+self.c.brush_x_m))
+                         for e in ordered}
+        self.finished_edges = []
+        self.first_contact = self.prefix_end = None
+        self.returning_to_start = False
+        self.started_ns = self.last_update_ns = now
+        self.target_generation += 1
+        return self.resume_after_acquire(f, now)
 
-    def _guarded(self, f, now, direction=0, side=0., contact=False, travel=None, edge=None):
-        p = f.pose
-        yaw = p.yaw
-        distance = self.n.lookahead_m if travel is None else min(self.n.lookahead_m, max(.01, travel))
-        dx = dy = 0.
-        if direction in (1,2):
-            sign = 1 if direction == 1 else -1
-            dx, dy = sign*distance*math.cos(yaw), sign*distance*math.sin(yaw)
-        if side:
-            sign = 1 if side > 0 else -1
-            dx += -sign*distance*math.sin(yaw)
-            dy += sign*distance*math.cos(yaw)
-        if direction in (3,4):
-            yaw += math.radians(8.)*(1 if direction == 3 else -1)
-        target = Waypoint(p.x+dx,p.y+dy,yaw)
-        turning = direction in (3, 4)
-        if (not turning
-                and not self.navigator.motion_clear(p, target, f.scan, contact, edge or self.edge)):
-            return None
-        return Effort(now, min(self._deadline(now,p), f.scan.stamp_ns+round(self.n.scan_max_age_sec*1e9)),
-                      direction=direction, side_left_percent=side)
+    def resume_after_acquire(self, f, now):
+        """Refresh feedback after the lease without changing the locked target."""
+        error = self._pose_error(f, now)
+        if error:
+            return False, error
+        self.halt(f"start wall {self.start_edge_id} locked; approaching starting range", "APPROACH_START")
+        self.stage_since = self.last_update_ns = now
+        self.last_effort = self._stop_effort(now, f.pose)
+        return True, "task accepted; approaching the selected wall's starting range"
 
-    def _navigate(self, f, now):
-        if self.path_index >= len(self.path):
-            self.phase, self.reason = "SETTLING", "at approach pose; waiting for pose to settle"
-            self.settle_since = None
-            return self._stop_effort(now, f.pose)
-        target, pose = self.path[self.path_index], f.pose
-        contact_edge = self.pool.by_id.get(target.contact_edge_id)
-        dx, dy = target.x-pose.x, target.y-pose.y
-        distance, angle = math.hypot(dx,dy), wrap(target.yaw-pose.yaw)
-        # Do not discard a short undocking/sideways step just because it is
-        # inside the general arrival tolerance: that step may clear the wall
-        # before a long translation parallel to it.
-        tolerance = min(self.n.position_tolerance_m, .01)
-        if distance <= tolerance and abs(angle) <= self.n.heading_tolerance_rad:
-            self.path_index += 1
-            self.best_progress = math.inf
-            self.progress_since = now
-            return self._stop_effort(now, pose)
-        metric = distance+.3*abs(angle)
-        if metric < self.best_progress-.01:
-            self.best_progress, self.progress_since = metric, now
-        elif now-self.progress_since > self.n.no_progress_sec*1e9:
-            self.halt("navigation made no progress")
-            return None
-        # Keep heading feedback aligned before translating near a wall.
-        if abs(angle) > self.n.heading_tolerance_rad:
-            return self._guarded(f, now, direction=3 if angle > 0 else 4,
-                                 contact=target.contact, edge=contact_edge)
-        along = dx*math.cos(pose.yaw)+dy*math.sin(pose.yaw)
-        across = -dx*math.sin(pose.yaw)+dy*math.cos(pose.yaw)
-        command = None
-        if distance > tolerance:
-            if abs(along) >= abs(across):
-                command = dict(direction=1 if along > 0 else 2, travel=abs(along))
-            else:
-                command = dict(side=self.c.side_percent*(1 if across > 0 else -1),
-                               travel=abs(across))
-        if command is not None:
-            effort = self._guarded(f,now,contact=target.contact,edge=contact_edge,**command)
-            if effort is None:
-                self.replans += 1
-                if self.replans > 3:
-                    self.halt("translation blocked after bounded replanning attempts")
-                    return None
-                self.replan_goal, self.departure_edge = self.path[-1], contact_edge or self.edge
-                self.phase, self.future = "PLANNING", None
-                self.reason = "live pose differs from path; replanning to next safe waypoint"
-                self.stage_since = now
-                return self._stop_effort(now,pose)
-            return effort
-        self.halt("waypoint position error cannot be reduced with available motions")
-        return None
+    def _inside_start(self, projection):
+        return (abs(projection.heading_error_rad) <= self.a.heading_tolerance_rad
+                and abs(projection.s_m-self.start_s) <= self.a.along_tolerance_m
+                and 0 < projection.lateral_distance_m
+                and projection.left_offset_m > 0
+                and projection.distance_to_segment_m <= self.c.edge_select_max_distance_m
+                and self.edge.length_m-projection.s_m > self.c.front_stop_m)
 
-    def _settle(self, f, now, previous):
-        goal = self.navigator.edge_pose(self.edge, self.leg.start, self.n.approach_distance_m)
-        if (math.hypot(f.pose.x-goal.x,f.pose.y-goal.y) > 2*self.n.position_tolerance_m
-                or abs(wrap(f.pose.yaw-goal.yaw)) > 2*self.n.heading_tolerance_rad):
-            self.departure_edge = self.edge
-            self.phase, self.future = "PLANNING", None
-            return self._stop_effort(now,f.pose)
-        if previous and f.pose.stamp_ns > previous.stamp_ns:
-            dt = (f.pose.stamp_ns-previous.stamp_ns)/1e9
-            stable = (math.hypot(f.pose.x-previous.x,f.pose.y-previous.y)/dt <= self.n.settled_speed_mps
-                      and abs(wrap(f.pose.yaw-previous.yaw))/dt <= self.n.settled_yaw_rate_radps)
-            if not stable:
-                self.settle_since = None
-            elif self.settle_since is None:
-                self.settle_since = now
-            elif now-self.settle_since >= self.n.settle_sec*1e9:
-                self.phase, self.reason = "ACQUIRE_WALL", "waiting for a fresh target-wall observation"
+    def _approach(self, f, now):
+        p = self.edge.project(f.pose, self.c.brush_x_m, self.c.brush_tip_y_m)
+        self.edge_projection = p
+        if self._inside_start(p):
+            if self.arrived_since is None:
+                self.arrived_since = now
+            elif now-self.arrived_since >= self.a.arrival_hold_sec*1e9:
+                self.phase, self.reason = "ACQUIRE_WALL", "in starting range; waiting for a fresh target wall"
                 self.wall_after_ns = self.stage_since = now
                 self.target_generation += 1
-        return self._stop_effort(now,f.pose)
+            return self._stop_effort(now, f.pose)
+        self.arrived_since = None
+        along = self.start_s-p.s_m
+        direction, side = 0, 0.
+        # A small exit band prevents action chatter. Exact entry bounds still
+        # gate handoff; the controller never requires an exact target point.
+        angle_limit = self.a.heading_tolerance_rad
+        if self.phase in ("MOVE_START_ALONG", "MOVE_START_SIDE"):
+            angle_limit += math.radians(5.)
+        if abs(p.heading_error_rad) > angle_limit:
+            phase, reason = "ALIGN_START", "aligning with the selected wall"
+            direction = 3 if p.heading_error_rad > 0 else 4
+        elif abs(along) > self.a.along_tolerance_m:
+            phase, reason = "MOVE_START_ALONG", "adjusting along-wall starting position"
+            direction = 1 if along > 0 else 2
+        elif p.lateral_distance_m <= 0 or p.distance_to_segment_m > self.c.edge_select_max_distance_m:
+            phase, reason = "MOVE_START_SIDE", "moving sideways into the starting range"
+            side = self.c.side_percent*(1 if p.lateral_distance_m > 0 else -1)
+        else:
+            phase, reason = "ALIGN_START", "aligning for wall-control handoff"
+            direction = 3 if p.heading_error_rad > 0 else 4
+        previous = self.last_effort
+        changing_motion = (previous is not None and (previous.direction or previous.side_left_percent)
+                           and (previous.direction, previous.side_left_percent) != (direction, side))
+        if phase != self.phase or changing_motion:
+            self.phase, self.reason = phase, reason
+            return self._stop_effort(now, f.pose)
+        return Effort(now, self._deadline(now, f.pose), direction=direction, side_left_percent=side)
 
-    def _dock(self, f, now):
-        w = f.wall
-        if (w is None or not w.valid or w.stamp_ns <= self.wall_after_ns
-                or not 0 <= now-w.stamp_ns < self.c.wall_max_age_sec*1e9):
-            if now-self.stage_since > self.n.wall_acquire_timeout_sec*1e9:
+    def _acquire_wall(self, f, now):
+        p = self.edge.project(f.pose, self.c.brush_x_m, self.c.brush_tip_y_m)
+        if not self._inside_start(p):
+            self.phase, self.reason = "APPROACH_START", "drifted outside starting range; correcting pose"
+            self.arrived_since = None
+            self.target_generation += 1
+            return self._stop_effort(now, f.pose)
+        wall = f.wall
+        fresh = (wall is not None and wall.valid and wall.stamp_ns > self.wall_after_ns
+                 and 0 <= now-wall.stamp_ns < self.c.wall_max_age_sec*1e9
+                 and math.isfinite(wall.distance) and wall.distance > 0 and math.isfinite(wall.angle))
+        if not fresh:
+            if now-self.stage_since >= self.c.wall_recovery_sec*1e9:
                 self.halt("target wall acquisition timed out")
                 return None
-            return self._stop_effort(now,f.pose)
-        if not all(math.isfinite(v) for v in (w.angle,w.distance)) or w.distance <= 0:
-            self.halt("invalid target wall measurement")
-            return None
-        # Tight alignment precedes side motion. The map and observed wall must
-        # agree; the perception target filter already enforces that identity.
-        # Once acquired, use the deployed wall controller's distance/heading
-        # commands. Raster wall thickness must not prevent physical contact.
-        deadline = min(self._deadline(now, f.pose, w),
-                       f.scan.stamp_ns + round(self.n.scan_max_age_sec*1e9))
-        if abs(w.angle) > self.c.heading_correction_deadband_rad:
-            self.phase = "DOCK_WALL"
-            return Effort(now, deadline, direction=3 if w.angle > 0 else 4)
-        if not self.c.side_off_distance_m <= w.distance <= self.c.side_on_distance_m:
-            self.phase = "DOCK_WALL"
-            side = self.c.side_percent*(1 if w.distance > self.c.side_on_distance_m else -1)
-            return Effort(now, deadline, side_left_percent=side)
-        self.phase, self.reason = "FOLLOW", f"cleaning {self.edge.id} interval"
-        self.last_edge_s = None
+            return self._stop_effort(now, f.pose)
+        # The old _start_edge geometry gates were satisfied by _inside_start.
+        # Keep the run's route/coverage state and hand over to _update_edge.
+        self._reset_edge_progress()
+        self.phase, self.reason = "APPROACH_WALL", "target wall confirmed; legacy wall control"
         self.last_scan = -1
         self.wall_lost_since_ns = None
-        self.coverage_anchor = None
-        return self._stop_effort(now,f.pose)
+        return self._stop_effort(now, f.pose, wall)
 
     def _record_coverage(self, projection, now):
-        # Coverage is integrated from the *previous* still-valid brush command,
-        # never from a new command applied retroactively to the last interval.
-        pass
+        pass  # record the previous effective brush command in _coverage instead
+
+    def _first_brush(self, f, effort):
+        if self.first_contact is not None or effort is None or effort.brush_percent <= 0:
+            return
+        contact = self.edge.project(f.pose, self.c.brush_x_m, self.c.brush_tip_y_m).contact_s_m
+        self.first_contact = (self.edge.id, contact)
+        low, high = self.required[self.edge.id]
+        if self.closed and contact > low+self.a.coverage_tolerance_m:
+            self.prefix_end = min(high, contact+self.a.coverage_overlap_m)
+            self.remaining_edges.append(self.start_edge_id)
+        elif not self.closed:
+            self.required[self.edge.id] = (min(high, max(low, contact)), high)
+        self.coverage_anchor = (contact, f.pose.stamp_ns)
 
     def _coverage(self, f, now):
-        projection = self.edge.project(f.pose,self.c.brush_x_m,self.c.brush_tip_y_m)
-        w, effort = f.wall, self.last_effort
-        good = (w is not None and w.valid and effort is not None and effort.brush_percent > 0
-                and now < effort.valid_until_ns
-                and self.c.side_off_distance_m <= w.distance <= self.c.side_on_distance_m
-                and abs(w.angle) <= self.c.heading_deadband_rad)
+        p = self.edge.project(f.pose, self.c.brush_x_m, self.c.brush_tip_y_m)
+        wall, previous = f.wall, self.last_effort
+        good = (wall is not None and wall.valid and previous is not None
+                and previous.brush_percent > 0 and now < previous.valid_until_ns
+                and self.c.side_off_distance_m <= wall.distance <= self.c.side_on_distance_m
+                and abs(wall.angle) <= self.c.heading_deadband_rad)
         if good:
-            contact = projection.contact_s_m
-            if self.first_contact is None:
-                self.first_contact = (self.edge.id, contact)
             if self.coverage_anchor is not None:
-                last, stamp = self.coverage_anchor
-                if 0 < f.pose.stamp_ns-stamp <= 250_000_000 and 0 <= contact-last <= self.c.edge_progress_jump_m:
-                    lo, hi = self.required[self.edge.id]
-                    intervals = self.cleaned_by_edge.get(self.edge.id, [])+[(max(lo,last),min(hi,contact))]
-                    self.cleaned_by_edge[self.edge.id] = merge_intervals(intervals)
-            self.coverage_anchor = (contact, f.pose.stamp_ns)
+                contact, stamp = self.coverage_anchor
+                if (0 < f.pose.stamp_ns-stamp <= 250_000_000
+                        and 0 <= p.contact_s_m-contact <= self.c.edge_progress_jump_m):
+                    low, high = self.required[self.edge.id]
+                    intervals = self.cleaned_by_edge.get(self.edge.id, [])
+                    self.cleaned_by_edge[self.edge.id] = merge_intervals(
+                        intervals+[(max(low, contact), min(high, p.contact_s_m))])
+            self.coverage_anchor = (p.contact_s_m, f.pose.stamp_ns)
         else:
             self.coverage_anchor = None
         self.cleaned_intervals = list(self.cleaned_by_edge.get(self.edge.id, []))
-        self.completed_edges = [edge.id for edge in self.pool.edges if not missing_intervals(
-            self.required[edge.id],self.cleaned_by_edge.get(edge.id,[]),self.n.coverage_tolerance_m)]
-        return projection
-
-    def _begin_transfer(self, f, now):
-        return self._finish_leg(f,now)
-
-    def _next_task_edge(self):
-        if not self.legs:
-            return None
-        candidate = self.pool.by_id[self.legs[0].edge_id]
-        # Includes the closing corner of a rectangle started on any edge.
-        # The endpoints of an open L never meet here.
-        if math.dist(self.edge.end, candidate.start) <= 1e-6:
-            return candidate
-        return None
+        self._mark_edge_completed()
+        return p
 
     def _mark_edge_completed(self):
-        # Finishing a leg is not evidence that its earlier prefix was cleaned.
-        self.completed_edges = [edge.id for edge in self.pool.edges if not missing_intervals(
-            self.required[edge.id], self.cleaned_by_edge.get(edge.id, []), self.n.coverage_tolerance_m)]
+        self.completed_edges = [edge_id for edge_id, bounds in self.required.items()
+                                if not missing_intervals(bounds, self.cleaned_by_edge.get(edge_id, []),
+                                                         self.a.coverage_tolerance_m)]
 
-    def _finish_leg(self, f, now):
+    def _next_task_edge(self):
+        return self.pool.by_id[self.remaining_edges[0]] if self.remaining_edges else None
+
+    def _complete(self, f, now):
+        self.halt("rectangle route and starting prefix finished; inspect coverage gaps" if self.closed else
+                  "remaining L route finished; no return or repair", "COMPLETE")
+        self.last_effort = self._stop_effort(now, f.pose)
+
+    def _begin_transfer(self, f, now):
+        self.finished_edges.append(self.edge.id)
         self.coverage_anchor = None
-        # Keep the established reverse/right-push and closed-loop right turn
-        # for adjacent route edges. Navigation is reserved for acquisition,
-        # open-route returns, and repair legs that cannot use that transition.
-        next_leg = self.legs[0] if self.legs else None
-        next_edge = self._next_task_edge()
-        at_edge_end = self.leg.end >= self.required[self.edge.id][1] - self.n.coverage_tolerance_m
-        # Retain the original base_link-centre stopping distance on full legs.
-        # Contact coverage ends earlier because the brush is ahead of centre.
-        if next_leg and next_edge and next_leg.edge_id == next_edge.id and at_edge_end:
-            projection = self.edge.project(f.pose, self.c.brush_x_m, self.c.brush_tip_y_m)
-            if self.edge.length_m-projection.s_m > self.c.front_stop_m:
-                return super()._update_edge(f, now)
+        if not self.remaining_edges:
+            self._complete(f, now)
+        else:
             super()._begin_transfer(f, now)
-            return self.last_effort
-        if not self.legs:
-            missing = [CleaningLeg(edge.id, max(self.required[edge.id][0],a-self.n.coverage_overlap_m),
-                                   min(self.required[edge.id][1],b+self.n.coverage_overlap_m))
-                       for edge in self.pool.edges
-                       for a,b in missing_intervals(self.required[edge.id],self.cleaned_by_edge.get(edge.id,[]),
-                                                    self.n.coverage_tolerance_m)]
-            if not missing:
-                self.halt("all reachable cleaning intervals covered", "COMPLETE")
-                self.last_effort = self._stop_effort(now,f.pose)
-                return self.last_effort
-            if self.repair_pass >= self.n.repair_passes:
-                self.halt("coverage gaps remain after bounded repair passes")
-                return None
-            self.repair_pass += 1
-            self.legs = missing
-        self.departure_edge = self.edge
-        self.replans = 0
-        self._set_leg(self.legs.pop(0))
-        self.phase, self.reason = "PLANNING", f"brush off; planning transit to {self.edge.id}"
-        self.future = None
-        self.stage_since = now
-        self.last_effort = self._stop_effort(now,f.pose)
-        return self.last_effort
+
+    def _finish_transfer_to_next_edge(self, pose, now):
+        next_id = self.remaining_edges.pop(0)
+        super()._finish_transfer_to_next_edge(pose, now)
+        assert self.edge.id == next_id
+        self.returning_to_start = self.closed and self.edge.id == self.start_edge_id
+        self.cleaned_intervals = list(self.cleaned_by_edge.get(self.edge.id, []))
+        self.coverage_anchor = None
+        self.target_generation += 1
 
     def update(self, f, now):
         if not self.active:
             return None
-        error = self.error(f,now,allow_invalid_wall=True)
+        error = self.error(f, now, allow_invalid_wall=True)
         if error:
             self.halt(error)
             return None
-        if now < self.last_update_ns or (self.c.run_timeout_sec > 0 and now-self.started_ns >= self.c.run_timeout_sec*1e9):
-            self.halt("clock reversed or task timeout")
+        if now < self.last_update_ns or (self.c.run_timeout_sec > 0
+                                        and now-self.started_ns >= self.c.run_timeout_sec*1e9):
+            self.halt("clock reversed or run timeout")
             return None
-        previous = self.previous_pose
-        if previous and (math.hypot(f.pose.x-previous.x,f.pose.y-previous.y) > self.c.edge_progress_jump_m
-                         or abs(wrap(f.pose.yaw-previous.yaw)) > math.radians(25.)):
-            self.halt("pose jumped during automatic task")
-            return None
-        self.previous_pose, self.last_update_ns = f.pose, now
-        if self.phase in self.NAV_PHASES and now-self.stage_since > self.n.timeout_sec*1e9:
-            self.halt("navigation/acquisition timeout")
-            return None
-        if self.phase in self.TRANSFER_PHASES:
-            old_edge = self.edge
+        self.last_update_ns = now
+        if self.phase in self.APPROACH_PHASES:
+            effort = self._approach(f, now)
+        elif self.phase == "ACQUIRE_WALL":
+            effort = self._acquire_wall(f, now)
+        elif self.phase in self.TRANSFER_PHASES and self.phase != "APPROACH_NEXT_EDGE":
             effort = super()._update_edge(f, now)
-            if self.edge is not old_edge:
-                if not self.legs or self.legs[0].edge_id != self.edge.id:
-                    self.halt("legacy edge transfer did not match the planned cleaning route")
-                    return None
-                self._set_leg(self.legs.pop(0))
-            if effort is not None:
-                self.last_effort = effort
-            return effort
-        if self.phase == "PLANNING":
-            effort = self._planning(f,now)
-        elif self.phase == "NAVIGATING":
-            effort = self._navigate(f,now)
-        elif self.phase == "SETTLING":
-            effort = self._settle(f,now,previous)
-        elif self.phase in ("ACQUIRE_WALL", "DOCK_WALL"):
-            effort = self._dock(f,now)
         else:
-            projection = self._coverage(f,now)
-            self.edge_projection = projection
-            if projection.contact_s_m >= self.leg.end-self.n.coverage_tolerance_m/2:
-                effort = self._finish_leg(f,now)
+            p = self._coverage(f, now)
+            if (self.returning_to_start and self.prefix_end is not None
+                    and p.contact_s_m >= self.prefix_end-self.a.coverage_tolerance_m/2):
+                self.finished_edges.append(self.edge.id)
+                self._complete(f, now)
+                effort = self.last_effort
             else:
-                effort = super()._update_edge(f,now)
+                effort = super()._update_edge(f, now)
+                self._first_brush(f, effort)
         if effort is not None:
             self.last_effort = effort
         return effort
 
+    def start_region(self):
+        if self.start_edge_id is None:
+            return None
+        edge = self.pool.by_id[self.start_edge_id]
+        def point(along, distance):
+            return [edge.start[i]+edge.tangent[i]*along-edge.left_normal[i]*distance for i in (0, 1)]
+        low, high = self.start_s-self.a.along_tolerance_m, self.start_s+self.a.along_tolerance_m
+        maximum = self.c.edge_select_max_distance_m
+        return dict(edge_id=edge.id, nearest_wall_point=self.nearest_wall_point,
+                    reference_wall_point=point(self.start_s, 0.), heading_rad=edge.yaw_rad,
+                    along_tolerance_m=self.a.along_tolerance_m, maximum_wall_distance_m=maximum,
+                    polygon=[point(low, 0.), point(high, 0.), point(high, maximum), point(low, maximum)])
+
     def status(self):
-        return dict(automatic_start=True, requested_start_edge=self.requested_edge_id,
-                    first_brush_contact=self.first_contact, required_contact_intervals=self.required,
-                    remaining_contact_intervals={edge: missing_intervals(bounds,self.cleaned_by_edge.get(edge,[]),
-                                                                         self.n.coverage_tolerance_m)
-                                                 for edge,bounds in self.required.items()},
-                    active_cleaning_interval=None if self.leg is None else vars(self.leg),
-                    remaining_legs=[vars(leg) for leg in self.legs], repair_pass=self.repair_pass,
-                    navigation_waypoint=self.path_index, navigation_waypoint_count=len(self.path))
+        gaps = {edge_id: missing_intervals(bounds, self.cleaned_by_edge.get(edge_id, []),
+                                           self.a.coverage_tolerance_m)
+                for edge_id, bounds in self.required.items()}
+        return dict(automatic_start=True,
+                    acquisition_mode="specified_direct" if self.requested_edge_id else "left_ray_direct",
+                    requested_start_edge=self.requested_edge_id, start_edge_id=self.start_edge_id,
+                    start_region=self.start_region(), first_brush_contact=self.first_contact,
+                    required_contact_intervals=self.required, remaining_contact_intervals=gaps,
+                    coverage_complete=bool(self.required) and not any(gaps.values()),
+                    returning_to_start=self.returning_to_start, remaining_edges=list(self.remaining_edges),
+                    executed_edge_ids=list(dict.fromkeys(self.finished_edges)),
+                    completion_scope="rectangle_route" if self.closed else "remaining_l_route")
