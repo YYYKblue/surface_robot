@@ -1,0 +1,18 @@
+[Unit]
+Description=USV boot health snapshot (surface_ws)
+After=network-online.target pavo2-scan.service f1-operator.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=F1_WORKSPACE=/home/nvidia/surface_ws
+Environment=F1_USER=nvidia
+Environment=ROS_DOMAIN_ID=33
+Environment=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+ExecStart=/usr/local/sbin/usv_boot_health.sh
+TimeoutStartSec=60
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

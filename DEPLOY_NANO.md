@@ -390,7 +390,7 @@ ros2 launch f1_operator_gateway operator_system.launch.py \
 
 新入口复用现有雷达驱动，不启动、停止或替换 `pavo2-scan.service`。不要与旧的完整建图/定位/清洗 bringup 或另一个网关同时运行。确认现场串口、方向等配置后才指定 `output_enabled:=true`。
 
-仓库提供 `src/f1_operator_gateway/deploy/f1-operator.service` 和 `start-operator.sh`。服务模板按 Nano 用户 `nvidia`、工作空间 `/home/nvidia/surface_ws` 编写；安装前按实际路径修改 `User/WorkingDirectory/F1_WORKSPACE/ExecStart`。模板默认 `F1_OUTPUT_ENABLED=false`，实机需要在核对硬件许可后改为 `true`。
+仓库提供 `src/f1_operator_gateway/deploy/f1-operator.service` 和 `start-operator.sh`。服务模板按 Nano 用户 `nvidia`、工作空间 `/home/nvidia/surface_ws` 编写；安装前按实际路径修改 `User/WorkingDirectory/F1_WORKSPACE/ExecStart`。当前船体部署按操作者要求设置 `F1_OUTPUT_ENABLED=true`，开启串口、运动及第五路控制许可；单独执行 launch 的默认值仍为 false。仅预览时将服务环境变量改为 false。服务使用 `Restart=always`，也覆盖子节点退出后 ROS launch 返回成功的情况；执行 `systemctl stop` 不会触发自动重启。开机或重启后进入待机，不恢复旧动作。
 
 以下为目标机的一次性安装步骤；执行前关闭已占用同端口/同硬件的手工入口：
 
@@ -403,5 +403,20 @@ journalctl -u f1-operator.service -n 80 --no-pager
 ```
 
 服务使用 control-group 停止策略，退出时收回受管子进程。开机无地图时只待机，不自动恢复运动、建图或清洗。地图写入 Nano 的 `F1_WORKSPACE/maps/`。本文同步命令包含地图；仅更新源码时可加入 `--exclude='/maps/'`，避免覆盖 Nano 上的同名地图。
+
+开机健康检查的受管副本位于同一 `deploy/` 目录中的 `usv-boot-health.service` 与 `usv_boot_health.sh`。更新 Nano 现有服务：
+
+```bash
+sudo install -m 755 /home/nvidia/surface_ws/src/f1_operator_gateway/deploy/usv_boot_health.sh /usr/local/sbin/usv_boot_health.sh
+sudo install -m 644 /home/nvidia/surface_ws/src/f1_operator_gateway/deploy/usv-boot-health.service /etc/systemd/system/usv-boot-health.service
+sudo systemctl daemon-reload
+sudo systemctl enable usv-boot-health.service
+sudo systemctl start usv-boot-health.service
+cat /var/log/usv_boot_health.log
+```
+
+该服务在雷达和 App 服务启动后采集一次快照，记录系统时间、网络、服务状态、8765 端口、地图文件、配置中的雷达地址与串口设备，以及 8 秒 ROS 扫描/控制状态。它只订阅状态，不申请控制权、不打开串口、不发送运动命令。日志保留最新快照；`inactive (dead)` 表示一次性脚本已退出，检查 `Result` 与日志确认执行情况。
+
+2026-10-31 Nano 部署验证：App 服务及健康检查均已启用自启动；串口实际为稳定 by-id 路径对应的 `/dev/ttyACM0`，桥接回报 `READY`、CTRL/ACK 和 IMU 数据持续更新，WebSocket 地图列表返回 3 份有效地图。对 App 服务主进程发送 SIGINT 后，进程正常退出，systemd 约 5 秒后自动拉起；该验证没有发送运动指令，也没有重启整机。原配置备份在 Nano 的 `deploy_backups/operator-20261031_134505/`。
 
 本地集成测试只能使用隔离域和 localhost DDS 配置；不能让模拟雷达进入实机域。新增 `runtime_ros` 测试用合成扫描驱动真实 Cartographer，验证 WebSocket 建图、断线重连、三件套保存和重新加载，硬件输出始终关闭。
