@@ -9,7 +9,7 @@ import math
 
 PROTOCOL = "f1-operator-v1"
 MAX_PAYLOAD = 128 * 1024
-OPERATIONS = {"hello", "manual_input", "manual_stop", "task", "initial_pose"}
+OPERATIONS = {"hello", "manual_input", "manual_stop", "task", "initial_pose", "mapping"}
 DIRECTIONS = {"STOP", "FORWARD", "REVERSE", "LEFT", "RIGHT"}
 MODES = {"FRONT", "BOTH", "BACK"}
 TASKS = {"start", "pause", "stop", "cancel"}
@@ -65,6 +65,22 @@ def decode(raw):
         if type(reason) is not str or not 1 <= len(reason) <= 80:
             raise ValueError("invalid stop reason")
         return {"op": op, "reason": reason}
+    if op == "mapping":
+        action = packet.get("action")
+        if action not in {"start", "save", "save_end", "discard", "list", "preview", "load", "retry_export"}:
+            raise ValueError("invalid mapping action")
+        request_id = packet.get("request_id")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 80:
+            raise ValueError("mapping requires request_id")
+        result = dict(op=op, action=action, request_id=request_id)
+        if action in {"save", "save_end", "preview", "load", "retry_export"}:
+            from .map_store import MapStore
+            result["name"] = MapStore.name(packet.get("name", ""))
+            if action in {"preview", "load", "retry_export"} and not result["name"]:
+                raise ValueError("map name is required")
+        if action == "discard":
+            result["confirm"] = packet.get("confirm") is True
+        return result
     if op in ("task", "initial_pose"):
         request_id = packet.get("request_id", "")
         if type(request_id) is not str or len(request_id) > 80:

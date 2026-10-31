@@ -47,10 +47,11 @@ def nodes(context):
             "scan_topic": value("scan_topic"), "output_enabled": value("output_enabled"),
             "localization_status_topic": "/f1_localization/localization_status",
         }))
-    result.append(Node(package="f1_operator_gateway", executable="f1_operator_gateway", output="screen",
-        parameters=[dict(bind_address=value("bind_address"), port=int(value("port")),
-                         localization_prefix="/f1_localization",
-                         task_unavailable_reasons=ParameterValue(json.dumps(unavailable), value_type=str))]))
+    if value("start_gateway") == "true":
+        result.append(Node(package="f1_operator_gateway", executable="f1_operator_gateway", output="screen",
+            parameters=[dict(bind_address=value("bind_address"), port=int(value("port")),
+                             scan_topic=value("scan_topic"), localization_prefix="/f1_localization",
+                             task_unavailable_reasons=ParameterValue(json.dumps(unavailable), value_type=str))]))
     return result
 
 
@@ -63,6 +64,7 @@ def generate_launch_description():
         DeclareLaunchArgument("port", default_value="8765"),
         DeclareLaunchArgument("output_enabled", default_value="false", choices=["true", "false"]),
         DeclareLaunchArgument("start_bridge", default_value="true", choices=["true", "false"]),
+        DeclareLaunchArgument("start_gateway", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("start_localization", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("publish_lidar_tf", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("start_rviz", default_value="false", choices=["true", "false"]),

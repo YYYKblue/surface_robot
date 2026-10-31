@@ -46,3 +46,16 @@ def test_bad_initial_pose_rejected(fields):
     packet.update(fields)
     with pytest.raises(ValueError):
         decode(json.dumps(packet))
+
+
+def test_mapping_requests_require_ids_and_confine_file_names():
+    import json
+    from operator_gateway.protocol import decode
+    assert decode(json.dumps(dict(op='mapping', action='save', name=' 一号池 ', request_id='a')))['name'] == '一号池'
+    assert decode(json.dumps(dict(op='mapping', action='save', request_id='b')))['name'] == ''
+    assert not decode(json.dumps(dict(op='mapping', action='discard', request_id='c', confirm='true')))['confirm']
+    for packet in (dict(op='mapping', action='start'),
+                   dict(op='mapping', action='load', name='../secret', request_id='a'),
+                   dict(op='mapping', action='shell', request_id='a')):
+        with pytest.raises(ValueError):
+            decode(json.dumps(packet))

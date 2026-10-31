@@ -7,24 +7,26 @@ try:
     from PySide6.QtCore import QEvent, QTimer, Qt
     from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QGridLayout,
                                    QHBoxLayout, QLabel, QMainWindow, QPushButton,
-                                   QSpinBox, QTabWidget, QVBoxLayout, QWidget, QScrollArea)
+                                   QSpinBox, QTabWidget, QVBoxLayout, QWidget, QScrollArea, QLineEdit, QAbstractSpinBox)
 except ImportError:
     from PyQt5.QtCore import QEvent, QTimer, Qt
     from PyQt5.QtWidgets import (QApplication, QComboBox, QFrame, QGridLayout,
                                  QHBoxLayout, QLabel, QMainWindow, QPushButton,
-                                 QSpinBox, QTabWidget, QVBoxLayout, QWidget, QScrollArea)
+                                 QSpinBox, QTabWidget, QVBoxLayout, QWidget, QScrollArea, QLineEdit, QAbstractSpinBox)
 
 try:
     from .map_canvas import MapCanvas
     from .transport import SocketWorker
     from .task_state import PHASES, TASK_NAMES, blocker_text
+    from .mapping_panel import MappingPanel
 except ImportError:
     from map_canvas import MapCanvas
     from transport import SocketWorker
     from task_state import PHASES, TASK_NAMES, blocker_text
+    from mapping_panel import MappingPanel
 
 
-class OperatorWindow(QMainWindow):
+class OperatorWindow(MappingPanel, QMainWindow):
     def __init__(self, url, *, mock=False):
         super().__init__()
         self.setWindowTitle("F1 水面机器人控制台")
@@ -74,7 +76,7 @@ class OperatorWindow(QMainWindow):
         QLabel#title { font-size:22px; font-weight:600; }
         QLabel#muted { color:#687c8c; }
         QTabWidget::pane { border:0; }
-        QTabBar::tab { background:#eef2f4; border:1px solid #d5e0e5; border-bottom:0; border-radius:7px 7px 0 0; padding:10px 22px; }
+        QTabBar::tab { background:#eef2f4; border:1px solid #d5e0e5; border-bottom:0; border-radius:7px 7px 0 0; padding:10px 12px; }
         QTabBar::tab:selected { background:#2f80ed; color:#ffffff; border-color:#2f80ed; font-weight:600; }
         QPushButton:checked { background:#2f80ed; color:#ffffff; border-color:#2f80ed; }
         QPushButton:checked:hover { background:#256dcc; border-color:#256dcc; }
@@ -107,6 +109,9 @@ class OperatorWindow(QMainWindow):
         task_content = QWidget(); self._build_task(task_content)
         task = QScrollArea(); task.setWidgetResizable(True); task.setFrameShape(QFrame.NoFrame)
         task.setWidget(task_content); tabs.addTab(task, "清洗任务")
+        mapping_content = QWidget(); self._build_mapping(mapping_content)
+        mapping = QScrollArea(); mapping.setWidgetResizable(True); mapping.setFrameShape(QFrame.NoFrame)
+        mapping.setWidget(mapping_content); tabs.addTab(mapping, "建图与选图")
         camera = QFrame(); camera.setObjectName("card"); camera_layout = QVBoxLayout(camera); camera_layout.addWidget(QLabel("前向摄像头")); camera_label = QLabel("摄像头画面预留\n接入 WebRTC 后显示"); camera_label.setAlignment(Qt.AlignCenter); camera_label.setMinimumHeight(125); camera_label.setStyleSheet("background:#172a39;color:#a9bdc9;border-radius:8px;"); camera_layout.addWidget(camera_label); side_layout.addWidget(camera)
         self.status_bar = QLabel("等待网关状态"); self.status_bar.setObjectName("muted"); layout.addWidget(self.status_bar)
 
@@ -265,7 +270,9 @@ class OperatorWindow(QMainWindow):
         local_pending = bool(self.pending_requests)
         busy = packet.get("task_busy", False)
         selecting = self.pose_button.isChecked()
-        locked = bool(busy or local_pending or selecting or not fresh or not operator)
+        runtime = packet.get("runtime") or {}
+        typing = isinstance(QApplication.focusWidget(), (QLineEdit, QAbstractSpinBox))
+        locked = bool(busy or local_pending or selecting or not fresh or not operator or runtime.get("busy") or typing)
         if locked and not self.manual_locked:
             self._clear_manual()
         self.manual_locked = locked
@@ -354,6 +361,7 @@ class OperatorWindow(QMainWindow):
         self.task_reason.setText(str(task.get("reason", "")) if task_fresh else "")
         result = self.completed_results.get(kind)
         self.result_label.setText(result[1] if result else "")
+        self._refresh_mapping(fresh, operator, local_pending)
         for request_id, (when, _) in self.pending_requests.items():
             if time.monotonic()-when > 5:
                 self.status_bar.setText("操作结果尚未确认；不会自动重发。请查看任务状态或取消任务。")
@@ -402,6 +410,7 @@ class OperatorWindow(QMainWindow):
             self.last_telemetry_at = 0.
             self._clear_manual()
             self.pending_requests.clear()
+            self.capabilities.clear()
         self._refresh_controls()
 
     def _refresh_key_direction(self):
@@ -412,7 +421,13 @@ class OperatorWindow(QMainWindow):
         self.direction = "STOP"
 
     def eventFilter(self, obj, event):
+        if event.type() == QEvent.FocusIn and isinstance(obj, (QLineEdit, QAbstractSpinBox)) and hasattr(self, "brush_button"):
+            self._stop("text_input")
+        if event.type() == QEvent.WindowDeactivate and obj is self:
+            self._stop("window_deactivated")
         if self.isActiveWindow() and event.type() in (QEvent.KeyPress, QEvent.KeyRelease):
+            if isinstance(QApplication.focusWidget(), (QLineEdit, QAbstractSpinBox)):
+                return super().eventFilter(obj, event)
             key = event.key()
             if key in self._key_directions:
                 if self.manual_locked:
@@ -431,11 +446,14 @@ class OperatorWindow(QMainWindow):
         if packet.get("type") == "hello":
             self.client_id = packet.get("client_id")
             self.capabilities = set(packet.get("capabilities", []))
+            if "map_catalog" in self.capabilities:
+                self._send_request("mapping", action="list")
         elif packet.get("type") == "map":
             self.canvas.set_telemetry(packet)
         elif packet.get("type") == "telemetry":
             self.telemetry = packet
             self.last_telemetry_at = time.monotonic()
+            self._mapping_telemetry(packet)
             self.canvas.set_telemetry(packet)
             state = packet.get("state", {})
             self.status_bar.setText(f"设备：{state.get('state','—')} · 来源：{state.get('source','—')} · {state.get('reason','')}")
@@ -469,6 +487,7 @@ class OperatorWindow(QMainWindow):
         elif packet.get("type") == "reply":
             if not packet.get("pending"):
                 self.pending_requests.pop(packet.get("request_id"), None)
+            self._mapping_reply(packet)
             if packet.get("message"):
                 prefix = "操作反馈：" if packet.get("success") else "操作未完成："
                 self.status_bar.setText(prefix + str(packet["message"]))

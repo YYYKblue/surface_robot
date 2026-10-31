@@ -1,0 +1,23 @@
+[Unit]
+Description=F1 operator gateway and map runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nvidia
+WorkingDirectory=/home/nvidia/surface_ws
+Environment=ROS_DOMAIN_ID=33
+Environment=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+Environment=F1_WORKSPACE=/home/nvidia/surface_ws
+# Explicit opt-in to hardware output; match the boat's verified bridge configuration.
+Environment=F1_OUTPUT_ENABLED=false
+ExecStart=/bin/bash /home/nvidia/surface_ws/src/f1_operator_gateway/deploy/start-operator.sh
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+KillMode=control-group
+TimeoutStopSec=160
+
+[Install]
+WantedBy=multi-user.target

@@ -364,3 +364,35 @@ ros2 launch f1_operator_gateway operator_bringup.launch.py \
 ```
 
 该入口默认预览，不会自动 start。已有完整 bringup 时不要再运行它；仅启动网关即可，已有 L 定位使用 `localization_prefix:=/l_cleaning`。两类任务接口不再重映射。完整操作与验收边界见[网关](src/f1_operator_gateway/README.md)和 [App](operator_app/README.md)文档。
+
+
+## App 建图选图与开机服务
+
+本次新增受管入口，允许没有地图时开机待机，日常在 Windows App 完成建图、保存和选图。先同步源码并重新构建 `--packages-up-to f1_operator_gateway`，Windows 同步整个 `operator_app/` 并重新打包。先以前台预览模式验证：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/nvidia/surface_ws/install/local_setup.bash
+export ROS_DOMAIN_ID=33
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+ros2 launch f1_operator_gateway operator_system.launch.py \
+  workspace_root:=/home/nvidia/surface_ws bind_address:=0.0.0.0
+```
+
+新入口复用现有雷达驱动，不启动、停止或替换 `pavo2-scan.service`。不要与旧的完整建图/定位/清洗 bringup 或另一个网关同时运行。确认现场串口、方向等配置后才指定 `output_enabled:=true`。
+
+仓库提供 `src/f1_operator_gateway/deploy/f1-operator.service` 和 `start-operator.sh`。服务模板按 Nano 用户 `nvidia`、工作空间 `/home/nvidia/surface_ws` 编写；安装前按实际路径修改 `User/WorkingDirectory/F1_WORKSPACE/ExecStart`。模板默认 `F1_OUTPUT_ENABLED=false`，实机需要在核对硬件许可后改为 `true`。
+
+以下为目标机的一次性安装步骤；执行前关闭已占用同端口/同硬件的手工入口：
+
+```bash
+sudo install -m 644 /home/nvidia/surface_ws/src/f1_operator_gateway/deploy/f1-operator.service /etc/systemd/system/f1-operator.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now f1-operator.service
+systemctl status f1-operator.service --no-pager
+journalctl -u f1-operator.service -n 80 --no-pager
+```
+
+服务使用 control-group 停止策略，退出时收回受管子进程。开机无地图时只待机，不自动恢复运动、建图或清洗。地图写入 Nano `maps/`，该目录仍被默认同步排除，不会因源码更新而覆盖已有地图。
+
+本地集成测试只能使用隔离域和 localhost DDS 配置；不能让模拟雷达进入实机域。新增 `runtime_ros` 测试用合成扫描驱动真实 Cartographer，验证 WebSocket 建图、断线重连、三件套保存和重新加载，硬件输出始终关闭。

@@ -7,11 +7,11 @@ import pytest
 try:
     from PySide6.QtCore import QPointF, QPoint, Qt
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QTabWidget
 except ImportError:
     from PyQt5.QtCore import QPointF, QPoint, Qt
     from PyQt5.QtTest import QTest
-    from PyQt5.QtWidgets import QApplication
+    from PyQt5.QtWidgets import QApplication, QTabWidget
 
 from operator_app.map_canvas import MapCanvas
 from operator_app.transport import SocketWorker
@@ -166,3 +166,84 @@ def test_stop_cancel_and_wall_distance_follow_robot_state(app, monkeypatch):
         assert window.worker._take_outgoing()[-1]["action"] == "cancel"
     finally:
         window.close()
+
+
+def test_mapping_catalog_save_load_and_text_input_never_drives(app):
+    window = OperatorWindow('unused', mock=True)
+    window.show()
+    try:
+        QTest.qWait(350)
+        assert window.saved_maps.count() == 1
+        assert window.mapping_buttons['start'].isEnabled()
+        window._mapping_action('start')
+        QTest.qWait(250)
+        assert window.telemetry['runtime']['mode'] == 'mapping'
+        assert window.mapping_buttons['save_end'].isEnabled()
+        assert not window.pose_button.isEnabled()
+        assert not window.task_buttons['start'].isEnabled()
+        # Show mapping tab and type all movement keys, including space.
+        # Find tab through Qt ownership (works independently of layout index).
+        tabs = window.findChild(QTabWidget)
+        tabs.setCurrentIndex(2)
+        window.map_name.setFocus()
+        window.activateWindow()
+        QTest.keyClicks(window.map_name, 'wasd test')
+        assert window.map_name.text() == 'wasd test'
+        assert window.direction == 'STOP' and not window._pressed_keys
+        window.map_name.setText('测试池')
+        window._mapping_action('save_end')
+        QTest.qWait(350)
+        assert window.telemetry['runtime']['mode'] == 'idle'
+        assert window.saved_maps.currentData()['name'] == '测试池'
+        assert '测试池.pbstream' in window.mapping_result.text()
+        window._mapping_action('load')
+        QTest.qWait(300)
+        assert window.telemetry['runtime']['current_map'] == '测试池'
+        assert window.pose_button.isEnabled()
+        assert not window.task_buttons['start'].isEnabled()
+        window._mapping_action('preview')
+        QTest.qWait(250)
+        preview = window.preview_dialog.findChild(MapCanvas)
+        assert preview.telemetry.get('pose') is None
+        assert not preview.task_overlay
+        window.last_telemetry_at = time.monotonic()-2
+        window._refresh_controls()
+        assert not window.mapping_buttons['start'].isEnabled()
+        assert not window.mapping_buttons['load'].isEnabled()
+    finally:
+        if window.preview_dialog:
+            window.preview_dialog.close()
+        window.close()
+
+
+def test_reconnect_queries_state_without_replaying_old_commands(app, monkeypatch):
+    import json
+    import sys
+    from types import SimpleNamespace
+    worker = SocketWorker('unused')
+    connections = []
+    class Socket:
+        def __init__(self):
+            self.sent = []
+        def settimeout(self, value):
+            pass
+        def send(self, value):
+            self.sent.append(json.loads(value))
+        def close(self, **kwargs):
+            pass
+        def recv(self):
+            if len(connections) == 1:
+                worker.send_packet(dict(op='mapping', action='load', request_id='old', name='old-map'))
+            else:
+                worker.stop_requested.set()
+            raise ConnectionError('simulated disconnect')
+    def connect(*args, **kwargs):
+        connection = Socket()
+        connections.append(connection)
+        return connection
+    monkeypatch.setitem(sys.modules, 'websocket', SimpleNamespace(
+        create_connection=connect, WebSocketTimeoutException=TimeoutError))
+    worker.run()
+    assert len(connections) == 2
+    assert connections[1].sent[0]['op'] == 'hello'
+    assert all(packet.get('request_id') != 'old' for connection in connections for packet in connection.sent)

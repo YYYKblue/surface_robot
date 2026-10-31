@@ -24,6 +24,14 @@ Nano 旧工作空间已删除，先按[Nano 从零部署指南](DEPLOY_NANO.md)�
 原雷达与 IMU 联合入口及配置已删除，统一使用 `lidar_mapping.launch.py`。
 建图程序本身不发送运动指令；如需操纵设备，使用已有控制链路。
 
+## Windows App 建图（新增）
+
+完成一次性部署后，可在 Windows App 的“建图与选图”页执行开始建图、命名保存、保存并结束、地图预览和加载，无需日常打开 Linux 终端。Nano 常驻入口为 `f1_operator_gateway operator_system.launch.py workspace_root:=/home/nvidia/surface_ws`；它复用现有雷达服务。
+
+保存仍采用本文第 6 节的 Cartographer 快照与栅格导出链路，自动写入 Nano 工作空间 `maps/`。空名称使用时间戳；自定义名称重名时追加序号。加载地图后必须重新设置初始位姿。具体界面见 [App 操作](operator_app/README.md#建图与选图)，开机配置见 [部署指南](DEPLOY_NANO.md#app-建图选图与开机服务)。
+
+下面的手动终端流程保留用于独立建图和排查；不要与 App 受管模式重复启动。
+
 ## 1. 首次部署或源码更新后：同步与构建
 
 首次部署统一按 [DEPLOY_NANO.md](DEPLOY_NANO.md) 完成七个项目包的传输、依赖安装和编译。只加载系统 ROS `/opt/ros/humble`，Cartographer 由系统软件包提供。

@@ -22,9 +22,10 @@ from f1_interfaces.srv import AcquireControl, ReleaseControl
 from .protocol import ManualInput, decode
 from .task_control import TaskControl
 from .websocket_hub import WebSocketHub
+from .runtime import RuntimeControl
 
 
-class OperatorGateway(TaskControl, Node):
+class OperatorGateway(RuntimeControl, TaskControl, Node):
     TTL_NS = 250_000_000
 
     def __init__(self):
@@ -49,6 +50,7 @@ class OperatorGateway(TaskControl, Node):
         self._init_tasks()
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        self._init_runtime()
         self.control_state = {}
         self.control_received = 0.
         self.manual_generation = 0
@@ -73,7 +75,7 @@ class OperatorGateway(TaskControl, Node):
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(ControlState, "/f1/control_state", self._control, state_qos)
         self.create_subscription(OccupancyGrid, "/map", self._map, map_qos)
-        self.create_subscription(LaserScan, "/pavo2_scan", self._scan, state_qos)
+        self.create_subscription(LaserScan, self.get_parameter("scan_topic").value, self._scan, state_qos)
         self.tick_timer = self.create_timer(.02, self._tick)
         self.telemetry_timer = self.create_timer(1.0 / max(.5, float(self.get_parameter("telemetry_hz").value)), self._telemetry)
         self.get_logger().info(f"f1 operator gateway listening on ws://{address}:{port}")
@@ -91,6 +93,9 @@ class OperatorGateway(TaskControl, Node):
         self.control_received = time.monotonic()
 
     def _map(self, message):
+        if self.runtime_enabled and (not self.runtime_accept_map or
+                message.header.stamp.sec * 10**9 + message.header.stamp.nanosec < self.runtime_epoch_ns):
+            return
         info = message.info
         data = [int(value) for value in message.data]
         origin = info.origin
@@ -116,6 +121,7 @@ class OperatorGateway(TaskControl, Node):
         self.hub.broadcast({"type": "map", "map": self.map_data})
 
     def _scan(self, message):
+        self._runtime_scan(message)
         ranges = []
         for value in message.ranges:
             ranges.append(float(value) if math.isfinite(value) else None)
@@ -129,6 +135,7 @@ class OperatorGateway(TaskControl, Node):
             self._handle_event(event)
         self._read_pose()
         self._task_tick()
+        self._runtime_tick()
         if self.task_locks and (self.token or self.last_input is not None):
             self._stop_manual("automatic_task_active")
         if self.active_client and self.last_input_at is not None:
@@ -161,11 +168,13 @@ class OperatorGateway(TaskControl, Node):
             return
         if packet["op"] == "hello":
             self.hub.send(client_id, {"type": "hello", "protocol": "f1-operator-v1", "telemetry_hz": 10,
-                "client_id": client_id, "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks"]})
+                "client_id": client_id, "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks"]
+                    + (["mapping", "map_catalog"] if self.runtime_enabled else [])})
             if self.map_data:
                 self.hub.send(client_id, {"type": "map", "map": self.map_data})
             return
-        if packet["op"] in ("manual_input", "manual_stop", "task", "initial_pose"):
+        if packet["op"] in ("manual_input", "manual_stop", "task", "initial_pose", "mapping") and not (
+                packet["op"] == "mapping" and packet["action"] in ("list", "preview")):
             if self.active_client not in (None, client_id):
                 self.hub.send(client_id, {"type": "reply", "op": packet["op"],
                                          "request_id": packet.get("request_id", ""),
@@ -179,6 +188,8 @@ class OperatorGateway(TaskControl, Node):
             self._input(client_id, packet["input"])
         elif packet["op"] in ("task", "initial_pose"):
             self._operation_request(client_id, packet)
+        elif packet["op"] == "mapping":
+            self._runtime_request(client_id, packet)
 
     def _input(self, client_id, value: ManualInput):
         if self._tasks_busy():
@@ -291,9 +302,16 @@ class OperatorGateway(TaskControl, Node):
         self.manual_releases.append(self.release_client.call_async(ReleaseControl.Request(token=token)))
 
     def _read_pose(self):
+        if self.runtime_enabled and not self.runtime_accept_map:
+            self.pose = None
+            return
         try:
             transform = self.tf_buffer.lookup_transform("map", "base_link", Time())
         except Exception:
+            self.pose = None
+            return
+        stamp_ns = transform.header.stamp.sec * 10**9 + transform.header.stamp.nanosec
+        if self.runtime_enabled and stamp_ns < self.runtime_epoch_ns:
             self.pose = None
             return
         if not 0 <= self.get_clock().now().nanoseconds - (transform.header.stamp.sec * 10**9 + transform.header.stamp.nanosec) < 500_000_000:
@@ -306,11 +324,13 @@ class OperatorGateway(TaskControl, Node):
 
     def _map_scan(self):
         """Use the scan timestamp and its TF, including mounting translation/yaw."""
-        if not self.scan:
+        if not self.scan or (getattr(self, "runtime_enabled", False) and not self.runtime_accept_map):
             return None
         scan = self.scan
         stamp = scan["stamp"]
         ns = stamp["sec"] * 10**9 + stamp["nanosec"]
+        if getattr(self, "runtime_enabled", False) and ns < self.runtime_epoch_ns:
+            return None
         if not 0 <= self.get_clock().now().nanoseconds - ns < 500_000_000:
             return None
         try:
@@ -331,10 +351,11 @@ class OperatorGateway(TaskControl, Node):
                             "control_fresh": time.monotonic() - self.control_received < .3,
                             "pose": self.pose, "scan": self._map_scan(),
                             "task": self.tasks.get("rectangle", {}),
-                            "active_client": self.active_client, **self._task_telemetry()})
+                            "active_client": self.active_client, "runtime": self._runtime_view(), **self._task_telemetry()})
 
     def destroy_node(self):
         self._stop_manual("gateway_shutdown")
+        self._close_runtime()
         self.hub.close()
         return super().destroy_node()
 

@@ -17,6 +17,12 @@ MAX_AGE = .6
 
 
 class TaskControl:
+    def _runtime_busy(self):
+        return False
+
+    def _runtime_task_allowed(self):
+        return True
+
     def _init_tasks(self):
         self.declare_parameter("localization_prefix", "/pool_cleaning")
         self.declare_parameter("task_unavailable_reasons", "{}")
@@ -54,6 +60,12 @@ class TaskControl:
 
     def _task_status(self, kind, message):
         value = self._json_object(message)
+        if getattr(self, "runtime_enabled", False):
+            expected = self.runtime.get("current_map")
+            if (not self.runtime_accept_map or self.runtime["mode"] != "localization" or not expected
+                    or value.get("map_id") != str(self.map_store.path(expected).with_suffix(""))
+                    or type(value.get("stamp_ns")) is not int or value["stamp_ns"] < self.runtime_epoch_ns):
+                return
         self.tasks[kind], self.task_received[kind] = value, time.monotonic()
         # A stale/malformed terminal packet must never unlock a running task.
         if value.get("phase") not in TERMINAL:
@@ -66,7 +78,14 @@ class TaskControl:
             self.task_locks.discard(kind)
 
     def _localization(self, message):
-        self.localization = self._json_object(message)
+        value = self._json_object(message)
+        if getattr(self, "runtime_enabled", False):
+            expected = self.runtime.get("current_map")
+            if (not self.runtime_accept_map or self.runtime["mode"] != "localization" or not expected
+                    or value.get("map_id") != str(self.map_store.path(expected).with_suffix(""))
+                    or type(value.get("stamp_ns")) is not int or value["stamp_ns"] < self.runtime_epoch_ns):
+                return
+        self.localization = value
         self.localization_received = time.monotonic()
         if (self.initial_pose_stamp is not None
                 and self.localization.get("initial_pose_stamp_ns", 0) >= self.initial_pose_stamp):
@@ -87,7 +106,7 @@ class TaskControl:
         return value
 
     def _tasks_busy(self):
-        return bool(self.command_pending or self.task_locks)
+        return bool(self.command_pending or self.task_locks or self._runtime_busy())
 
     def _task_view(self, kind, *, for_start=False):
         value = dict(self.tasks.get(kind, {}))
@@ -95,6 +114,8 @@ class TaskControl:
         blockers = []
         def add(code, message):
             blockers.append(dict(code=code, message=message))
+        if not self._runtime_task_allowed():
+            add("runtime", "请先使用地图并完成定位，地图模式操作期间不能启动清洗")
         if not fresh:
             add("task_stale", self.task_unavailable_reasons.get(kind) or "任务未启动或状态已过期")
         if not self.task_clients[kind]["start"].service_is_ready():
@@ -139,6 +160,9 @@ class TaskControl:
         self.hub.send(client_id, result)
 
     def _operation_request(self, client_id, packet):
+        if not self._runtime_task_allowed() and (packet["op"] == "initial_pose" or packet.get("action") == "start"):
+            self._rpc_reply(client_id, packet, False, "当前模式不能设置定位或启动清洗")
+            return
         key = (client_id, packet.get("request_id"))
         previous = self.operation_replies.get(key) if key[1] else None
         if previous:
@@ -325,5 +349,5 @@ class TaskControl:
                     localization=loc, task_busy=self._tasks_busy(),
                     active_tasks=sorted(self.task_locks), operation_pending=bool(self.command_pending),
                     can_set_initial_pose=(not self._tasks_busy() and self.map_data is not None
-                        and loc["fresh"] and self.initial_pose_client.service_is_ready()),
+                        and self._runtime_task_allowed() and loc["fresh"] and self.initial_pose_client.service_is_ready()),
                     operator_available=self.active_client is None)

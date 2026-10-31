@@ -79,13 +79,12 @@ class MapCanvas(QWidget):
         if width <= 0 or height <= 0:
             return None
         data = mapping.get("data", [])
-        image = QImage(width, height, QImage.Format_RGB32)
-        for row in range(height):
-            for col in range(width):
-                index = row * width + col
-                value = int(data[index]) if index < len(data) else -1
-                image.setPixelColor(col, row, QColor("#536875") if value > 50 else
-                                    QColor("#ffffff") if value >= 0 else QColor("#eef2f3"))
+        # One byte per cell; avoid millions of Qt calls on the UI thread during SLAM.
+        if len(data) != width * height:
+            return None
+        pixels = bytes(2 if value > 50 else 1 if value >= 0 else 0 for value in data)
+        image = QImage(pixels, width, height, width, QImage.Format_Indexed8).copy()
+        image.setColorTable([QColor(color).rgb() for color in ("#eef2f3", "#ffffff", "#536875")])
         return image.mirrored(False, True)
 
     def _geometry(self):

@@ -1,6 +1,6 @@
 # surface_ws：水面清洗机器人 ROS 2 工作空间
 
-更新：2026-10-30，依据当前源码、启动文件和默认配置整理。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
+更新：2026-10-31，依据当前源码、启动文件和默认配置整理。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
 
 项目包含 PAVO2 纯雷达建图、固定地图定位、F103 串口控制、矩形四边清洗、大 L 两段墙清洗和 WebSocket 操作员网关。软件流程已实现，实船定位精度、执行器方向和清洗效果仍需现场验收。
 
@@ -15,7 +15,7 @@
 | [`f1_pool_cleaning`](src/f1_pool_cleaning/README.md) | 墙感知、关刷导航、沿墙控制、矩形四边任务及覆盖记录 |
 | [`f1_l_cleaning`](src/f1_l_cleaning/README.md) | 复用清洗控制器的开放大 L 路线，执行 A → B → C 两段墙 |
 | [`f1_operator_gateway`](src/f1_operator_gateway/README.md) | App 的 WebSocket 手动控制、任务服务和遥测入口 |
-| [`operator_app/`](operator_app/README.md) | Qt 操作员界面，包含地图、雷达、手动输入和任务按钮 |
+| [`operator_app/`](operator_app/README.md) | Qt 操作员界面，包含建图/选图、地图、雷达、手动输入和任务按钮 |
 | `maps/` | 本地地图资料；被 Git 忽略，克隆仓库和默认部署同步均不包含 |
 | `docs/`、`tools/` | 开发验收、历史试验记录和离线路线示意工具 |
 
@@ -51,7 +51,7 @@ Qt App ←→ WebSocket :8765 ←→ 网关 → f1_nano_bridge ←→ F103
 
 矩形任务包含四条边，大 L 包含两条边且不构造 C→A 清洗墙。默认按当前位姿选择可达起始边，关刷导航到起点，沿墙清洗并按需回补遗漏区间，全部要求区间覆盖后才完成。两种任务都保持墙在船左侧，共享 `/f1/*` 硬件接口；同一机器人仅运行一套 bridge 和定位，网关只允许一个清洗任务活动。组合入口可以让当前地图支持的控制器同时待命。
 
-App 支持 L／矩形任务选择、地图初始位姿发布、启动条件和完成结果显示。推荐使用[网关组合入口](src/f1_operator_gateway/README.md)启动一套共享定位和当前地图支持的任务；独立大 L bringup 使用网关 `localization_prefix:=/l_cleaning`，不再重映射任务接口。App 的 `manual_stop`、断线和输入超时只停止网关持有的手动会话；自动任务应使用自己的 `pause` / `cancel` 服务。
+App 的受管入口支持无地图待机、纯雷达建图、命名保存、地图列表/预览/加载；地图保存到 Nano 工作空间 `maps/`，空名称使用时间戳。App 支持 L／矩形任务选择、地图初始位姿发布、启动条件和完成结果显示。推荐使用[网关组合入口](src/f1_operator_gateway/README.md)启动一套共享定位和当前地图支持的任务；独立大 L bringup 使用网关 `localization_prefix:=/l_cleaning`，不再重映射任务接口。App 的 `manual_stop`、断线和输入超时只停止网关持有的手动会话；自动任务应使用自己的 `pause` / `cancel` 服务。
 
 固定地图定位现在由独立的 [`f1_localization`](src/f1_localization/README.md) 提供。可单独构建 `--packages-up-to f1_localization`，并使用 `ros2 launch f1_localization localization.launch.py map:=...` 启动；矩形和大 L 的原 bringup 命令保持不变。旧 `f1_pool_cleaning/pool_localization.launch.py` 保留为转发入口。首次升级需按[定位拆包升级](DEPLOY_NANO.md#定位拆包升级)清理旧安装残留。
 
@@ -115,7 +115,16 @@ ros2 service call /pool_cleaning/cancel std_srvs/srv/Trigger '{}'
 
 需要实际输出时，核对现场硬件配置后，在所选 bringup 命令加入 `output_enabled:=true`。若复用已有 bridge，加 `start_bridge:=false` 并在该 bridge 自身配置硬件许可。`pool_nano` 快捷脚本默认开启输出许可，与上述 launch 的默认预览行为不同。
 
-App 网关单独在另一终端运行：
+日常由 App 建图和选图，使用新的无地图受管入口（与其他完整 bringup 择一运行）：
+
+```bash
+ros2 launch f1_operator_gateway operator_system.launch.py \
+  workspace_root:=/home/nvidia/surface_ws bind_address:=0.0.0.0
+```
+
+该入口常驻 bridge 和网关，按 App 操作互斥切换建图与固定地图定位/清洗；默认硬件输出关闭，雷达复用现有常驻驱动。开机服务模板及部署见 [App 建图选图与开机服务](DEPLOY_NANO.md#app-建图选图与开机服务)。
+
+已有节点只需单独连接 App 时，在另一终端运行网关：
 
 ```bash
 ros2 launch f1_operator_gateway operator_gateway.launch.py bind_address:=0.0.0.0

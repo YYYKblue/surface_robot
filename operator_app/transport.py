@@ -58,34 +58,38 @@ class SocketWorker(QThread):
         except ImportError:
             self.status.emit("缺少 websocket-client，请安装 requirements.txt")
             return
-        try:
-            ws = websocket.create_connection(self.url, timeout=.2,
-                                             enable_multithread=True)
-            ws.settimeout(.05)
-            self.status.emit("已连接")
-            self._send_now(ws, {"op": "hello", "client": "f1-operator-qt", "version": 1})
-            while not self.stop_requested.is_set():
-                self._flush(ws)
-                try:
-                    raw = ws.recv()
-                except Exception as error:
-                    if "timed out" not in str(error).lower() and "timeout" not in str(error).lower():
-                        raise
-                    continue
-                if not raw:
-                    raise ConnectionError("网关已关闭连接")
-                if raw:
+        while not self.stop_requested.is_set():
+            ws = None
+            try:
+                ws = websocket.create_connection(self.url, timeout=.5, enable_multithread=True)
+                ws.settimeout(.05)
+                self.status.emit("已连接")
+                self._send_now(ws, {"op": "hello", "client": "f1-operator-qt", "version": 1})
+                while not self.stop_requested.is_set():
+                    self._flush(ws)
+                    try:
+                        raw = ws.recv()
+                    except websocket.WebSocketTimeoutException:
+                        continue
+                    if not raw:
+                        raise ConnectionError("网关已关闭连接")
                     try:
                         self.message.emit(json.loads(raw))
                     except (TypeError, ValueError):
                         self.status.emit("网关发送了无效数据")
-            try:
-                self._send_now(ws, {"op": "manual_stop", "reason": "app_closed"})
-                ws.close()
-            except Exception:
-                pass
-        except Exception as error:
-            self.status.emit("连接失败：" + str(error))
+            except Exception as error:
+                self.status.emit("连接失败：" + str(error) + "；正在重连")
+            finally:
+                with self.queue_lock:
+                    self.commands.clear()
+                    self.latest_manual = None
+                if ws is not None:
+                    try:
+                        self._send_now(ws, {"op": "manual_stop", "reason": "app_closed"})
+                    except Exception:
+                        pass
+                    ws.close(timeout=.2)
+            self.stop_requested.wait(.7)
 
     def _flush(self, ws):
         for packet in self._take_outgoing():
@@ -98,9 +102,14 @@ class SocketWorker(QThread):
     def _mock_loop(self):
         """Interactive UI fixture only; never opens a hardware connection."""
         import uuid
-        self.message.emit({"type": "hello", "client_id": "mock", "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks"]})
-        self.message.emit({"type": "map", "map": {"resolution": .02, "width": 160, "height": 100,
-            "frame_id": "map", "revision": 1, "origin": {"x": 0, "y": 0, "yaw": 0}, "data": [0]*16000}})
+        self.message.emit({"type": "hello", "client_id": "mock", "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks", "mapping", "map_catalog"]})
+        mock_map = {"resolution": .02, "width": 160, "height": 100,
+            "frame_id": "map", "revision": 1, "origin": {"x": 0, "y": 0, "yaw": 0}, "data": [0]*16000}
+        self.message.emit({"type": "map", "map": mock_map})
+        runtime = dict(mode="localization", phase="LOCALIZATION", session_id="mock-session", current_map="模拟地图",
+                       scan_fresh=True, pose_fresh=True, map_available=True, busy=False, message="模拟模式，不连接硬件",
+                       maps_directory="模拟工作空间/maps", last_saved=None)
+        catalog = [dict(name="模拟地图", valid=True, saved_at="模拟数据", reason="")]
         initialized = None
         active = None
         started = None
@@ -117,11 +126,52 @@ class SocketWorker(QThread):
         start_pose = dict(pose)
         while not self.stop_requested.wait(.1):
             now = time.monotonic()
-            ready = initialized is not None and now-initialized >= 1.
+            ready = initialized is not None and now-initialized >= 1. and runtime["mode"] == "localization"
             for packet in self._take_outgoing():
                 op = packet["op"]
                 success, message = True, "模拟操作已接受"
-                if op == "initial_pose":
+                fields = {}
+                if op == "mapping":
+                    action = packet["action"]
+                    if active and action not in ("list", "preview"):
+                        success, message = False, "请先停止清洗任务"
+                    elif action == "list":
+                        fields["maps"] = list(catalog)
+                    elif action == "preview":
+                        fields.update(preview=mock_map, name=packet["name"])
+                    elif action == "start" and runtime["mode"] != "mapping":
+                        initialized, ready = None, False
+                        runtime.update(mode="mapping", phase="MAPPING", session_id=uuid.uuid4().hex, current_map="")
+                        mock_map["revision"] += 1
+                        self.message.emit(dict(type="map", map=dict(mock_map)))
+                    elif action in ("save", "save_end") and runtime["mode"] == "mapping":
+                        from datetime import datetime
+                        base = packet.get("name", "").strip() or datetime.now().strftime("%Y%m%d_%H%M%S")
+                        name, index = base, 0
+                        while any(entry["name"] == name for entry in catalog):
+                            index += 1
+                            name = f"{base}_{index:02d}"
+                        catalog.insert(0, dict(name=name, valid=True, saved_at="模拟数据", reason=""))
+                        saved = dict(name=name, paths=[f"模拟工作空间/maps/{name}{s}" for s in (".pbstream", ".pgm", ".yaml")])
+                        fields["saved"] = saved
+                        runtime["last_saved"] = saved
+                        if action == "save_end":
+                            runtime.update(mode="idle", phase="IDLE")
+                            self.message.emit(dict(type="map", map=None))
+                    elif action == "discard" and runtime["mode"] == "mapping" and packet.get("confirm"):
+                        runtime.update(mode="idle", phase="IDLE")
+                        self.message.emit(dict(type="map", map=None))
+                    elif action == "load" and runtime["mode"] != "mapping":
+                        initialized, ready = None, False
+                        runtime.update(mode="localization", phase="LOCALIZATION", current_map=packet["name"], session_id=uuid.uuid4().hex)
+                        mock_map["revision"] += 1
+                        self.message.emit(dict(type="map", map=dict(mock_map)))
+                        for task in tasks.values():
+                            task.update(phase="IDLE", run_id="")
+                            task["actual_track"].update(run_id="", segments=[], point_count=0)
+                    else:
+                        success, message = False, "当前模式不支持此操作"
+                elif op == "initial_pose":
                     initialized, ready = now, False
                     pose = {key: packet[key] for key in ("x", "y", "yaw")}
                 elif op == "task":
@@ -140,7 +190,7 @@ class SocketWorker(QThread):
                 else:
                     continue
                 self.message.emit(dict(type="reply", request_id=packet.get("request_id"), op=op,
-                                       success=success, message=message))
+                                       success=success, message=message, **fields))
             if active:
                 elapsed = now-started
                 if elapsed < 3:
@@ -173,9 +223,10 @@ class SocketWorker(QThread):
                     if task["phase"] == "NAVIGATING" else [])
             self.message.emit(dict(type="telemetry", state=dict(state="READY", connected=True,
                 source="NANO", motion_authorized=False, allow_fifth_thruster=True), control_fresh=True,
-                pose=pose, scan=None, tasks=json.loads(json.dumps(tasks)), task_busy=bool(active),
+                pose=pose if runtime["mode"] != "idle" else None, scan=None,
+                runtime=dict(runtime), tasks=json.loads(json.dumps(tasks)) if runtime["mode"] == "localization" else {}, task_busy=bool(active),
                 operation_pending=False, active_tasks=[active] if active else [], active_client="mock",
-                can_set_initial_pose=active is None,
+                can_set_initial_pose=active is None and runtime["mode"] == "localization",
                 localization=dict(fresh=True, ready=ready, initial_pose_received=initialized is not None,
                     state="LOCALIZATION_READY" if ready else "LOCALIZATION_CHECK", map_id="mock-map",
                     pose_fresh=ready, scan_fresh=True, map_available=True, stable_sec=1.,
