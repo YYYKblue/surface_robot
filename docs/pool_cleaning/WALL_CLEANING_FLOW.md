@@ -1,6 +1,6 @@
 # 沿墙清洗流程图
 
-核对：2026-10-31。带地图任务使用 `AutonomousMission` 射线选墙及简单靠近，随后复用 `Mission` 沿墙与相邻换边。没有路径搜索、地图足迹或雷达环境碰撞门控，靠近阶段不绕障；定位、控制租约、通信期限、停止和取消仍生效。
+核对：2026-11-02，代码基线 `53692ef`。带地图任务使用 `AutonomousMission` 射线选墙及简单靠近，随后复用 `Mission` 沿墙与相邻换边。没有路径搜索、地图足迹或雷达环境碰撞门控，靠近阶段不绕障；定位、控制租约、通信期限、停止和取消仍生效。基本测试反馈与软件回归记录见[开发与验收记录](DEVELOPMENT_AND_ACCEPTANCE.md#7-测试和证据要求)。
 
 ## 总体流程
 
@@ -30,6 +30,28 @@ flowchart TD
 角点使用 1 cm 容差，按规定清洗方向与船头夹角较小者选择，相同则按边 ID 排序。无交点不延长墙、不回退最近墙。`specified/default_edge_id` 和 `set_edge` 仍可覆盖射线选择。
 
 起始参考位置采用船中心到有限墙段的最近点，并按入口/末端余量修正。默认到达范围为沿墙 ±10 cm、航向 ±20°、距墙段不超过 85 cm，墙在左侧、船在水侧，且未进入前墙 30 cm 停车区。连续满足 0.2 s 后确认墙面；已在范围内不先退到 60 cm。靠近期间只消费位姿反馈，确认墙面后才要求墙观测新鲜。
+
+选墙采用有向清洗切线与船头的夹角，而不是无方向直线的锐角；与射线平行/共线的墙不算有效交点。最近投影点与射线交点是两个不同概念。起始参考沿程位置限制在 `entry_s_m` 到 `墙长 - front_stop_m - approach_along_tolerance_m - 0.01 m` 内；区间不存在时拒绝启动。取得租约或靠近期间发生漂移，不会重新选墙或更换参考点。
+
+动作类型切换和运动方向反转先发一个停止指令周期，再继续动作；不把该周期解释为船体已物理停稳。进入范围后停止输出并等待时间戳晚于进入 `ACQUIRE_WALL` 时刻的新墙观测，最多等待 `wall_recovery_sec`；超时进入 `PAUSED`，漂出范围则重新靠近同一参考范围。
+
+### 起始范围与覆盖参数
+
+以下为当前默认值，在控制器 ROS 参数 YAML 中配置；修改后重启对应控制器。选择策略通过清洗 launch 的 `start_policy` 参数传入。
+
+| 参数 | 默认值 | 用途 |
+|---|---|---|
+| `start_policy` | `left_ray` | `specified` 可指定边；`nearest_reachable` 仅为已弃用的 `left_ray` 别名 |
+| `approach_corner_tolerance_m` | 0.01 m | 首次射线交点距公共端点的候选判定范围 |
+| `approach_along_tolerance_m` | 0.10 m | 沿墙参考位置容差 |
+| `approach_heading_tolerance_rad` | 0.349066 rad（20°） | 进入起始范围的航向容差；平移中的转向退出带另加 5° |
+| `edge_select_max_distance_m` | 0.85 m | 起始范围内船中心到有限墙段的最大距离 |
+| `approach_arrival_hold_sec` | 0.20 s | 连续满足到达条件的时间 |
+| `wall_recovery_sec` | 1.5 s | 初始确认墙面及沿墙短暂丢墙的等待上限 |
+| `approach_coverage_tolerance_m` | 0.05 m | 覆盖缺口容差及是否需要补起始前段的判据 |
+| `approach_coverage_overlap_m` | 0.10 m | 矩形前段补齐的目标重叠长度，受有效区间末端限制 |
+
+`can_start` 只表示当前启动前置门控通过。射线交点和起始区间在 start 请求中检查，因此按钮可用时仍可能因 L 形无交点或起始区间不足而拒绝启动。
 
 矩形记录实际首次有效开刷位置，绕行后补齐其前段并重叠 10 cm；不搜索其他缺口的补洗路线。L 形从 AB 中间开始只清后续 AB/BC，从 BC 开始只清后续 BC，到 C 停止，不返回也不补洗。覆盖统计只记录连续有效开刷进度；路线完成不保证全墙已覆盖。
 
@@ -119,7 +141,7 @@ flowchart TD
 /pool_cleaning/status               状态、原因、边进度和覆盖区间
 ```
 
-状态机的主要实现位于 [mission.py](../../src/f1_pool_cleaning/f1_pool_cleaning/mission.py)，默认参数位于 [pool_cleaning.yaml](../../src/f1_pool_cleaning/config/pool_cleaning.yaml)。
+射线选墙位于 [geometry.py](../../src/f1_pool_cleaning/f1_pool_cleaning/geometry.py)，简单靠近与路线编排位于 [autonomous.py](../../src/f1_pool_cleaning/f1_pool_cleaning/autonomous.py)，沿墙与换边位于 [mission.py](../../src/f1_pool_cleaning/f1_pool_cleaning/mission.py)。沿墙默认参数位于 [pool_cleaning.yaml](../../src/f1_pool_cleaning/config/pool_cleaning.yaml)，`approach_*` 默认值由 `ApproachConfig` 定义并由控制器声明。
 
 组合入口的定位状态为 `/f1_localization/localization_status`；L 任务的控制接口为 `/l_cleaning/*`。`stop/cancel` 均不支持断点续跑，App 的 `manual_stop` 仅停止手动会话。
 

@@ -1,6 +1,6 @@
 # f1_l_cleaning：大 L 两段墙清洗
 
-文档核对：2026-10-31。项目构建、部署和任务入口总览见[工作空间 README](../../README.md)。
+文档核对：2026-11-02。项目构建、部署和任务入口总览见[工作空间 README](../../README.md)。
 
 示例地图是 `maps/lidar_20261026_170703.pgm`，其左下方大 L 用于早期路线验证。当前路线由传入的地图推导，开放路线为
 `A → B → C`，只有 `edge_0`、`edge_1`，墙始终在船左侧。
@@ -125,6 +125,6 @@ colcon test-result --verbose
 
 ## App 轨迹、停止与墙距扩展（2026-10-31）
 
-本包复用矩形控制器的 `expected_track`、`center_wall_distance_m` 与墙观测新鲜度字段，但目标轨迹只有两条独立清洗段，保持开放的 L 路线，不增加回到起点的闭合边。历史轨迹按 L 任务的 map_id/run_id 单独记录，不与矩形任务混合。
+本包复用矩形控制器的 `expected_track`、`center_wall_distance_m` 与墙观测新鲜度字段，启动前目标轨迹显示两条独立清洗段，启动后按本次要求区间显示（从 BC 启动时仅显示 BC），保持开放的 L 路线，不增加回到起点的闭合边。历史轨迹按 L 任务的 map_id/run_id 单独记录，不与矩形任务混合。
 
 新增 Trigger `/l_cleaning/stop`，进入 STOPPED、关闭输出、释放租约并保留进度；`/l_cleaning/cancel` 另清除当前边关联。再次开始是新任务，不支持断点续跑。界面、历史保留范围与左墙距离定义见[App 说明](../../operator_app/README.md)。

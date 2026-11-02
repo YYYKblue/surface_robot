@@ -1,6 +1,6 @@
 # Nano：阶段 4 矩形四边自动清洁一周部署与验收
 
-文档核对：2026-10-31。本页适用于矩形任务；大 L 使用[独立任务入口与地图](../f1_l_cleaning/README.md)。通过 Qt App 操作时，自动任务使用“停止任务”“暂停任务”或“取消任务”；顶部红色“停止手动输出”只释放网关的手动租约。App 建图、选图和共享定位使用[受管入口](../f1_operator_gateway/README.md)，与下述完整 bringup 择一运行。
+文档核对：2026-11-02。本页适用于矩形任务；大 L 使用[独立任务入口与地图](../f1_l_cleaning/README.md)。通过 Qt App 操作时，自动任务使用“停止任务”“暂停任务”或“取消任务”；顶部红色“停止手动输出”只释放网关的手动租约。App 建图、选图和共享定位使用[受管入口](../f1_operator_gateway/README.md)，与下述完整 bringup 择一运行。
 
 当前任务使用冻结地图定位，默认 `start_policy=left_ray`：沿船体 +y 射线选墙并锁定最近投影点，关刷旋转、前后移动和侧移进入旧版起始范围；不做路径搜索或环境碰撞检查。随后复用旧版沿墙/换边。矩形仅补齐起始边前段，L 形到终点停且不返回、不补洗。`COMPLETE` 表示路线执行完成，覆盖缺口单独记录。
 
@@ -122,7 +122,7 @@ ros2 service call /pool_cleaning/set_initial_pose f1_interfaces/srv/SetInitialPo
 
 `/pool_cleaning/localization_status` 会区分轨迹已创建和定位真正就绪；轨迹创建成功本身不代表定位正确。通过已知 A 墙、实际船头方向和尺量距离核对地图位姿，必要时在 RViz2 叠加 scan/map。错误朝向、地图外位姿、过期 TF、雷达断流和跳变都必须停留在 `LOCALIZATION_CHECK` 或 `PAUSED`，不能启动清洗。
 
-定位和控制器必须传入同一 `map:=`。默认配置从地图推导 origin/axis/length/width、四边边界和定位范围，不需要手填旧地图尺寸；使用现场配置时应移除不再适用的显式几何覆盖。默认自动选边无需预先放在 `edge_0`；如需固定起始边，启动时加 `start_policy:=specified default_edge_id:=edge_0`。指定边仍会规划接近路径，不可达时暂停，不会自动改选其他边。
+定位和控制器必须传入同一 `map:=`。默认配置从地图推导 origin/axis/length/width、四边边界和定位范围，不需要手填旧地图尺寸；使用现场配置时应移除不再适用的显式几何覆盖。默认自动选边无需预先放在 `edge_0`；如需固定起始边，启动时加 `start_policy:=specified default_edge_id:=edge_0`。指定边跳过射线选择，仍锁定最近投影点并使用旋转、前后移动和侧移靠近；不规划路径、不检查可达性，也不会自动改选其他边。
 
 ## 4. 无输出预览与矩形一周验收
 
@@ -142,14 +142,14 @@ ros2 topic echo /pool_cleaning/status
 ros2 topic echo /pool_cleaning/command_preview
 ```
 
-人工将船放在地图中的可达空闲水域，使用 RViz2 发布初始位姿，待 `LOCALIZATION_READY` 后核对：
+人工将船放在地图中确认可操作的水域，使用 RViz2 发布初始位姿，待 `LOCALIZATION_READY` 后核对：
 
-- `can_start=true`、`start_blockers=[]`，定位、地图位姿和原始扫描均新鲜。启动前 `current_edge_id` 可为空；规划后才检查所选边与 `edge_target`，清洗时墙必须在左侧。
-- 左墙线在导航完成后重新获取；有效时距离与夹角应符合尺量。`front_observed=false` 不阻止自动任务开始，不手工修改该标记。
+- `can_start=true`、`start_blockers=[]`，定位和地图位姿就绪且新鲜。控制器不再另订阅原始扫描做靠近门控，定位管理器仍检查扫描。启动前 `current_edge_id` 可为空；start 后检查锁定的 `start_edge_id/start_region`，进入 `ACQUIRE_WALL` 后检查有效 `edge_target`，清洗时墙必须在左侧。
+- 左墙线在进入起始范围后重新获取；有效时距离与夹角应符合尺量。`front_observed=false` 不阻止自动任务开始，不手工修改该标记。
 - `localization_state=LOCALIZATION_READY`。TF 不含协方差时，`pose_covariance_available=false` 是明确的能力限制。
 - `output_enabled=false`、`lease_held=false`，预览 token 为空。
 
-调用 `start` 后先检查规划、导航与找墙状态；预览不会驱动船体，需要合成反馈或人工移动才能推进流程。以下沿墙输出预期适用于已进入贴墙清洗阶段（不连接执行器）：
+调用 `start` 后先检查选墙结果、靠近动作与确认墙面状态；预览不会驱动船体，需要合成反馈或人工移动才能推进流程。以下沿墙输出预期适用于已进入贴墙清洗阶段（不连接执行器）：
 
 ```bash
 ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
@@ -175,7 +175,7 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 
 本版没有 0.36 m 最小墙距暂停门槛；墙距偏小时由第五路向外纠正。超出 ±10° 可以启动任务，先纠偏再开刷。暂停后执行 `cancel` 和 `start`。
 
-诊断单次启动后暂停：`ros2 topic echo /pool_cleaning/status --once --full-length`，查看 `phase`、`reason`、`wall_valid`、`wall_reason`。状态前部的 `left_wall_distance_cm` 是船中心到左墙的距离（厘米）；无效或过期时显示 `null`。`WAIT_WALL` 可以自动恢复；`PAUSED` 不会自行恢复。带地图自动任务初次启动不要求有效墙线，但必须有新鲜原始扫描；找墙和正式清洗阶段仍须核对墙线。
+诊断单次启动后暂停：`ros2 topic echo /pool_cleaning/status --once --full-length`，查看 `phase`、`reason`、`wall_valid`、`wall_reason`。状态前部的 `left_wall_distance_cm` 是船中心到左墙的距离（厘米）；无效或过期时显示 `null`。`WAIT_WALL` 可以自动恢复；`PAUSED` 不会自行恢复。带地图自动任务初次启动不要求有效墙线，不另做原始扫描碰撞检查，但定位管理器仍要求扫描就绪；确认墙面和正式清洗阶段仍须核对墙线。
 
 状态前部同时显示 `wall_angle_deg` 和 `direction`：0=STOP、3=LEFT、4=RIGHT。船头向左墙偏转时，应观察到负墙角和 RIGHT。遇到疑似反向，完整保存 `/pool_cleaning/status` 与 `/f1/control_state`，核对感知符号、请求方向和固件目标，不能只凭 `CORRECT_HEADING` 阶段名称推断方向。
 
@@ -226,6 +226,6 @@ ros2 bag record -o rectangle_one_loop_trial \
   /pool_cleaning/status /pool_cleaning/command_preview /f1/control_state
 ```
 
-记录 `edge_0` 到 `edge_3` 的实际墙距、夹角、靠墙和入口调整时间、30% 刷盘是否能推进、第五路双向纠偏是否振荡、每次 `EDGE_STOP` 触发位置、后退右推位移、转向误差、每条边的 `cleaned_intervals`、最终 `completed_edges` 和未覆盖原因。刷尖约距中心 0.33 m，34 cm 作为名义中心值；实际接触压缩仍需实船测量。
+按本次所选起始边及顺时针顺序记录四条边的实际墙距、夹角、靠墙和入口调整时间、30% 刷盘是否能推进、第五路双向纠偏是否振荡、每次 `EDGE_STOP` 触发位置、后退右推位移、转向误差、每条边的 `cleaned_intervals`、最终 `completed_edges` 和未覆盖原因。刷尖约距中心 0.33 m，34 cm 作为名义中心值；实际接触压缩仍需实船测量。
 
 一周任务的现场记录至少应包含：起始初始位姿、地图版本、实际选中起始边与 `run_id`，四条边及起始边补齐段的轨迹、简单靠近和相邻换边的停止原因与漂移，暂停/停止/取消/遥控接管记录，以及最终状态中的 `phase`、`completed_edges`、要求区间、已覆盖区间和剩余缺口。角部留白和短边有效清洗长度应单独标注，不能只凭最终 `COMPLETE` 声明全池面积已覆盖。

@@ -1,6 +1,6 @@
 # f1_operator_gateway
 
-更新：2026-10-31。Windows Qt App 的 Nano 侧 WebSocket 入口，提供手动控制、双任务操作、初始位姿、状态转发，以及受管建图、地图保存与选择。模块职责与入口对比见[架构导读](../../docs/ARCHITECTURE.md)。
+更新：2026-11-02。Windows Qt App 的 Nano 侧 WebSocket 入口，提供手动控制、双任务操作、初始位姿、状态转发，以及受管建图、地图保存与选择。模块职责与入口对比见[架构导读](../../docs/ARCHITECTURE.md)。
 
 ## 构建
 
@@ -147,7 +147,9 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
 `hello.capabilities` 新增 `task_stop`、`task_tracks`。任务 `stop` 调用对应控制器的 Trigger `/stop`，进入 `STOPPED`，保留任务进度；`cancel` 另外清除当前边关联。两者均关闭输出、释放租约，不支持断点续跑；显式 start 创建新 run_id。开始服务尚未返回时的停止也参与既有串行操作机制。
 
 每个 `tasks[kind]` 新增：
-- `expected_track: {frame_id, map_id, cleaning_segments: [{edge_id, points: [[x,y], ...]}], navigation_path: [[x,y], ...]}`：来自控制器的船体中心清洗目标段；新版 `navigation_path` 始终为空，并增加 `start_region` 起始范围。附带 `completion_scope/coverage_complete` 区分路线执行完成和实际覆盖记录。
+
+- `expected_track: {frame_id, map_id, cleaning_segments: [{edge_id, points: [[x,y], ...]}], navigation_path: [], start_region: {...}}`：来自控制器的船体中心清洗目标段和起始范围；`navigation_path` 为兼容字段，新版保持空列表，未确定起始范围时 `start_region` 为 null。
+- 任务状态顶层的 `start_edge_id/start_region/first_brush_contact/returning_to_start/remaining_edges/executed_edge_ids`：锁定起始墙、参考范围、首次有效开刷位置和执行进度，由网关透传。`completion_scope` 为 `rectangle_route` 或 `remaining_l_route`；`coverage_complete/required_contact_intervals/remaining_contact_intervals` 独立报告覆盖情况，`COMPLETE` 不保证缺口为空。旧 `repair_pass/active_cleaning_interval` 已不由新控制器输出。
 - `actual_track: {frame_id, map_id, run_id, segments: [[[x,y], ...], ...], point_count, truncated}`：网关从有效的 map→base_link TF 采样，分段避免连接定位缺失/跳变。
 - `center_wall_distance_m`、`wall_fresh`、`wall_age_sec`：有效左墙线到 base_link 原点的垂直距离及源数据新鲜度；距离不可用时为 null。
 

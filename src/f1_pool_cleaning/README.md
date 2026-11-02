@@ -1,6 +1,6 @@
 # f1_pool_cleaning：泳池沿边清洗
 
-文档核对：2026-10-30。本页说明矩形四边任务及共享清洗实现；开放大 L 两段墙任务由 [`f1_l_cleaning`](../f1_l_cleaning/README.md) 配置和适配，使用 `/l_cleaning/*` 接口。
+文档核对：2026-11-02。本页说明矩形四边任务及共享清洗实现；开放大 L 两段墙任务由 [`f1_l_cleaning`](../f1_l_cleaning/README.md) 配置和适配，使用 `/l_cleaning/*` 接口。
 
 2026-10-30：定位实现、Lua/RViz 配置及定位单元测试迁至 [`f1_localization`](../f1_localization/README.md)。本包保留定位状态消费与停机门控，原定位 launch/脚本仅做兼容转发；矩形与大 L 的 bringup 直接启动新包。
 
@@ -36,7 +36,7 @@ Windows App 现已支持任务类型选择、初始位姿发布、启动条件�
 
 换边阶段保留转移数据新鲜度、通信超时、执行器命令期限、遥控接管和取消/暂停关闭输出；转角使用连续地图航向反馈，不用固定时间代替 90°完成判断。地图边身份与左墙目标关联由 `EdgeTarget` 恢复，防止换边后误认相邻墙。
 
-默认无固定运行时长上限。启动门控在 `LOCALIZATION_CHECK` 中完成定位检查和地图选边，直边状态序列为 `APPROACH_WALL → APPROACH_EDGE → FOLLOW ↔ CORRECT_HEADING/WAIT_WALL → EDGE_STOP`，换边状态序列为 `EDGE_STOP → MOVE_INWARD → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`；端点和后退右推之间各保留一个停止指令周期，不等待物理停稳。转向目标航向误差放宽为 ±20°，转向和整段换边的时间超时默认关闭。临时丢墙为 `WAIT_WALL`。`wall_recovery_sec` 默认 1.5 秒；持续丢墙、反馈过期、定位退化或通信异常进入 `PAUSED`。手动暂停、取消和过期数据不会因反馈恢复而自动续跑；暂停后必须 `cancel` 再 `start`。
+默认无固定运行时长上限。定位管理器检查通过后发布 `LOCALIZATION_READY`，控制器在 start 时选墙并进入简单靠近，直边状态序列为 `APPROACH_WALL → APPROACH_EDGE → FOLLOW ↔ CORRECT_HEADING/WAIT_WALL → EDGE_STOP`，换边状态序列为 `EDGE_STOP → MOVE_INWARD → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`；端点和后退右推之间各保留一个停止指令周期，不等待物理停稳。转向目标航向误差放宽为 ±20°，转向和整段换边的时间超时默认关闭。临时丢墙为 `WAIT_WALL`。`wall_recovery_sec` 默认 1.5 秒；持续丢墙、反馈过期、定位退化或通信异常进入 `PAUSED`。手动暂停、取消和过期数据不会因反馈恢复而自动续跑；暂停后必须 `cancel` 再 `start`。
 
 启动不要求预先靠墙，但默认左侧射线必须命中当前任务墙段。L 形未命中时拒绝启动，提示调整朝向；不延长墙段、不回退最近墙。角点默认容差 1 cm，转角相同时按边 ID 排序。`specified` 配合 `default_edge_id` 或空闲时的 `set_edge` 可显式指定墙。旧配置名 `nearest_reachable` 仅作为兼容别名转为 `left_ray`，会输出弃用提示。
 
