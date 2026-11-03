@@ -53,7 +53,7 @@ def test_l_transfer_is_reverse_right_push_stop_right_turn_then_reacquire():
     effort = mission.update(feedback(c, route.edges[0], now, end_s), now)
     fields = command_fields(effort, c)
     assert mission.phase == "MOVE_INWARD"
-    assert effort.direction == 2 and effort.side_left_percent == -30. == -c.transfer_side_percent
+    assert effort.direction == 2 and effort.side_left_percent == -50. == -c.transfer_side_percent
     assert fields["thrust_enabled"] and fields["thrust_percent"] == -c.transfer_side_percent
     assert not fields["brush_enabled"]
 

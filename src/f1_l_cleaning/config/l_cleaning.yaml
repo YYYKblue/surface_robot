@@ -31,9 +31,11 @@ l_controller:
     corner_exclusion_m: 0.30
     endpoint_margin_m: 0.30
     front_stop_m: 0.30
+    # Stop main-motor forward assist at 0.8 m; keep brushing until front_stop_m.
+    forward_assist_stop_m: 0.80
     # Reuse simultaneous reverse + right push, then feedback-based right turn.
     transfer_move_duration_sec: 0.50
-    transfer_side_percent: 30.0
+    transfer_side_percent: 50.0
     transfer_timeout_sec: 0.0
     transfer_turn_timeout_sec: 0.0
     transfer_turn_tolerance_rad: 0.3490658503988659

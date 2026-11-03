@@ -49,11 +49,13 @@ pool_controller:
     edge_target_angle_tolerance_rad: 1.2217304763960306
     # Common endpoint trigger for all four edges: boat centre to front wall.
     front_stop_m: 0.30
+    # Stop main-motor forward assist at 0.8 m; keep brushing until front_stop_m.
+    forward_assist_stop_m: 0.80
     # Reverse and right-side push are issued together for 0.5 s before each
     # 90-degree right turn.  These values are bounded motion parameters, not
     # a substitute for turn-angle feedback.
     transfer_move_duration_sec: 0.50
-    transfer_side_percent: 30.0
+    transfer_side_percent: 50.0
     # A rough heading is sufficient; APPROACH_NEXT_EDGE performs final
     # wall-based heading correction. Zero disables both transfer timeouts.
     transfer_timeout_sec: 0.0

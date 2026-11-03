@@ -119,6 +119,47 @@ def test_forward_assist_switches_to_correction_and_back_on_next_scan(edge_task):
         assert effort.valid_until_ns == effort.computed_ns + 100_000_000
 
 
+@pytest.mark.parametrize("route,index", [
+    ("legacy", 0), ("legacy", 1),
+    ("rectangle", 0), ("rectangle", 1), ("rectangle", 2), ("rectangle", 3),
+    ("l", 0), ("l", 1)])
+def test_front_wall_cutoff_keeps_brush_and_correction_until_endpoint(route, index):
+    c = synthetic_config(axis_yaw_rad=.27)
+    m = Mission(c)
+    if route != "legacy":
+        pool = (PoolModel.rectangle(c) if route == "rectangle" else
+                PoolModel.from_polyline([(4., 0.), (0., 0.), (0., 4.)]))
+        assert m.configure_edge(pool, pool.edges[index])[0]
+
+    def feedback_at(now, front_distance, angle):
+        angle = math.radians(angle)
+        if route == "legacy":
+            along = front_distance if index else c.length_m - front_distance
+            f = sample(c, now, along=along, angle=angle)
+            if index:
+                f = replace(f, pose=replace(f.pose, yaw=f.pose.yaw + math.pi))
+            return f
+        f = edge_feedback(c, m.edge, now, m.edge.length_m - front_distance,
+                          yaw=m.edge.yaw_rad - angle)
+        return replace(f, wall=replace(f.wall, angle=angle))
+
+    assert m.start(feedback_at(NOW, .801, 0), NOW)[0]
+    # The 0.8 m boundary measures the boat centre, not the brush or bow.
+    for i, (front, angle, direction, brush) in enumerate([
+            (.801, 0, 1, 30), (.800, 0, 0, 30), (.799, 0, 0, 30),
+            (.6, 4, 3, 30), (.6, -4, 4, 30),
+            (.6, 12, 3, 0), (.6, -12, 4, 0), (.5, 0, 0, 30),
+            (.301, 0, 0, 30), (.299, 0, 0, 0)]):
+        now = NOW + i * 50_000_000
+        effort = m.update(feedback_at(now, front, angle), now)
+        assert (effort.direction, effort.brush_percent, effort.side_left_percent) == (direction, brush, 0.)
+        if front > c.front_stop_m:
+            assert m.phase == ("CORRECT_HEADING" if angle else "FOLLOW")
+            if not angle and front <= .8:
+                assert "brush propulsion near front wall" in m.reason
+    assert m.phase in ("STOPPED", "EDGE_STOP", "COMPLETE")
+
+
 @pytest.mark.parametrize("angle,direction", [(12, 3), (-12, 4)])
 def test_continuous_heading_correction_has_no_pulses_or_dwell(angle, direction):
     m = started()
@@ -214,7 +255,7 @@ def test_rectangle_transfer_stops_at_thirty_cm_and_combines_reverse_right_push()
     effort = m.update(endpoint, now)
     assert m.phase == "MOVE_INWARD"
     assert effort.direction == 2
-    assert effort.side_left_percent == -30. == -c.transfer_side_percent
+    assert effort.side_left_percent == -50. == -c.transfer_side_percent
     assert effort.brush_percent == 0
     fields = command_fields(effort, c)
     assert fields["direction"] == 2
@@ -462,7 +503,7 @@ def test_map_wall_identity_and_second_quality_gate_removed():
 
 
 @pytest.mark.parametrize("changes", [dict(fifth_left_sign=2), dict(wall_target_m=.32),
-    dict(length_m=.5), dict(command_ttl_sec=.2), dict(side_percent=50.01), dict(transfer_side_percent=30.01), dict(width_m=math.nan),
+    dict(length_m=.5), dict(command_ttl_sec=.2), dict(side_percent=50.01), dict(transfer_side_percent=50.01), dict(forward_assist_stop_m=.30), dict(width_m=math.nan),
     dict(side_on_distance_m=.34), dict(brush_percent=101.), dict(turn_speed_percent=50),
     dict(heading_deadband_rad=math.pi), dict(heading_correction_deadband_rad=math.radians(11)),
     dict(run_timeout_sec=-1.), dict(wall_recovery_sec=0.)])

@@ -220,6 +220,23 @@ def test_hardware_output_requires_clock_and_polarity(extra):
                        + [Parameter("output_enabled", value=True), extra])
 
 
+def test_ros_front_wall_cutoff_removes_forward_assist_but_keeps_correction(harness):
+    h = harness
+    h.start()
+    h.wait(lambda: h.commands[-1].direction == ActuatorCommand.FORWARD)
+    h.along = h.controller.config.length_m - .8
+    h.wait(lambda: h.commands[-1].direction == ActuatorCommand.STOP
+           and h.commands[-1].brush_percent == 30.)
+    assert h.controller.mission.phase == "FOLLOW"
+    h.angle = math.radians(4.)
+    h.wait(lambda: h.commands[-1].direction == ActuatorCommand.LEFT
+           and h.commands[-1].brush_percent == 30.)
+    h.angle = 0.
+    h.along += .01
+    h.wait(lambda: h.commands[-1].direction == ActuatorCommand.STOP
+           and h.commands[-1].brush_percent == 30.)
+
+
 def test_ros_map_endpoint_closes_all_outputs(harness):
     h = harness
     h.distance = .46
