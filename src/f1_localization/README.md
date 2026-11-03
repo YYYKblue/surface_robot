@@ -48,6 +48,35 @@ ros2 launch f1_l_cleaning l_bringup.launch.py \
 
 清洗控制器仍负责检查定位状态的新鲜度和就绪条件，并在定位失效时关闭运动、暂停任务；定位包不负责停止执行器。
 
+## 静止初始化调优
+
+`config/localization.lua` 缩短静止时的节点生成间隔和后端优化间隔，改善发布初始位姿后激光迟迟不与参考地图贴合的问题：
+
+| 参数 | 调整前 | 当前试验起点 |
+|---|---|---|
+| `TRAJECTORY_BUILDER_2D.motion_filter.max_time_seconds` | 继承本机 Cartographer 默认的 5.0 秒 | 0.3 秒 |
+| `POSE_GRAPH.optimize_every_n_nodes` | 20 | 5 |
+
+运动过滤限制的是子图插入和后端节点生成，不是所有前端扫描匹配。静止且扫描持续有效时，上述组合将积累节点的等待缩短到约秒级；这不是定位成功时限。匹配约束是否成功、初始位姿误差和计算积压仍会影响实际对齐时间。这两个参数在整条定位轨迹中持续生效，不会在初始化后自动恢复。
+
+本次保留运动过滤的距离/角度阈值、扫描采样率、约束采样率及就绪门槛，便于对照效果。更频繁的节点插入和优化会增加计算负担，需在 Nano 上实测。调优不需要机器人自动转动。
+
+部署时在目标机器重新构建本包并重启定位：
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/local_setup.bash
+colcon build --symlink-install --packages-select f1_localization \
+  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
+source install/local_setup.bash
+```
+
+launch 使用安装目录中的 Lua 配置；`localization_config:=...yaml` 只覆盖定位管理器参数，不能覆盖上述 Cartographer 参数。已有定位进程不会自动重载配置。
+
+用同一地图、同一静止船位和相近初始位姿重复比较调整前后：记录初始位姿发布至 RViz2 激光与多个方向的地图轮廓持续贴合的耗时，同时观察 CPU、TF/扫描新鲜度和 Cartographer 队列积压。`LOCALIZATION_READY` 不能替代实际对齐检查。若负载持续过高，可逐项放宽时间阈值或优化节点间隔；恢复原行为则删除新增的时间阈值覆盖，并将优化节点间隔恢复为 20。
+
+本机验证（2026-11-03）：本包构建成功，launch 测试 3/3 通过；在隔离的 ROS 域中使用系统 Cartographer 加载安装后的 Lua 和 `lidar_20261021_145054.pbstream`，通过 `StartTrajectory` 提交初始位姿，确认参考轨迹为 FROZEN、新轨迹为 ACTIVE。该检查未输入真实激光，也未连接执行器，只验证配置加载和轨迹启动，不证明实船提速或 Nano 负载满足要求。
+
 ## 代码归属
 
 - `localization.py`：定位门控、初始位姿校验、扫描/地图重合与地图范围参数转换。

@@ -39,7 +39,13 @@ TRAJECTORY_BUILDER_2D.use_imu_data = false
 TRAJECTORY_BUILDER_2D.num_accumulated_range_data = 1
 TRAJECTORY_BUILDER_2D.min_range = 0.1
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
+-- Keep producing backend nodes while stationary after an initial pose. The
+-- inherited 5 s interval can otherwise delay correction against the frozen map.
+-- Retain the installed distance/angle thresholds to isolate this timing change.
+TRAJECTORY_BUILDER_2D.motion_filter.max_time_seconds = 0.3
 -- Keep the installed max_range default until real valid returns are checked.
 TRAJECTORY_BUILDER.pure_localization_trimmer = { max_submaps_to_keep = 3 }
-POSE_GRAPH.optimize_every_n_nodes = 20
+-- Reduce the node-collection delay; actual convergence also depends on valid
+-- map constraints and backend load. Validate CPU/TF latency on the Nano.
+POSE_GRAPH.optimize_every_n_nodes = 5
 return options
