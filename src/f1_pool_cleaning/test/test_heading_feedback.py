@@ -71,7 +71,7 @@ def test_current_profile_keeps_left_wall_and_corrects_while_brush_is_running():
     history = replay()
     for _, wall, phase, e in history:
         assert wall.valid and wall.distance == pytest.approx(.365, abs=.01)
-        assert phase != 'WAIT_WALL' and e.direction in (0, 4)
+        assert phase != 'WAIT_WALL' and e.direction in (1, 4)
     _, wall, _, e = history[1]  # Bow is 8 degrees into the wall.
     assert math.degrees(wall.angle) == pytest.approx(-8., abs=.01)
     assert e.direction == 4 and e.brush_percent == 30
@@ -81,4 +81,4 @@ def test_lost_left_wall_cannot_reassociate_to_rear_wall_during_active_recovery()
     history = replay(hide_left=True)
     assert any(phase == 'WAIT_WALL' for _, _, phase, _ in history)
     assert any(phase == 'PAUSED' for _, _, phase, _ in history)
-    assert all(e is None or e.direction in (0, 4) for _, _, _, e in history)
+    assert all(e is None or e.direction in (0, 1, 4) for _, _, _, e in history)

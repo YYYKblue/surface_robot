@@ -70,7 +70,7 @@ flowchart TD
     SELECT -- 是 --> AW[APPROACH_WALL\n调整到左墙 0.32–0.36 m]
 
     AW --> D{中心到左墙\n是否在 0.32–0.36 m?}
-    D -- 否 --> SIDE[第五路侧推\n>0.36 m: +30%\n<0.32 m: -30%\n滚刷关闭]
+    D -- 否 --> SIDE[第五路侧推\n>0.36 m: +50%\n<0.32 m: -50%\n滚刷关闭]
     SIDE --> AW
     D -- 是 --> AE[APPROACH_EDGE\n保持墙距，驶向当前边入口]
 
@@ -85,7 +85,7 @@ flowchart TD
     WALL -- 是 --> DIST{墙距是否在\n0.32–0.36 m?}
     DIST -- 否 --> AW
     DIST -- 是 --> HEADING{航向误差处于哪个区间?}
-    HEADING -- 绝对角度 ≤ 3° --> FOLLOW[FOLLOW\n滚刷 30%\n第五路关闭]
+    HEADING -- 绝对角度 ≤ 3° --> FOLLOW[FOLLOW\n滚刷 30% + 四主电机 FORWARD 25挡 BOTH\n第五路关闭]
     HEADING -- 3° < 绝对角度 ≤ 10° --> CORRECT1[CORRECT_HEADING\n纠偏 + 滚刷 30%]
     HEADING -- 绝对角度 > 10° --> CORRECT2[CORRECT_HEADING\n纠偏，滚刷关闭]
     FOLLOW --> FRONT
@@ -98,7 +98,7 @@ flowchart TD
 
     ESTOP --> NEXT{存在下一条边?}
     NEXT -- 否 --> COMPLETE([COMPLETE\n本次路线执行结束])
-    NEXT -- 是 --> MI[MOVE_INWARD\n0.5 s: reverse + 向右侧推\n滚刷关闭]
+    NEXT -- 是 --> MI[MOVE_INWARD\n0.5 s: reverse + 向右侧推 30%\n滚刷关闭]
     MI --> TURN[TURN_TO_NEXT_EDGE\n只按地图航向反馈右转]
     TURN --> YAW{目标航向误差\n<= ±20°?}
     YAW -- 否 --> TURN
@@ -117,8 +117,10 @@ flowchart TD
 
 | 流程节点 | 当前实现 |
 | --- | --- |
-| 左墙距离控制 | `Mission._update_edge()`：墙距大于 `0.36 m` 时第五路 `+30%`，小于 `0.32 m` 时 `-30%`，在区间内关闭第五路。 |
+| 起始点侧移 | `AutonomousMission._approach()`：第五路按侧移方向输出 ±50%；到达范围或切换动作时仍先停止。 |
+| 左墙距离控制 | `Mission._update_edge()`：墙距大于 `0.36 m` 时第五路 `+50%`，小于 `0.32 m` 时 `-50%`，在区间内关闭第五路。 |
 | 航向纠偏 | `Mission._update_edge()`：墙角绝对值超过 `3°` 进入 `CORRECT_HEADING`；正角发 `direction=3`，负角发 `direction=4`。 |
+| 直行辅助 | 原逻辑允许开刷且墙角绝对值不超过 `3°` 时，发 `direction=1 / speed_percent=25 / mode=BOTH`，四主电机与滚刷共同推进；纠偏期间不叠加前进。 |
 | 滚刷门控 | 航向绝对值不超过 `10°` 且墙距在稳定区间时开刷 `30%`；纠偏和滚刷可以同时工作。 |
 | 丢墙恢复 | `WAIT_WALL` 最多等待 `1.5 s`；期间输出中位命令，超时转 `PAUSED`。 |
 | 端点判断 | 使用地图边投影的船中心到边端距离；小于等于 `0.30 m` 进入 `EDGE_STOP`。雷达前方观测只作为辅助安全信息。 |

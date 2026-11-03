@@ -272,7 +272,7 @@ def test_live_scan_pipeline_rc_return_requires_cancel_and_start(profile, percept
             assert accepted
             assert 0 < stamp_ns(m.valid_until) - stamp_ns(m.computed_at) <= 100_000_000
             assert not m.thrust_enabled and m.mode == ActuatorCommand.BOTH
-            assert m.direction == ActuatorCommand.STOP
+            assert m.direction == ActuatorCommand.FORWARD and m.speed_percent == 25
             assert m.speed_percent == 25
         h.bridge.source, h.bridge.epoch = "RC", 2
         h.until(lambda: h.controller.mission.phase == "PAUSED")
@@ -301,13 +301,14 @@ def test_live_scan_pipeline_signed_side_and_heading_commands(profile):
     try:
         h.ready()
         assert h.call("start").success
-        h.until(lambda: any(accepted and m.direction == 3 and m.thrust_percent == 30.
+        h.until(lambda: any(accepted and m.direction == 3 and m.thrust_percent == 50.
                             and not m.brush_enabled for m, accepted in h.bridge.commands))
         h.scan_template = pool_scan(10**9, wall_distance=.31, wall_angle=math.radians(-12), config=profile)
-        h.until(lambda: any(accepted and m.direction == 4 and m.thrust_percent == -30.
+        h.until(lambda: any(accepted and m.direction == 4 and m.thrust_percent == -50.
                             and not m.brush_enabled for m, accepted in h.bridge.commands))
         h.scan_template = pool_scan(10**9, wall_distance=.34, config=profile)
-        h.until(lambda: any(accepted and m.direction == 0 and m.brush_enabled
+        h.until(lambda: any(accepted and m.direction == 1 and m.speed_percent == 25
+                            and m.mode == 1 and m.brush_enabled
                             and not m.thrust_enabled for m, accepted in h.bridge.commands))
         assert all(accepted for _, accepted in h.bridge.commands)
         assert h.call("cancel").success

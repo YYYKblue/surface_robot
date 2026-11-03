@@ -53,6 +53,7 @@ pool_controller:
     # 90-degree right turn.  These values are bounded motion parameters, not
     # a substitute for turn-angle feedback.
     transfer_move_duration_sec: 0.50
+    transfer_side_percent: 30.0
     # A rough heading is sufficient; APPROACH_NEXT_EDGE performs final
     # wall-based heading correction. Zero disables both transfer timeouts.
     transfer_timeout_sec: 0.0
@@ -60,7 +61,8 @@ pool_controller:
     transfer_turn_tolerance_rad: 0.3490658503988659
     # User confirmed positive -> left, 2026-10-23.
     fifth_left_sign: 1
-    side_percent: 30.0
+    # Fifth-thruster magnitude for wall following and initial approach.
+    side_percent: 50.0
     brush_percent: 30.0
     # Brush gate: +/-10 degrees, inclusive, independently of yaw correction.
     heading_deadband_rad: 0.17453292519943295

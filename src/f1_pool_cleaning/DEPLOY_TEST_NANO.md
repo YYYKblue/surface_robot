@@ -157,11 +157,11 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 
 | 测试 | 预期 |
 |---|---|
-| 已进入 32–36 cm 且夹角在 ±10° 内 | 刷盘 30%，主轮按航向误差纠偏；第五路关闭 |
-| d 从 0.34 增到 >0.36，再回到 0.34，再降到 <0.32 | 第五路依次关、+30%、关、-30%；32–36 cm 范围内均关闭 |
+| 已进入 32–36 cm 且夹角在 ±10° 内 | 刷盘 30%；夹角在 ±3° 内四主电机 FORWARD 25挡、BOTH，超过 ±3° 则优先纠偏；第五路关闭 |
+| d 从 0.34 增到 >0.36，再回到 0.34，再降到 <0.32 | 第五路依次关、+50%、关、-50%；32–36 cm 范围内均关闭 |
 | 夹角超过 +10° / -10° | 刷盘关；四个主电机 LEFT / RIGHT 25%、BOTH 持续纠偏，没有脉冲/中位等待 |
 | 误差在 3° 到 10° 之间 | 继续 LEFT / RIGHT 纠偏，同时开启刷盘 30% |
-| 误差恢复到 ±3° 内，包括等号 | 主轮 STOP，刷盘保持 30% |
+| 墙距在 32–36 cm，误差恢复到 ±3° 内，包括等号 | 四主电机 FORWARD 25挡、BOTH，刷盘保持 30% |
 | 纠偏方向的空间标志为 false | 仍按夹角纠偏，不暂停 |
 | 墙线在 ±70° 内、相邻有效观测角度变化 ≤30° | 拟合质量满足条件时继续跟踪；刷盘仍只在 ±10° 内开启 |
 | 新鲜扫描暂时未拟合到左墙 | `WAIT_WALL`、全部输出关闭，最多等待 1.5 秒；恢复后自动继续纠偏/刷洗 |
@@ -202,7 +202,7 @@ ros2 launch f1_pool_cleaning pool_cleaning.launch.py \
 ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 ```
 
-start 返回 acquire requested 仅表示已请求租约；看 status 的 `lease_held` 与 phase 确认实际启动。第五路按墙距输出 +30% / 0 / -30%，刷盘默认 30%。默认 `run_timeout_sec=0`，没有固定时长上限；靠墙、入口、边端点和换边均由反馈与地图进度决定。`brush_percent` 改变推进效果也改变刷洗强度，本版不闭环控制速度。
+start 返回 acquire requested 仅表示已请求租约；看 status 的 `lease_held` 与 phase 确认实际启动。第五路按墙距输出 +50% / 0 / -50%，刷盘默认 30%。默认 `run_timeout_sec=0`，没有固定时长上限；靠墙、入口、边端点和换边均由反馈与地图进度决定。`brush_percent` 改变推进效果也改变刷洗强度，本版不闭环控制速度。
 
 使用本次默认配置；不要套用历史 `diagnostics/single_side_remote_20261023/rectangle_current_side.yaml`，该文件仍保存旧 ±3° 与 8 秒限制。
 

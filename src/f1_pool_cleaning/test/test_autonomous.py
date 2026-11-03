@@ -48,7 +48,7 @@ def run_boat(mission, initial, maximum=8000):
                 assert effort.brush_percent == 0
             forward = .25 if effort.direction == 1 else -.25 if effort.direction == 2 else 0.
             forward += .20 if effort.brush_percent else 0.
-            side = .20*effort.side_left_percent/mission.c.side_percent
+            side = .20*effort.side_left_percent/30.
             turn = .40 if effort.direction == 3 else -.40 if effort.direction == 4 else 0.
             pose = Pose(now, pose.x+dt*(math.cos(pose.yaw)*forward-math.sin(pose.yaw)*side),
                         pose.y+dt*(math.sin(pose.yaw)*forward+math.cos(pose.yaw)*side),
@@ -133,8 +133,19 @@ def test_direct_motion_ignores_raw_laser_obstacles_and_has_no_planner():
     for _ in range(2):
         now += 50_000_000
         e = m.update(Feedback(None, replace(p, stamp_ns=now), object()), now)
-    assert e.side_left_percent == 30. and not e.brush_percent
+    assert e.side_left_percent == 50. and not e.brush_percent
     assert not hasattr(m, 'navigator') and not hasattr(m, 'executor')
+
+
+def test_initial_side_approach_uses_fifty_percent_and_stops_before_reversal():
+    m = system(); now = 1_000_000_000; p = Pose(now, 2., .5, 0.)
+    assert m.start(Feedback(None, p), now)[0]
+    for y, expected in [(.5, 0.), (.5, 50.), (2.1, 0.), (2.1, -50.), (1.66, 0.)]:
+        now += 50_000_000
+        # Synthetic feedback exercises both signs and arrival at the starting band.
+        effort = m.update(feedback(m, replace(p, y=y), now), now)
+        assert effort.side_left_percent == expected
+        assert effort.direction == 0 and effort.brush_percent == 0.
 
 
 def test_approach_reversal_inserts_stop_before_opposite_motion():

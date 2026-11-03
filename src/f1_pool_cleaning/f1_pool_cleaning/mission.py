@@ -317,12 +317,15 @@ class Mission:
         else:
             side_output = 0.
         brush_aligned = abs(w.angle) <= c.heading_deadband_rad
-        direction = 0 if abs(w.angle) <= c.heading_correction_deadband_rad else (3 if w.angle > 0 else 4)
-        self.phase = "CORRECT_HEADING" if direction else "FOLLOW"
-        self.reason = ("correcting heading; brush propulsion" if direction and brush_aligned else
-                       "correcting heading into brush band" if direction else "within heading band; brush propulsion")
-        effort = Effort(now, deadline, 0, direction, side_output,
-                        c.brush_percent if brush_aligned else 0.)
+        turn_direction = 0 if abs(w.angle) <= c.heading_correction_deadband_rad else (3 if w.angle > 0 else 4)
+        self.phase = "CORRECT_HEADING" if turn_direction else "FOLLOW"
+        self.reason = ("correcting heading; brush propulsion" if turn_direction and brush_aligned else
+                       "correcting heading into brush band" if turn_direction else
+                       "within heading band; brush and main-motor propulsion")
+        brush = c.brush_percent if brush_aligned else 0.
+        # Wire v2 accepts one direction: keep heading correction ahead of forward assist.
+        direction = 1 if brush and not turn_direction else turn_direction
+        effort = Effort(now, deadline, 0, direction, side_output, brush)
         self.last_effort = effort
         return effort
 
@@ -382,7 +385,7 @@ class Mission:
                 return self.last_effort
             self.last_effort = Effort(
                 now, self._deadline(now, pose), direction=2,
-                side_left_percent=-self.c.side_percent, brush_percent=0.)
+                side_left_percent=-self.c.transfer_side_percent, brush_percent=0.)
             return self.last_effort
         if self.phase == "TURN_TO_NEXT_EDGE":
             self.last_update_ns = now
@@ -470,7 +473,7 @@ class Mission:
             side_output = 0.
         wall_in_band = c.side_off_distance_m <= w.distance <= c.side_on_distance_m
         brush_aligned = abs(w.angle) <= c.heading_deadband_rad
-        direction = 0 if abs(w.angle) <= c.heading_correction_deadband_rad else (3 if w.angle > 0 else 4)
+        turn_direction = 0 if abs(w.angle) <= c.heading_correction_deadband_rad else (3 if w.angle > 0 else 4)
         if not wall_in_band:
             self.phase = "APPROACH_WALL"
             self.reason = "adjusting centre-to-left-wall distance"
@@ -478,11 +481,13 @@ class Mission:
             self.phase = "APPROACH_EDGE"
             self.reason = "wall stable; approaching selected edge entry"
         else:
-            self.phase = "CORRECT_HEADING" if direction else "FOLLOW"
-            self.reason = ("correcting heading; brush propulsion" if direction and brush_aligned else
-                           "correcting heading into brush band" if direction else
-                           "within 32--36 cm wall band; brush propulsion")
+            self.phase = "CORRECT_HEADING" if turn_direction else "FOLLOW"
+            self.reason = ("correcting heading; brush propulsion" if turn_direction and brush_aligned else
+                           "correcting heading into brush band" if turn_direction else
+                           "within 32--36 cm wall band; brush and main-motor propulsion")
         brush = c.brush_percent if wall_in_band and brush_aligned else 0.
+        # Assist only an existing brush-on straight run; distance adjustment stays unchanged.
+        direction = 1 if brush and not turn_direction else turn_direction
         effort = Effort(now, deadline, 0, direction, side_output, brush)
         self.last_effort = effort
         if brush and projection.s_m >= self.edge.clean_start_s_m:

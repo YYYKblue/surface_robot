@@ -32,6 +32,11 @@ def test_l_transfer_is_reverse_right_push_stop_right_turn_then_reacquire():
     assert mission.configure_edge(route, route.edges[0])[0]
     now = NOW
     assert mission.start(feedback(c, route.edges[0], now, 1.), now)[0]
+    effort = mission.update(feedback(c, route.edges[0], now, 1.), now)
+    assert mission.phase == "FOLLOW"
+    assert command_fields(effort, c) == dict(
+        direction=1, speed_percent=25, mode=1, brush_enabled=True,
+        brush_percent=30., thrust_enabled=False, thrust_percent=0.)
 
     now += 100_000_000
     end_s = route.edges[0].length_m - c.front_stop_m + .01
@@ -48,8 +53,8 @@ def test_l_transfer_is_reverse_right_push_stop_right_turn_then_reacquire():
     effort = mission.update(feedback(c, route.edges[0], now, end_s), now)
     fields = command_fields(effort, c)
     assert mission.phase == "MOVE_INWARD"
-    assert effort.direction == 2 and effort.side_left_percent == -c.side_percent
-    assert fields["thrust_enabled"] and fields["thrust_percent"] == -c.side_percent
+    assert effort.direction == 2 and effort.side_left_percent == -30. == -c.transfer_side_percent
+    assert fields["thrust_enabled"] and fields["thrust_percent"] == -c.transfer_side_percent
     assert not fields["brush_enabled"]
 
     now += round((c.transfer_move_duration_sec + .01) * 1e9)
@@ -76,7 +81,7 @@ def test_l_transfer_is_reverse_right_push_stop_right_turn_then_reacquire():
     now += 100_000_000
     effort = mission.update(feedback(c, route.edges[1], now, .8), now)
     assert mission.phase == "FOLLOW"
-    assert effort.brush_percent == c.brush_percent
+    assert effort.direction == 1 and effort.brush_percent == c.brush_percent
 
 
 def test_l_mission_completes_after_second_edge_without_closing_the_route():

@@ -45,28 +45,29 @@ def test_single_side_demo_stops_without_transfer():
     assert not any("TRANSFER" in p or "_B" in p for p in history)
 
 
-def test_default_parallel_brush_propulsion_keeps_main_motors_neutral():
+def test_default_parallel_brush_propulsion_adds_all_main_motors_at_25():
     m = started()
     e = update(m)
     fields = command_fields(e, m.c)
-    assert fields == dict(direction=0, speed_percent=25, mode=1, brush_enabled=True,
+    assert fields == dict(direction=1, speed_percent=25, mode=1, brush_enabled=True,
                           brush_percent=30., thrust_enabled=False, thrust_percent=0.)
     assert e.direction_until_ns == 0
+    assert m.phase == "FOLLOW"
 
 
 def test_side_distance_correction_is_bidirectional_and_has_no_history():
     m = started()
     for i, (distance, expected) in enumerate([
-        (.36, 0), (.361, 30), (.36, 0), (.34, 0), (.32, 0),
-        (.319, -30), (.32, 0), (.34, 0), (.36, 0), (.361, 30)]):
+        (.36, 0), (.361, 50), (.36, 0), (.34, 0), (.32, 0),
+        (.319, -50), (.32, 0), (.34, 0), (.36, 0), (.361, 50)]):
         e = update(m, i * .05, distance=distance)
         assert e.side_left_percent == expected
         fields = command_fields(e, m.c)
         assert fields["thrust_percent"] == expected
-        assert e.brush_percent == 30 and e.direction == 0
+        assert e.brush_percent == 30 and e.direction == 1
 
 
-@pytest.mark.parametrize("angle,direction", [(0, 0), (3, 0), (-3, 0), (4, 3), (-4, 4), (10, 3), (-10, 4),
+@pytest.mark.parametrize("angle,direction", [(0, 1), (3, 1), (-3, 1), (4, 3), (-4, 4), (10, 3), (-10, 4),
                                             (10.01, 3), (-10.01, 4), (20, 3), (-20, 4)])
 def test_heading_band_brush_gate_and_direction(angle, direction):
     m = started()
@@ -76,6 +77,48 @@ def test_heading_band_brush_gate_and_direction(angle, direction):
     assert command_fields(e, m.c)["speed_percent"] == 25
 
 
+@pytest.mark.parametrize("distance,side,in_band", [
+    (.319, -50, False), (.32, 0, True), (.34, 0, True),
+    (.36, 0, True), (.361, 50, False)])
+@pytest.mark.parametrize("angle,turn,brush_aligned", [
+    (-10.01, 4, False), (-10, 4, True), (-3.01, 4, True),
+    (-3, 0, True), (0, 0, True), (3, 0, True),
+    (3.01, 3, True), (10, 3, True), (10.01, 3, False)])
+def test_edge_forward_assist_respects_wall_band_and_turn_priority(
+        distance, side, in_band, angle, turn, brush_aligned):
+    c = synthetic_config()
+    pool = PoolModel.rectangle(c)
+    m = Mission(c)
+    assert m.configure_edge(pool, pool.edges[0])[0]
+    f = sample(c, NOW, along=.8, distance=distance, angle=math.radians(angle))
+    assert m.start(f, NOW)[0]
+    effort = m.update(f, NOW)
+    brush = 30. if in_band and brush_aligned else 0.
+    assert command_fields(effort, c) == dict(
+        direction=turn if turn else (1 if in_band else 0), speed_percent=25, mode=1,
+        brush_enabled=bool(brush), brush_percent=brush,
+        thrust_enabled=bool(side), thrust_percent=float(side))
+    assert m.phase == ("APPROACH_WALL" if not in_band else
+                       "CORRECT_HEADING" if turn else "FOLLOW")
+
+
+@pytest.mark.parametrize("edge_task", [False, True])
+def test_forward_assist_switches_to_correction_and_back_on_next_scan(edge_task):
+    m = Mission(synthetic_config())
+    if edge_task:
+        pool = PoolModel.rectangle(m.c)
+        assert m.configure_edge(pool, pool.edges[0])[0]
+    assert m.start(sample(m.c, NOW), NOW)[0]
+    for i, (angle, direction, brush) in enumerate([
+            (0, 1, 30), (4, 3, 30), (12, 3, 0), (3, 1, 30),
+            (-4, 4, 30), (-12, 4, 0), (-3, 1, 30)]):
+        effort = update(m, i * .05, angle=math.radians(angle))
+        assert effort.direction == direction and effort.brush_percent == brush
+        assert m.phase == ("FOLLOW" if direction == 1 else "CORRECT_HEADING")
+        assert effort.direction_until_ns == 0
+        assert effort.valid_until_ns == effort.computed_ns + 100_000_000
+
+
 @pytest.mark.parametrize("angle,direction", [(12, 3), (-12, 4)])
 def test_continuous_heading_correction_has_no_pulses_or_dwell(angle, direction):
     m = started()
@@ -83,7 +126,7 @@ def test_continuous_heading_correction_has_no_pulses_or_dwell(angle, direction):
     for i in range(30):
         e = update(m, i * .05, angle=angle, distance=.5)
         assert e.direction == direction and e.direction_until_ns == 0
-        assert e.brush_percent == 0 and e.side_left_percent == 30
+        assert e.brush_percent == 0 and e.side_left_percent == 50
         assert e.valid_until_ns == e.computed_ns + 100_000_000
         assert m.phase == "CORRECT_HEADING"
 
@@ -110,7 +153,7 @@ def test_turn_space_and_hull_flags_do_not_block_start_or_correction(angle, direc
     assert m.phase == "CORRECT_HEADING"
 
 
-@pytest.mark.parametrize("distance,side", [(.30, -30), (.8, 30)])
+@pytest.mark.parametrize("distance,side", [(.30, -50), (.8, 50)])
 def test_old_wall_distance_envelope_does_not_block_brush(distance, side):
     m = started()
     e = update(m, distance=distance)
@@ -171,11 +214,11 @@ def test_rectangle_transfer_stops_at_thirty_cm_and_combines_reverse_right_push()
     effort = m.update(endpoint, now)
     assert m.phase == "MOVE_INWARD"
     assert effort.direction == 2
-    assert effort.side_left_percent == -c.side_percent
+    assert effort.side_left_percent == -30. == -c.transfer_side_percent
     assert effort.brush_percent == 0
     fields = command_fields(effort, c)
     assert fields["direction"] == 2
-    assert fields["thrust_enabled"] and fields["thrust_percent"] == -c.side_percent
+    assert fields["thrust_enabled"] and fields["thrust_percent"] == -c.transfer_side_percent
     assert not fields["brush_enabled"]
 
     now += round((c.transfer_move_duration_sec + .05) * 1e9)
@@ -335,7 +378,7 @@ def test_available_front_observation_uses_thirty_cm_stop_threshold(clearance, st
     m = started()
     f = sample(m.c, NOW, front_observed=True)
     e = m.update(replace(f, wall=replace(f.wall, front_clearance=clearance)), NOW)
-    assert e.direction == 0
+    assert e.direction == (0 if stopped else 1)
     assert e.brush_percent == (0 if stopped else 30)
     assert m.phase == ("STOPPED" if stopped else "FOLLOW")
 
@@ -419,7 +462,7 @@ def test_map_wall_identity_and_second_quality_gate_removed():
 
 
 @pytest.mark.parametrize("changes", [dict(fifth_left_sign=2), dict(wall_target_m=.32),
-    dict(length_m=.5), dict(command_ttl_sec=.2), dict(side_percent=31.), dict(width_m=math.nan),
+    dict(length_m=.5), dict(command_ttl_sec=.2), dict(side_percent=50.01), dict(transfer_side_percent=30.01), dict(width_m=math.nan),
     dict(side_on_distance_m=.34), dict(brush_percent=101.), dict(turn_speed_percent=50),
     dict(heading_deadband_rad=math.pi), dict(heading_correction_deadband_rad=math.radians(11)),
     dict(run_timeout_sec=-1.), dict(wall_recovery_sec=0.)])
@@ -479,7 +522,7 @@ def test_post_acquisition_start_can_wait_for_fresh_wall_recovery():
 
 def test_brief_wall_loss_neutralizes_all_outputs_then_recovers_heading_and_brush():
     m = started()
-    assert update(m, angle=.3, distance=.5).side_left_percent == 30
+    assert update(m, angle=.3, distance=.5).side_left_percent == 50
     e = m.update(lost_wall(m, NOW + 50_000_000), NOW + 50_000_000)
     assert m.phase == "WAIT_WALL" and m.active
     assert (e.direction, e.brush_percent, e.side_left_percent) == (0, 0, 0)
@@ -560,5 +603,5 @@ def test_actual_perception_profile_tracks_large_yaw_and_return_to_brush_band(sig
         if i == 0:
             assert m.start(f, now)[0]
         e = m.update(f, now)
-        assert e.direction == (0 if degrees <= 3 else 3 if sign > 0 else 4)
+        assert e.direction == (1 if degrees <= 3 else 3 if sign > 0 else 4)
         assert e.brush_percent == (30 if degrees <= 10 else 0)

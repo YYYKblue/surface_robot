@@ -113,7 +113,9 @@ def test_real_ros_brush_preview_and_stream_watchdog(harness):
     h = harness
     h.start()
     h.wait(lambda: any(m.brush_enabled for m in h.commands))
-    assert all(not m.token and m.direction == 0 and not m.thrust_enabled for m in h.commands)
+    assert all(not m.token and not m.thrust_enabled
+               and m.direction == (ActuatorCommand.FORWARD if m.brush_enabled else ActuatorCommand.STOP)
+               and m.speed_percent == 25 and m.mode == ActuatorCommand.BOTH for m in h.commands)
     h.wait(lambda: bool(h.statuses))
     h.wait(lambda: any(s["left_wall_distance_cm"] == 34. for s in h.statuses))
     distance_status = next(s for s in h.statuses if s["left_wall_distance_cm"] == 34.)
@@ -152,7 +154,7 @@ def test_stage2_uses_map_pose_to_select_edge_and_enter_wall_band():
                            for s in h.statuses))
         h.distance = .31
         h.wait(lambda: h.controller.mission.phase == "APPROACH_WALL"
-               and h.commands[-1].thrust_percent == -30.)
+               and h.commands[-1].thrust_percent == -50.)
     finally:
         h.close()
 
@@ -201,13 +203,14 @@ def test_ros_ten_degree_gate_and_continuous_correction_without_turn_clearance(ha
     h.wait(lambda: len(h.commands) >= 10)
     commands = h.commands[-8:]
     assert all(m.direction == direction and m.mode == 1 for m in commands)
-    assert all(m.brush_enabled == (abs(angle) <= 10) and m.thrust_percent == 30. for m in commands)
+    assert all(m.brush_enabled == (abs(angle) <= 10) and m.thrust_percent == 50. for m in commands)
     assert all(m.direction_until.sec == 0 and m.direction_until.nanosec == 0 for m in commands)
     assert h.controller.mission.active
-    # The next scan restores brush propulsion and reverses side correction.
+    # The legacy single-wall controller keeps its brush gate during side correction.
+    # Returning to straight travel also restores the main-motor forward assist.
     h.angle, h.distance = 0., .31
-    h.wait(lambda: h.commands[-1].direction == 0 and h.commands[-1].brush_enabled
-           and h.commands[-1].thrust_percent == -30.)
+    h.wait(lambda: h.commands[-1].direction == 1 and h.commands[-1].brush_enabled
+           and h.commands[-1].thrust_percent == -50.)
 
 
 @pytest.mark.parametrize("extra", [Parameter("use_sim_time", value=True), Parameter("fifth_left_sign", value=0)])
@@ -336,11 +339,11 @@ def test_live_lease_continuous_yaw_and_signed_fifth_output():
         h.start()
         h.wait(lambda: len(b.commands) >= 12)
         assert all(m.token == "fake-lease" and m.direction == 3 and m.mode == 1
-                   and not m.brush_enabled and m.thrust_percent == -30.
+                   and not m.brush_enabled and m.thrust_percent == -50.
                    and m.direction_until.sec == 0 and m.direction_until.nanosec == 0
                    for m in b.commands[-10:])
         h.angle, h.distance = math.radians(-12), .5
-        h.wait(lambda: b.commands[-1].direction == 4 and b.commands[-1].thrust_percent == 30.)
+        h.wait(lambda: b.commands[-1].direction == 4 and b.commands[-1].thrust_percent == 50.)
         h.angle, h.distance = math.radians(10), .34
         h.wait(lambda: b.commands[-1].brush_enabled and b.commands[-1].direction == 3
                and not b.commands[-1].thrust_enabled)
@@ -434,8 +437,8 @@ def test_live_leased_output_and_fault_release(fault):
         h.start()
         h.wait(lambda: any(m.brush_enabled and m.thrust_enabled for m in b.commands))
         moving = [m for m in b.commands if m.brush_enabled]
-        assert all(m.token == "fake-lease" and m.direction == 0 and m.brush_percent == 30.
-                   and m.thrust_percent == 30. for m in moving)
+        assert all(m.token == "fake-lease" and m.direction == 1 and m.brush_percent == 30.
+                   and m.thrust_percent == 50. for m in moving)
         assert all(not m.token for m in h.commands)
         if fault == "RC":
             b.state.source = "RC"
@@ -559,7 +562,7 @@ def test_direct_approach_hands_off_only_after_fresh_target_wall(tmp_path):
         assert node.mission.phase == "APPROACH_WALL"
         node._tick()
         assert node.mission.phase == "FOLLOW" and node.mission.last_effort.brush_percent == 30.
-        assert not node.mission.last_effort.direction and not node.mission.last_effort.side_left_percent
+        assert node.mission.last_effort.direction == 1 and not node.mission.last_effort.side_left_percent
     finally:
         node.destroy_node()
 
