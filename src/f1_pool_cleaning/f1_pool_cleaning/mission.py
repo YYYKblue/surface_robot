@@ -207,7 +207,8 @@ class Mission:
         self.last_edge_s = projection.s_m
         self.last_contact_s = projection.contact_s_m
         self.last_coverage_ns = None
-        self.reason = f"approaching {self.edge.id}; target wall band 0.32--0.36 m"
+        self.reason = (f"approaching {self.edge.id}; target wall band "
+                       f"{self.c.side_off_distance_m:.2f}--{self.c.side_on_distance_m:.2f} m")
         return True, f"edge {self.edge.id} started"
 
     def _visible_front_stop(self, w):
@@ -490,8 +491,8 @@ class Mission:
             self.phase = "CORRECT_HEADING" if turn_direction else "FOLLOW"
             self.reason = ("correcting heading; brush propulsion" if turn_direction and brush_aligned else
                            "correcting heading into brush band" if turn_direction else
-                           "within 32--36 cm wall band; brush and main-motor propulsion" if forward_assist else
-                           "within 32--36 cm wall band; brush propulsion near front wall")
+                           "within configured wall band; brush and main-motor propulsion" if forward_assist else
+                           "within configured wall band; brush propulsion near front wall")
         brush = c.brush_percent if wall_in_band and brush_aligned else 0.
         # Assist only an existing brush-on straight run; distance adjustment stays unchanged.
         direction = 1 if brush and not turn_direction and forward_assist else turn_direction

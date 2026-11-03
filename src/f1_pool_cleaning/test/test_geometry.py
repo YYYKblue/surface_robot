@@ -66,7 +66,7 @@ def test_edge_mission_uses_new_wall_band_and_stops_at_edge_endpoint():
     assert mission.phase == "FOLLOW"
     assert effort.brush_percent == c.brush_percent and effort.side_left_percent == 0.
 
-    effort = mission.update(sample(c, NOW + 50_000_000, along=.8, distance=.31),
+    effort = mission.update(sample(c, NOW + 50_000_000, along=.8, distance=.30),
                             NOW + 50_000_000)
     assert mission.phase == "APPROACH_WALL"
     assert effort.side_left_percent == -c.side_percent and effort.brush_percent == 0.

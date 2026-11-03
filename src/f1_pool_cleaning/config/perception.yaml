@@ -12,7 +12,8 @@ pool_perception:
     brush_x_m: 0.10
     brush_tip_y_m: 0.33
     brush_compression_m: 0.01
-    brush_max_compression_m: 0.015
+    # User confirmed the brush tolerates 2 cm compression, 2026-11-03.
+    brush_max_compression_m: 0.02
     # Keep tracking the same left wall while recovering from a large yaw.
     # These are perception limits; the brush gate remains +/-10 degrees.
     max_wall_angle_rad: 1.2217304763960306  # 70 degrees

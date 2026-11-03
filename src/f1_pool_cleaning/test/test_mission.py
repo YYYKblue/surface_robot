@@ -58,8 +58,8 @@ def test_default_parallel_brush_propulsion_adds_all_main_motors_at_25():
 def test_side_distance_correction_is_bidirectional_and_has_no_history():
     m = started()
     for i, (distance, expected) in enumerate([
-        (.36, 0), (.361, 50), (.36, 0), (.34, 0), (.32, 0),
-        (.319, -50), (.32, 0), (.34, 0), (.36, 0), (.361, 50)]):
+        (.35, 0), (.351, 50), (.35, 0), (.34, 0), (.31, 0),
+        (.309, -50), (.31, 0), (.34, 0), (.35, 0), (.351, 50)]):
         e = update(m, i * .05, distance=distance)
         assert e.side_left_percent == expected
         fields = command_fields(e, m.c)
@@ -78,8 +78,8 @@ def test_heading_band_brush_gate_and_direction(angle, direction):
 
 
 @pytest.mark.parametrize("distance,side,in_band", [
-    (.319, -50, False), (.32, 0, True), (.34, 0, True),
-    (.36, 0, True), (.361, 50, False)])
+    (.309, -50, False), (.31, 0, True), (.34, 0, True),
+    (.35, 0, True), (.351, 50, False)])
 @pytest.mark.parametrize("angle,turn,brush_aligned", [
     (-10.01, 4, False), (-10, 4, True), (-3.01, 4, True),
     (-3, 0, True), (0, 0, True), (3, 0, True),
@@ -502,9 +502,9 @@ def test_map_wall_identity_and_second_quality_gate_removed():
     assert m.update(f, NOW).brush_percent == 30
 
 
-@pytest.mark.parametrize("changes", [dict(fifth_left_sign=2), dict(wall_target_m=.32),
+@pytest.mark.parametrize("changes", [dict(fifth_left_sign=2), dict(wall_target_m=.31),
     dict(length_m=.5), dict(command_ttl_sec=.2), dict(side_percent=50.01), dict(transfer_side_percent=50.01), dict(forward_assist_stop_m=.30), dict(width_m=math.nan),
-    dict(side_on_distance_m=.34), dict(brush_percent=101.), dict(turn_speed_percent=50),
+    dict(side_on_distance_m=.33), dict(brush_percent=101.), dict(turn_speed_percent=50),
     dict(heading_deadband_rad=math.pi), dict(heading_correction_deadband_rad=math.radians(11)),
     dict(run_timeout_sec=-1.), dict(wall_recovery_sec=0.)])
 def test_invalid_configuration_rejected(changes):

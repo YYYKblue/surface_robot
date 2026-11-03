@@ -107,7 +107,7 @@ class PoolModel:
                 or (abs(cd_b) <= 1e-12 and between(c, b, d)))
 
     @classmethod
-    def from_boundary(cls, points, *, boundary_order="clockwise", wall_target_m=.34,
+    def from_boundary(cls, points, *, boundary_order="clockwise", wall_target_m=.33,
                       corner_exclusion_m=.30, endpoint_margin_m=.30, frame="map"):
         points = [tuple(float(v) for v in p) for p in points]
         if len(points) < 3 or any(not _finite_point(p) for p in points):
@@ -159,7 +159,7 @@ class PoolModel:
         return cls(edges, frame=frame)
 
     @classmethod
-    def from_polyline(cls, points, *, wall_target_m=.34, corner_exclusion_m=.30,
+    def from_polyline(cls, points, *, wall_target_m=.33, corner_exclusion_m=.30,
                       endpoint_margin_m=.30, frame="map"):
         """Build an open route, preserving the supplied direction and endpoints.
 

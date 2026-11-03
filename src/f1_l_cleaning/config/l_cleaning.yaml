@@ -15,9 +15,9 @@ l_controller:
     # right of travel and never closes C -> A.  Set route_xy here only to
     # override a map whose route the derivation rejects.
     default_edge_id: edge_0
-    wall_target_m: 0.34
-    side_on_distance_m: 0.36
-    side_off_distance_m: 0.32
+    wall_target_m: 0.33
+    side_on_distance_m: 0.35
+    side_off_distance_m: 0.31
     hull_half_length_m: 0.25
     hull_half_width_m: 0.225
     brush_x_m: 0.10

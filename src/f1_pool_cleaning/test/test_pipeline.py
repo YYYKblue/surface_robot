@@ -303,7 +303,7 @@ def test_live_scan_pipeline_signed_side_and_heading_commands(profile):
         assert h.call("start").success
         h.until(lambda: any(accepted and m.direction == 3 and m.thrust_percent == 50.
                             and not m.brush_enabled for m, accepted in h.bridge.commands))
-        h.scan_template = pool_scan(10**9, wall_distance=.31, wall_angle=math.radians(-12), config=profile)
+        h.scan_template = pool_scan(10**9, wall_distance=.30, wall_angle=math.radians(-12), config=profile)
         h.until(lambda: any(accepted and m.direction == 4 and m.thrust_percent == -50.
                             and not m.brush_enabled for m, accepted in h.bridge.commands))
         h.scan_template = pool_scan(10**9, wall_distance=.34, config=profile)

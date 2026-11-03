@@ -67,10 +67,10 @@ flowchart TD
     CHECK -- 否 --> REJECT[暂停\n保持输出关闭]
     CHECK -- 是 --> SELECT{当前边可用?}
     SELECT -- 否 --> REJECT
-    SELECT -- 是 --> AW[APPROACH_WALL\n调整到左墙 0.32–0.36 m]
+    SELECT -- 是 --> AW[APPROACH_WALL\n调整到左墙 0.31–0.35 m]
 
-    AW --> D{中心到左墙\n是否在 0.32–0.36 m?}
-    D -- 否 --> SIDE[第五路侧推\n>0.36 m: +50%\n<0.32 m: -50%\n滚刷关闭]
+    AW --> D{中心到左墙\n是否在 0.31–0.35 m?}
+    D -- 否 --> SIDE[第五路侧推\n>0.35 m: +50%\n<0.31 m: -50%\n滚刷关闭]
     SIDE --> AW
     D -- 是 --> AE[APPROACH_EDGE\n保持墙距，驶向当前边入口]
 
@@ -82,7 +82,7 @@ flowchart TD
     ENTRY -- 是 --> WALL{本帧墙线有效?}
 
     WALL -- 否 --> WAIT[WAIT_WALL\n中位输出，保持任务/租约]
-    WALL -- 是 --> DIST{墙距是否在\n0.32–0.36 m?}
+    WALL -- 是 --> DIST{墙距是否在\n0.31–0.35 m?}
     DIST -- 否 --> AW
     DIST -- 是 --> HEADING{航向误差处于哪个区间?}
     HEADING -- 绝对角度 ≤ 3° --> FOLLOW[FOLLOW\n滚刷 30%\n前墙中心距 >0.8 m: FORWARD 25挡 BOTH\n≤0.8 m: 主电机 STOP\n第五路关闭]
@@ -118,7 +118,7 @@ flowchart TD
 | 流程节点 | 当前实现 |
 | --- | --- |
 | 起始点侧移 | `AutonomousMission._approach()`：第五路按侧移方向输出 ±50%；到达范围或切换动作时仍先停止。 |
-| 左墙距离控制 | `Mission._update_edge()`：墙距大于 `0.36 m` 时第五路 `+50%`，小于 `0.32 m` 时 `-50%`，在区间内关闭第五路。 |
+| 左墙距离控制 | `Mission._update_edge()`：墙距大于 `0.35 m` 时第五路 `+50%`，小于 `0.31 m` 时 `-50%`，在区间内关闭第五路。 |
 | 航向纠偏 | `Mission._update_edge()`：墙角绝对值超过 `3°` 进入 `CORRECT_HEADING`；正角发 `direction=3`，负角发 `direction=4`。 |
 | 直行辅助 | 原逻辑允许开刷、墙角绝对值不超过 `3°` 且船中心距前墙大于 `forward_assist_stop_m=0.8 m` 时，发 `direction=1 / speed_percent=25 / mode=BOTH`，四主电机与滚刷共同推进；进入 0.8 m（含等号）后仅靠滚刷前进，航向纠偏仍有效；纠偏期间不叠加前进。 |
 | 滚刷门控 | 航向绝对值不超过 `10°` 且墙距在稳定区间时开刷 `30%`；纠偏和滚刷可以同时工作。 |

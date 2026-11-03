@@ -22,9 +22,9 @@ class Config:
     hull_half_length_m: float = .25
     hull_half_width_m: float = .225
     # Stable left-brush contact band measured from base_link centre to wall.
-    wall_target_m: float = .34
-    side_on_distance_m: float = .36
-    side_off_distance_m: float = .32
+    wall_target_m: float = .33
+    side_on_distance_m: float = .35
+    side_off_distance_m: float = .31
     # Stop when the boat centre is about 30 cm from the front wall.  This is
     # the common endpoint trigger for every rectangle edge.
     front_stop_m: float = .30

@@ -152,7 +152,7 @@ def test_stage2_uses_map_pose_to_select_edge_and_enter_wall_band():
                            s.get("edge_progress_m") is not None and
                            s.get("coverage_basis") == "left_brush_contact_centerline"
                            for s in h.statuses))
-        h.distance = .31
+        h.distance = .30
         h.wait(lambda: h.controller.mission.phase == "APPROACH_WALL"
                and h.commands[-1].thrust_percent == -50.)
     finally:
@@ -208,7 +208,7 @@ def test_ros_ten_degree_gate_and_continuous_correction_without_turn_clearance(ha
     assert h.controller.mission.active
     # The legacy single-wall controller keeps its brush gate during side correction.
     # Returning to straight travel also restores the main-motor forward assist.
-    h.angle, h.distance = 0., .31
+    h.angle, h.distance = 0., .30
     h.wait(lambda: h.commands[-1].direction == 1 and h.commands[-1].brush_enabled
            and h.commands[-1].thrust_percent == -50.)
 
@@ -350,7 +350,7 @@ class FakeBridge:
 def test_live_lease_continuous_yaw_and_signed_fifth_output():
     h = Harness([Parameter("output_enabled", value=True)])
     b = FakeBridge(h)
-    h.angle, h.distance = math.radians(12), .31
+    h.angle, h.distance = math.radians(12), .30
     try:
         h.wait(lambda: h.controller.lease.bridge is not None and h.controller.lease.acquire.service_is_ready())
         h.start()

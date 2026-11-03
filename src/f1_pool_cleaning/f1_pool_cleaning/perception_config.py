@@ -31,7 +31,7 @@ class PerceptionConfig:
     brush_x_m: float = .10
     brush_tip_y_m: float = .33
     brush_compression_m: float = .01
-    brush_max_compression_m: float = .015
+    brush_max_compression_m: float = .02
     rigid_margin_m: float = .03
     stopping_distance_m: float = 0.
     front_slow_distance_m: float = 0.
