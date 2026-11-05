@@ -49,8 +49,6 @@ pool_controller:
     edge_target_angle_tolerance_rad: 1.2217304763960306
     # Common endpoint trigger for all four edges: boat centre to front wall.
     front_stop_m: 0.30
-    # Stop main-motor forward assist at 0.8 m; keep brushing until front_stop_m.
-    forward_assist_stop_m: 0.80
     # Reverse and right-side push are issued together for 0.5 s before each
     # 90-degree right turn.  These values are bounded motion parameters, not
     # a substitute for turn-angle feedback.
@@ -65,7 +63,7 @@ pool_controller:
     fifth_left_sign: 1
     # Fifth-thruster magnitude for wall following and initial approach.
     side_percent: 50.0
-    brush_percent: 30.0
+    brush_percent: 50.0
     # Brush gate: +/-10 degrees, inclusive, independently of yaw correction.
     heading_deadband_rad: 0.17453292519943295
     # Correct yaw while the brush is running; do not wait for +/-10 degrees.

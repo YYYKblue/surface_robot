@@ -124,7 +124,7 @@ def test_already_near_wall_hands_off_without_leaving_or_requiring_raw_scan():
         assert e is not None and (e.direction, e.side_left_percent, e.brush_percent) == (0, 0., 0.)
     assert m.phase == 'APPROACH_WALL'
     now += 50_000_000
-    assert m.update(feedback(m, p, now), now).brush_percent == 30.
+    assert m.update(feedback(m, p, now), now).brush_percent == 50.
 
 
 def test_direct_motion_ignores_raw_laser_obstacles_and_has_no_planner():

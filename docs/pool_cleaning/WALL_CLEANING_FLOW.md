@@ -1,5 +1,7 @@
 # 沿墙清洗流程图
 
+2026-11-05 更新：沿墙前向推进仅靠 50% 滚刷，移除四主电机前进辅助及其距离阈值；主电机仅作沿墙航向纠偏。起点接近及换边动作保持原逻辑。
+
 核对：2026-11-02，代码基线 `53692ef`。带地图任务使用 `AutonomousMission` 射线选墙及简单靠近，随后复用 `Mission` 沿墙与相邻换边。没有路径搜索、地图足迹或雷达环境碰撞门控，靠近阶段不绕障；定位、控制租约、通信期限、停止和取消仍生效。基本测试反馈与软件回归记录见[开发与验收记录](DEVELOPMENT_AND_ACCEPTANCE.md#7-测试和证据要求)。
 
 ## 总体流程
@@ -85,8 +87,8 @@ flowchart TD
     WALL -- 是 --> DIST{墙距是否在\n0.31–0.35 m?}
     DIST -- 否 --> AW
     DIST -- 是 --> HEADING{航向误差处于哪个区间?}
-    HEADING -- 绝对角度 ≤ 3° --> FOLLOW[FOLLOW\n滚刷 30%\n前墙中心距 >0.8 m: FORWARD 25挡 BOTH\n≤0.8 m: 主电机 STOP\n第五路关闭]
-    HEADING -- 3° < 绝对角度 ≤ 10° --> CORRECT1[CORRECT_HEADING\n纠偏 + 滚刷 30%]
+    HEADING -- 绝对角度 ≤ 3° --> FOLLOW[FOLLOW\n滚刷 50%\n主电机 STOP\n第五路关闭]
+    HEADING -- 3° < 绝对角度 ≤ 10° --> CORRECT1[CORRECT_HEADING\n纠偏 + 滚刷 50%]
     HEADING -- 绝对角度 > 10° --> CORRECT2[CORRECT_HEADING\n纠偏，滚刷关闭]
     FOLLOW --> FRONT
     CORRECT1 --> FRONT
@@ -120,8 +122,8 @@ flowchart TD
 | 起始点侧移 | `AutonomousMission._approach()`：第五路按侧移方向输出 ±50%；到达范围或切换动作时仍先停止。 |
 | 左墙距离控制 | `Mission._update_edge()`：墙距大于 `0.35 m` 时第五路 `+50%`，小于 `0.31 m` 时 `-50%`，在区间内关闭第五路。 |
 | 航向纠偏 | `Mission._update_edge()`：墙角绝对值超过 `3°` 进入 `CORRECT_HEADING`；正角发 `direction=3`，负角发 `direction=4`。 |
-| 直行辅助 | 原逻辑允许开刷、墙角绝对值不超过 `3°` 且船中心距前墙大于 `forward_assist_stop_m=0.8 m` 时，发 `direction=1 / speed_percent=25 / mode=BOTH`，四主电机与滚刷共同推进；进入 0.8 m（含等号）后仅靠滚刷前进，航向纠偏仍有效；纠偏期间不叠加前进。 |
-| 滚刷门控 | 航向绝对值不超过 `10°` 且墙距在稳定区间时开刷 `30%`；纠偏和滚刷可以同时工作。 |
+| 直行推进 | 前向清洗仅靠 `50%` 滚刷；墙角绝对值不超过 `3°` 时主电机为 `STOP`（中位），超过 `3°` 时以 LEFT/RIGHT 25 挡、BOTH 纠偏。起点接近及换边动作保持原逻辑。 |
+| 滚刷门控 | 航向绝对值不超过 `10°` 且墙距在稳定区间时开刷 `50%`；纠偏和滚刷可以同时工作。 |
 | 丢墙恢复 | `WAIT_WALL` 最多等待 `1.5 s`；期间输出中位命令，超时转 `PAUSED`。 |
 | 端点判断 | 使用地图边投影的船中心到边端距离；小于等于 `0.30 m` 进入 `EDGE_STOP`。雷达前方观测只作为辅助安全信息。 |
 | 自动换边 | `EDGE_STOP → MOVE_INWARD → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`；换边期间旧墙目标无效，转弯完成后重新关联新墙。 |

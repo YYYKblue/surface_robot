@@ -50,7 +50,7 @@ def run_demo(config=None):
 def main():
     print("SCRIPTED PREVIEW ONLY — no ROS output or dynamics model")
     print(" -> ".join(run_demo()))
-    print("Stage-2 left brush; +/-10 degrees; 33 cm target (31--35 cm band); 30 cm front stop; brush 30%, side 50%, main forward gear 25 only beyond 80 cm from front wall")
+    print("Stage-2 left brush; +/-10 degrees; 33 cm target (31--35 cm band); 30 cm front stop; brush 50% for forward propulsion, side 50%, main motors for heading correction only")
 
 
 if __name__ == "__main__":

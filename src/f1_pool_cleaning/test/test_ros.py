@@ -114,7 +114,7 @@ def test_real_ros_brush_preview_and_stream_watchdog(harness):
     h.start()
     h.wait(lambda: any(m.brush_enabled for m in h.commands))
     assert all(not m.token and not m.thrust_enabled
-               and m.direction == (ActuatorCommand.FORWARD if m.brush_enabled else ActuatorCommand.STOP)
+               and m.direction == ActuatorCommand.STOP
                and m.speed_percent == 25 and m.mode == ActuatorCommand.BOTH for m in h.commands)
     h.wait(lambda: bool(h.statuses))
     h.wait(lambda: any(s["left_wall_distance_cm"] == 34. for s in h.statuses))
@@ -207,9 +207,9 @@ def test_ros_ten_degree_gate_and_continuous_correction_without_turn_clearance(ha
     assert all(m.direction_until.sec == 0 and m.direction_until.nanosec == 0 for m in commands)
     assert h.controller.mission.active
     # The legacy single-wall controller keeps its brush gate during side correction.
-    # Returning to straight travel also restores the main-motor forward assist.
+    # Returning to straight travel neutralizes the main motors.
     h.angle, h.distance = 0., .30
-    h.wait(lambda: h.commands[-1].direction == 1 and h.commands[-1].brush_enabled
+    h.wait(lambda: h.commands[-1].direction == 0 and h.commands[-1].brush_enabled
            and h.commands[-1].thrust_percent == -50.)
 
 
@@ -220,21 +220,24 @@ def test_hardware_output_requires_clock_and_polarity(extra):
                        + [Parameter("output_enabled", value=True), extra])
 
 
-def test_ros_front_wall_cutoff_removes_forward_assist_but_keeps_correction(harness):
+def test_ros_brush_only_propulsion_keeps_correction_at_any_front_distance(harness):
     h = harness
     h.start()
-    h.wait(lambda: h.commands[-1].direction == ActuatorCommand.FORWARD)
+    h.wait(lambda: h.commands and h.commands[-1].direction == ActuatorCommand.STOP
+           and h.commands[-1].brush_percent == 50.)
     h.along = h.controller.config.length_m - .8
+    h.wait(lambda: h.controller.pose is not None and
+           h.controller.config.pool_xy(h.controller.pose.x, h.controller.pose.y)[0] >= h.along - 1e-8)
     h.wait(lambda: h.commands[-1].direction == ActuatorCommand.STOP
-           and h.commands[-1].brush_percent == 30.)
+           and h.commands[-1].brush_percent == 50.)
     assert h.controller.mission.phase == "FOLLOW"
     h.angle = math.radians(4.)
     h.wait(lambda: h.commands[-1].direction == ActuatorCommand.LEFT
-           and h.commands[-1].brush_percent == 30.)
+           and h.commands[-1].brush_percent == 50.)
     h.angle = 0.
     h.along += .01
     h.wait(lambda: h.commands[-1].direction == ActuatorCommand.STOP
-           and h.commands[-1].brush_percent == 30.)
+           and h.commands[-1].brush_percent == 50.)
 
 
 def test_ros_map_endpoint_closes_all_outputs(harness):
@@ -454,7 +457,7 @@ def test_live_leased_output_and_fault_release(fault):
         h.start()
         h.wait(lambda: any(m.brush_enabled and m.thrust_enabled for m in b.commands))
         moving = [m for m in b.commands if m.brush_enabled]
-        assert all(m.token == "fake-lease" and m.direction == 1 and m.brush_percent == 30.
+        assert all(m.token == "fake-lease" and m.direction == 0 and m.brush_percent == 50.
                    and m.thrust_percent == 50. for m in moving)
         assert all(not m.token for m in h.commands)
         if fault == "RC":
@@ -578,8 +581,8 @@ def test_direct_approach_hands_off_only_after_fresh_target_wall(tmp_path):
         node._wall(fresh)
         assert node.mission.phase == "APPROACH_WALL"
         node._tick()
-        assert node.mission.phase == "FOLLOW" and node.mission.last_effort.brush_percent == 30.
-        assert node.mission.last_effort.direction == 1 and not node.mission.last_effort.side_left_percent
+        assert node.mission.phase == "FOLLOW" and node.mission.last_effort.brush_percent == 50.
+        assert node.mission.last_effort.direction == 0 and not node.mission.last_effort.side_left_percent
     finally:
         node.destroy_node()
 

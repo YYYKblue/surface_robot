@@ -28,12 +28,10 @@ class Config:
     # Stop when the boat centre is about 30 cm from the front wall.  This is
     # the common endpoint trigger for every rectangle edge.
     front_stop_m: float = .30
-    # Below this centre-to-front-wall distance, only the brush propels forward.
-    forward_assist_stop_m: float = .80
     heading_deadband_rad: float = math.radians(10.)
     heading_correction_deadband_rad: float = math.radians(3.)
     pose_max_age_sec: float = .25
-    brush_percent: float = 30.
+    brush_percent: float = 50.
     # Fifth thruster during wall following and initial-position approach.
     side_percent: float = 50.
     turn_speed_percent: int = 25
@@ -91,7 +89,6 @@ class Config:
             raise ValueError("invalid heading band")
         if (not 0 < self.brush_percent <= 100 or not 0 < self.side_percent <= 50
                 or not 0 < self.transfer_side_percent <= 50
-                or not self.forward_assist_stop_m > self.front_stop_m
                 or type(self.turn_speed_percent) is not int or self.turn_speed_percent != 25
                 or not 0 < self.command_ttl_sec <= .15 or not 0 < self.wall_max_age_sec <= .15
                 or self.run_timeout_sec < 0 or self.wall_recovery_sec <= 0
