@@ -109,7 +109,7 @@ class Bridge(Node):
                     sample, self.get_clock().now().nanoseconds, session=session,
                     received_unix_ns=unix_ns, received_monotonic_ns=mono_ns)
             except ClockDiscontinuity as error:
-                self.worker.latch_fault(str(error))
+                self.worker.latch_clock_fault(str(error))
                 return
             if converted is not None:
                 self.imu_pub.publish(to_ros_message(converted, self.frame_id))
@@ -163,9 +163,16 @@ def main(args=None):
     signal.signal(signal.SIGINT, signal.default_int_handler)
     signal.signal(signal.SIGTERM, signal.default_int_handler)
     node = None
+    clock_restart = False
     try:
         node = Bridge()
         while rclpy.ok():
+            # Poll outside ROS timers: a backward wall-clock step can delay them.
+            if node.worker.clock_restart.is_set():
+                node.get_logger().error("Clock recovery: stopping bridge for supervised restart: "
+                                        + node.worker.clock_restart_reason)
+                clock_restart = True
+                break
             rclpy.spin_once(node, timeout_sec=.1)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
@@ -178,3 +185,5 @@ def main(args=None):
             node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
+    if clock_restart:
+        raise SystemExit(75)

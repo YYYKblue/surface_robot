@@ -1,7 +1,7 @@
 """Wait for synchronized, stable system time before opening the hardware bridge.
 
-Does not set the clock or change bridge fault protections. A missing time source
-keeps the service in start-pre; an administrative stop can interrupt the wait.
+Does not set the clock. Optional offline fallback accepts a plausible local date
+only after a fresh stability window; runtime clock protections remain active.
 """
 import argparse
 import math
@@ -11,6 +11,7 @@ import time
 
 class ClockWindow:
     MIN_UNIX_NS = 1704067200 * 10**9  # 2024-01-01 UTC; reject unset RTC dates.
+    MAX_UNIX_NS = (1 << 31) * 10**9  # ROS/bridge signed seconds limit.
     MAX_OFFSET_CHANGE_NS = 20_000_000  # Stricter than the bridge's 50 ms guard.
     MAX_SAMPLE_SPAN_NS = 5_000_000
     MAX_SAMPLE_GAP_NS = 2_000_000_000
@@ -23,7 +24,7 @@ class ClockWindow:
         reason = None
         if not synced:
             reason = "waiting for NTPSynchronized=yes"
-        elif unix_ns < self.MIN_UNIX_NS:
+        elif not self.MIN_UNIX_NS <= unix_ns < self.MAX_UNIX_NS:
             reason = "waiting for a valid system date"
         elif sample_span_ns > self.MAX_SAMPLE_SPAN_NS:
             reason = "clock sampling delayed; restarting stability window"
@@ -54,19 +55,28 @@ def synchronized():
         return False
 
 
-def wait_for_clock(stable_seconds=5.0, timeout=0.0):
+def wait_for_clock(stable_seconds=5.0, timeout=0.0, offline_after=None):
     window = ClockWindow(stable_seconds)
     started = time.monotonic()
     last_log, last_reason = -math.inf, None
+    offline = False
     while True:
-        synced = synchronized()
+        # Once offline is selected, do not let an unavailable D-Bus/NTP query
+        # interrupt clock sampling. A late correction still resets the window.
+        synced = False if offline else synchronized()
+        if (not offline and not synced and offline_after is not None
+                and time.monotonic() - started >= offline_after):
+            offline = True
+            window = ClockWindow(stable_seconds)
+            print("Operator clock gate: offline fallback; local calendar time is unverified", flush=True)
         before = time.monotonic_ns()
         unix_ns = time.time_ns()
         after = time.monotonic_ns()
-        ready, reason = window.observe(synced, unix_ns, (before + after) // 2, after - before)
+        ready, reason = window.observe(synced or offline, unix_ns, (before + after) // 2, after - before)
         now = time.monotonic()
         if ready:
-            print(f"Operator clock ready: NTP synchronized and stable for {stable_seconds:g}s", flush=True)
+            source = "offline local time (unverified date)" if offline else "NTP synchronized"
+            print(f"Operator clock ready: {source}; stable for {stable_seconds:g}s", flush=True)
             return 0
         if reason != last_reason or now - last_log >= 30:
             print(f"Operator clock gate: {reason}; elapsed={now-started:.1f}s", flush=True)
@@ -82,11 +92,15 @@ def main():
     parser.add_argument("--stable-seconds", type=float, default=5.0)
     parser.add_argument("--timeout", type=float, default=0.0,
                         help="Diagnostic timeout in seconds; 0 waits until ready")
+    parser.add_argument("--offline-after", type=float, default=None,
+                        help="Allow stable local time after this many seconds without sync; omitted requires NTP")
     args = parser.parse_args()
     if (not math.isfinite(args.stable_seconds) or args.stable_seconds < 1 or
-            not math.isfinite(args.timeout) or args.timeout < 0):
-        parser.error("stable-seconds must be >= 1 and timeout must be >= 0")
-    return wait_for_clock(args.stable_seconds, args.timeout)
+            not math.isfinite(args.timeout) or args.timeout < 0 or
+            (args.offline_after is not None and
+             (not math.isfinite(args.offline_after) or args.offline_after < 0))):
+        parser.error("stable-seconds must be >= 1; timeout and offline-after must be >= 0")
+    return wait_for_clock(args.stable_seconds, args.timeout, args.offline_after)
 
 
 if __name__ == "__main__":

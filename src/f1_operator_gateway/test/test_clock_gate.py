@@ -88,3 +88,88 @@ def test_cli_times_out_without_launching_on_missing_sync(tmp_path):
     assert result.returncode == 1
     assert "bridge was not started" in result.stdout
     assert "Operator clock ready" not in result.stdout
+
+
+class FakeTime:
+    def __init__(self, base=BASE, offset=lambda second: 0):
+        self.second = 0.
+        self.base, self.offset = base, offset
+
+    def monotonic(self):
+        return self.second
+
+    def monotonic_ns(self):
+        return round(self.second * 1e9)
+
+    def time_ns(self):
+        return self.base + self.monotonic_ns() + self.offset(self.second)
+
+    def sleep(self, seconds):
+        self.second += seconds
+
+
+def test_offline_fallback_waits_grace_and_full_stability(monkeypatch, capsys):
+    clock = FakeTime()
+    monkeypatch.setattr(gate, "time", clock)
+    monkeypatch.setattr(gate, "synchronized", lambda: False)
+    assert gate.wait_for_clock(offline_after=20) == 0
+    assert clock.second == 25
+    assert "unverified date" in capsys.readouterr().out
+
+
+def test_online_sync_does_not_wait_offline_grace(monkeypatch, capsys):
+    clock = FakeTime()
+    monkeypatch.setattr(gate, "time", clock)
+    monkeypatch.setattr(gate, "synchronized", lambda: clock.second >= 2)
+    assert gate.wait_for_clock(offline_after=20) == 0
+    assert clock.second == 7
+    assert "NTP synchronized" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("jump", [-100_000_000, 100_000_000])
+def test_late_correction_restarts_offline_window(monkeypatch, jump):
+    clock = FakeTime(offset=lambda second: jump if second >= 23 else 0)
+    monkeypatch.setattr(gate, "time", clock)
+    monkeypatch.setattr(gate, "synchronized", lambda: False)
+    assert gate.wait_for_clock(offline_after=20) == 0
+    assert clock.second == 28
+
+
+@pytest.mark.parametrize("base", [0, (1 << 31) * 10**9])
+def test_offline_rejects_invalid_date(monkeypatch, base):
+    clock = FakeTime(base=base)
+    monkeypatch.setattr(gate, "time", clock)
+    monkeypatch.setattr(gate, "synchronized", lambda: False)
+    assert gate.wait_for_clock(timeout=8, offline_after=0) == 1
+
+
+def test_offline_continuous_jumps_never_release_gate(monkeypatch):
+    clock = FakeTime(offset=lambda second: int(second) * 100_000_000)
+    monkeypatch.setattr(gate, "time", clock)
+    monkeypatch.setattr(gate, "synchronized", lambda: False)
+    assert gate.wait_for_clock(timeout=10, offline_after=0) == 1
+
+
+def test_offline_dbus_timeout_does_not_block_stable_sampling(monkeypatch):
+    clock = FakeTime()
+    queries = []
+    def unavailable():
+        queries.append(clock.second)
+        clock.sleep(3)
+        return False
+    monkeypatch.setattr(gate, "time", clock)
+    monkeypatch.setattr(gate, "synchronized", unavailable)
+    assert gate.wait_for_clock(offline_after=0) == 0
+    assert clock.second == 8
+    assert len(queries) == 1
+
+
+def test_cli_offline_launches_without_ntp(tmp_path):
+    command = tmp_path / "timedatectl"
+    command.write_text("#!/bin/sh\nprintf 'no\\n'\n")
+    command.chmod(0o755)
+    result = subprocess.run([sys.executable, str(SCRIPT), "--offline-after", "0",
+                             "--stable-seconds", "1", "--timeout", "3"],
+                            env={"PATH": str(tmp_path)}, capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "offline local time" in result.stdout

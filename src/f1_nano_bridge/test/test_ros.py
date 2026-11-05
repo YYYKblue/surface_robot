@@ -114,3 +114,57 @@ def test_bad_startup_configuration_rejected_before_serial(parameters, reason):
     result = subprocess.run(command, capture_output=True, text=True, timeout=5)
     assert result.returncode != 0
     assert reason in result.stderr
+
+
+@pytest.mark.parametrize("source", ["worker_forward", "worker_backward", "imu"])
+def test_main_exits_for_clock_recovery_and_cleans_up(monkeypatch, source):
+    """Inject clock observations, never change host time or open hardware."""
+    from nano_ros_bridge import node as bridge_module
+    from nano_ros_bridge.imu.conversion import ClockDiscontinuity
+    observed = []
+    spins = []
+    real_bridge = bridge_module.Bridge
+    def make_bridge():
+        bridge = real_bridge()
+        observed.append(bridge)
+        return bridge
+    def spin_once(bridge, **kwargs):
+        spins.append(True)
+        assert len(spins) == 1, "recovery must not depend on a ROS timer firing"
+        bridge.worker.core.token = "old-lease"
+        if source == "imu":
+            def stepped(*args, **kwargs):
+                raise ClockDiscontinuity("injected IMU clock step")
+            bridge.converter.convert = stepped
+            bridge.worker.imu.append(("test", {}, 0, 0))
+            bridge._imu()
+        else:
+            jump = 100_000_000 if source == "worker_forward" else -100_000_000
+            offset = bridge.worker.clock_offset + jump
+            bridge.worker.wall_clock_ns = lambda: time.monotonic_ns() + offset
+            bridge.worker._check_clock()
+    monkeypatch.setattr(bridge_module, "Bridge", make_bridge)
+    monkeypatch.setattr(bridge_module.rclpy, "spin_once", spin_once)
+    # main temporarily owns signal handling; restore it for the pytest runner.
+    handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        with pytest.raises(SystemExit) as error:
+            bridge_module.main(args=[])
+        assert error.value.code == 75
+        assert len(observed) == 1 and not rclpy.ok()
+        worker = observed[0].worker
+        assert worker.clock_restart.is_set() and worker.quit.is_set()
+        assert not worker.core.token and worker.handle is None
+        # A fresh process starts without the old lease/fault; it cannot resume motion.
+        rclpy.init(args=[])
+        fresh = real_bridge()
+        try:
+            assert not fresh.worker.core.token and not fresh.worker.core.fault
+            assert not fresh.worker.clock_restart.is_set()
+            assert fresh.worker.snapshot()["state"] == "DISCONNECTED"
+        finally:
+            fresh.destroy_node()
+            rclpy.shutdown()
+    finally:
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)

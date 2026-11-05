@@ -393,11 +393,39 @@ ros2 launch f1_operator_gateway operator_system.launch.py \
 
 仓库提供 `src/f1_operator_gateway/deploy/f1-operator.service` 和 `start-operator.sh`。服务模板按 Nano 用户 `nvidia`、工作空间 `/home/nvidia/surface_ws` 编写；安装前按实际路径修改 `User/WorkingDirectory/F1_WORKSPACE/ExecStart`。当前船体部署按操作者要求设置 `F1_OUTPUT_ENABLED=true`，开启串口、运动及第五路控制许可；单独执行 launch 的默认值仍为 false。仅预览时将服务环境变量改为 false。服务使用 `Restart=always`，也覆盖子节点退出后 ROS launch 返回成功的情况；执行 `systemctl stop` 不会触发自动重启。开机或重启后进入待机，不恢复旧动作。
 
-`ExecStartPre` 运行 `deploy/wait-operator-clock.py`，等待 `NTPSynchronized=yes` 且系统时钟相对单调时钟连续稳定 5 秒后，才启动网关和串口桥。检查期间时钟偏移变化超过 20 ms、采样被长时间抢占或同步状态丢失都会重新计时；仅看到日期正常或校时进程已运行不算就绪。未完成校时时，服务保持 `activating (start-pre)`，每 30 秒输出等待原因，不超时放行。现场没有可用时间源时，需要先恢复校时来源；本配置没有自动绕过检查的离线模式。
+`ExecStartPre` 运行 `deploy/wait-operator-clock.py --offline-after 20`，采用以下三层恢复策略：
 
-这是对开机校时晚于桥接启动问题的修复。运行中的 50 ms 时间跳变故障保护仍保留：若启动后人为改时或再次发生明显跳变，桥接会停止输出并锁定故障。处理时先确认时间已稳定，再重启 `f1-operator.service`；重启后重新选图和定位，不自动恢复之前任务。直接执行 ROS launch 不经过这个 systemd 启动检查。
+1. **启动**：优先等待 `NTPSynchronized=yes` 和连续 5 秒稳定时间；20 秒后仍未同步则进入离线模式，重新观察完整的 5 秒稳定窗口。离线模式要求系统日期处于 2024-01-01 至 2038-01-19 03:14:08 UTC（不含）之间，但这只是合理范围检查，不证明日期准确。时间偏移相对窗口起点变化超过 20 ms、采样延迟或中断会重新计时。日期无效或时间持续不稳定时仍保持 `activating (start-pre)`，每 30 秒记录原因。NTP 查询最多可能额外占用 3 秒。
+2. **运行**：保留桥接相对启动基准的 50 ms 时间偏移保护和 IMU 时间跳变检测。时间故障先锁定输出、撤销租约，再由串口线程尽力发送中性帧并关闭串口；桥接主循环不依赖 ROS 定时器，发现恢复请求后清理退出，退出码为 75。中性帧不能保证设备收到或覆盖 RC，固件看门狗仍是兜底。其他故障不因这条时间恢复路径自动解锁。
+3. **恢复**：受管 `operator_system.launch.py` 在桥接退出后关闭网关及受管地图/任务进程；systemd 等待 5 秒，重新执行启动检查并拉起整个 operator 服务。恢复为无地图待机，旧租约、运动指令及任务不恢复。App 自动重连并清空旧手动输入，操作者需要重新选图、定位，再开始任务。未保存的建图进度可能丢失，已经保存的地图保留。
+
+离线模式使用操作系统已经建立的时间，不会运行 `date`/`hwclock`、伪造同步标志或写入 RTC。目标机应通过有后备电源的 RTC，或系统已有的持久化时间恢复机制建立合理日期；没有 RTC 时，上次保存时间只是粗略下界，长时间断电后日志和地图日期可能不准确。部署时必须验证断电后的 `date -Is`，不能仅凭检查通过认定时间准确。日志中的 `offline local time (unverified date)` 表示离线启动。
+
+联网恢复后仍允许系统校时；若因此出现明显时间变化，会安全停止并走上述重启流程，而不是无缝继续作业。当前桥接比较的是相对启动时的累计偏移，长时间的平滑校正也可能超过 50 ms，因此不能把“只平滑调整”当作不会触发恢复的保证。服务限制 600 秒内最多启动 5 次；超过限制后保持失败状态，不自动恢复任务。排除时间反复变化问题后，执行 `sudo systemctl reset-failed f1-operator.service` 再 `sudo systemctl start f1-operator.service`。
+
+脚本单独运行时默认仍严格要求 NTP；`--offline-after 0` 表示立即开始离线判定，`--timeout` 仅用于诊断，超时失败退出，不会强制放行。直接执行 ROS launch 不经过启动检查，也没有 systemd 自动重启；时间异常退出后需要自行启动。
 
 2026-10-31 校时检查部署验证：13 个本地测试通过；Nano 临时 systemd 测试模拟未校时，确认后续进程未启动。正式服务在 15:06:22 开始检查，15:06:27 通过后启动；随后连续 15 秒的 151 条遥测均为 `READY`，CTRL/ACK、IMU 和雷达数据正常，船体保持停止。此次验证没有修改系统时间或重启整机。原服务备份位于 Nano 的 `deploy_backups/clock-gate-20261031_150457/`。
+
+上述记录属于旧的严格 NTP 启动版本，不代表三层恢复策略已通过实机验收。升级须同时同步并构建 `f1_nano_bridge` 与 `f1_operator_gateway`，再安装新 service 模板并执行 `daemon-reload`。仅更新 Python 脚本不会改变已安装服务的严格启动参数。Windows App 协议没有变化，无需为本次恢复策略重新打包。
+
+已有服务升级时，在结束任务、船体停止后执行以下步骤（先将新版源码同步到 Nano）：
+
+```bash
+sudo systemctl stop f1-operator.service
+cd /home/nvidia/surface_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-up-to f1_operator_gateway
+sudo install -m 644 src/f1_operator_gateway/deploy/f1-operator.service /etc/systemd/system/f1-operator.service
+sudo systemctl daemon-reload
+sudo systemctl reset-failed f1-operator.service
+sudo systemctl start f1-operator.service
+journalctl -u f1-operator.service -n 80 --no-pager
+```
+
+检查 `systemctl cat f1-operator.service` 中实际生效的 `ExecStartPre` 包含 `--offline-after 20`，同时核对本机原有 drop-in 是否覆盖了模板。`enable --now` 不会重启已经运行的服务，不能替代上述 stop/start。
+
+三层策略的现场验收：断开路由器 WAN、保持局域网连接后冷启动，确认约 25 秒（不含网络就绪等待）进入离线待机；验证地图和日志日期的实际误差；在无运动输出的条件下验证正向/反向时间跳变，确认服务重启且不恢复旧任务；恢复联网后确认校时和后续重启能够收敛。持续跳变时不得获得运动租约，达到启动限流后应停止重试。健康检查按原有顺序在 operator 服务完成启动后执行，等待期间应直接查看 `journalctl`。
 
 以下为目标机的一次性安装步骤；执行前关闭已占用同端口/同硬件的手工入口：
 

@@ -110,17 +110,60 @@ def test_real_serial_pty_deadline_stop_and_imu(firmware):
     assert not errors and not thread.is_alive()
 
 
-def test_clock_step_revokes_and_latches():
+@pytest.mark.parametrize("jump", [-100_000_000, 100_000_000])
+def test_clock_step_revokes_and_latches(jump):
     offset = [time.time_ns() - time.monotonic_ns()]
     worker = Worker("/unused", wall_clock_ns=lambda: time.monotonic_ns() + offset[0])
     worker.core.token = "old"
-    offset[0] += 100_000_000
+    offset[0] += jump
     worker._check_clock()
     assert not worker.core.token and "system clock changed" in worker.core.fault
-    offset[0] -= 100_000_000
+    assert worker.clock_restart.is_set()
+    offset[0] -= jump
     worker._check_clock()
     worker.core.opened()
     assert worker.core.fault and not worker.acquire("task")[0]
+
+
+def test_unrelated_fault_never_requests_clock_recovery():
+    worker = Worker("/unused")
+    worker.latch_fault("worker failed")
+    worker.latch_clock_fault("later IMU clock step")
+    assert not worker.clock_restart.is_set()
+    assert worker.core.fault == "worker failed"
+
+
+def test_clock_recovery_closes_serial_with_neutral():
+    """Use a real PTY; no firmware, ROS or system clock changes."""
+    master, slave = pty.openpty()
+    port = os.ttyname(slave)
+    os.close(slave)
+    offset = [time.time_ns() - time.monotonic_ns()]
+    worker = Worker(port, enabled=True,
+                    wall_clock_ns=lambda: time.monotonic_ns() + offset[0])
+    worker.handle = open_serial(port)
+    worker.core.opened()
+    # Fresh neutral CTRL permits the shutdown path to transmit a neutral frame.
+    control = Control(1, "NANO", 1, False, 0, "OK", "BOTH", True,
+                      False, 0, False, 0, (1500,) * 4)
+    worker.core.receive(control, time.monotonic())
+    worker.core.token = "old-lease"
+    worker.core.owner = "old-owner"
+    offset[0] += 100_000_000
+    try:
+        worker.start()
+        worker.thread.join(timeout=2)
+        assert not worker.thread.is_alive()
+        assert worker.clock_restart.is_set()
+        assert not worker.core.token and not worker.core.owner
+        assert worker.handle is None
+        assert select.select([master], [], [], 1)[0]
+        frame = os.read(master, 4096)
+        assert frame == encode(channels(0, 25, 1, False, 0, False, 0), 1, 0)
+        assert not worker.acquire("new-task")[0]
+    finally:
+        worker.close()
+        os.close(master)
 
 
 def test_worker_write_survives_scheduler_delay_after_full_commit(monkeypatch):

@@ -55,6 +55,9 @@ class Worker:
         self.core = Session(motion_enabled, allow_fifth)
         self.lock = threading.RLock()
         self.quit = threading.Event()
+        # Only clock faults request process recovery. Other faults stay latched.
+        self.clock_restart = threading.Event()
+        self.clock_restart_reason = ""
         self.thread = None
         self.handle = None
         self.lines = Lines()
@@ -91,7 +94,15 @@ class Worker:
             self.clock_offset = offset
         delta = offset - self.clock_offset
         if abs(delta) > 50_000_000 and not self.core.fault:
-            self.core.latch_fault(f"system clock changed {delta / 1e6:.1f} ms; restart required")
+            self.latch_clock_fault(f"system clock changed {delta / 1e6:.1f} ms; restart required")
+
+    def latch_clock_fault(self, reason):
+        with self.lock:
+            if self.core.fault and not self.clock_restart.is_set():
+                return  # Never clear an unrelated latched fault by restarting.
+            self.core.latch_fault(reason)
+            self.clock_restart_reason = reason
+            self.clock_restart.set()
 
     def start(self):
         if self.thread is not None:
@@ -284,6 +295,8 @@ class Worker:
                 with self.lock:
                     try:
                         self._check_clock()
+                        if self.clock_restart.is_set():
+                            break  # finally attempts neutral and closes the tty.
                         if self.handle is None:
                             if now < retry_at:
                                 continue

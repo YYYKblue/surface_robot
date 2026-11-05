@@ -50,6 +50,7 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py bind_address:=0.0.0.0
 - App 停止发送输入、WebSocket 断开或网关退出时，网关释放自己的手动会话。自动任务的租约由任务控制器管理，需通过其 `pause/stop/cancel` 停止；App 的 `manual_stop` 不调用 `/f1/stop`。
 - 重连后不会恢复上一次动作；必须重新产生新输入。
 - RC 接管、epoch 改变、串口错误、CTRL/ACK 超时和原始命令过期仍会停止输出。
+- 系统时间相对启动基准偏移超过 50 ms，或 IMU 检测到时间跳变时，先撤销租约并锁定故障，串口线程尽力发送中性帧、关闭串口，主进程以 75 退出。只有时间故障请求这种恢复，其他故障不会被它自动清除。`f1-operator.service` 会重新检查时间并重启整套 operator 为待机；直接运行本包没有自动重启。恢复不沿用旧 token、命令或任务，必须重新选图和定位。详见[三层恢复策略](../../DEPLOY_NANO.md#app-建图选图与开机服务)。
 
 ## 验证
 

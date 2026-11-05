@@ -27,12 +27,12 @@ def generate_launch_description():
             bind_address="127.0.0.1", port="8765", scan_topic="/pavo2_scan", map_timezone="Asia/Shanghai",
             start_bridge="true", output_enabled="false", publish_lidar_tf="true", mapping_resolution="0.05",
             bridge_config=str(bridge / "config/bridge.yaml"), rectangle_config="", l_config="", localization_config="").items()],
+        RegisterEventHandler(OnProcessExit(on_exit=[EmitEvent(event=Shutdown(reason="operator system process exited"))])),
         IncludeLaunchDescription(PythonLaunchDescriptionSource(str(bridge / "launch/bridge.launch.py")),
             condition=IfCondition(LaunchConfiguration("start_bridge")), launch_arguments={
                 "config": LaunchConfiguration("bridge_config"),
                 **{key: LaunchConfiguration("output_enabled") for key in
                    ("serial_enabled", "motion_enabled", "direction_confirmed", "allow_fifth_thruster")},
             }.items()),
-        RegisterEventHandler(OnProcessExit(on_exit=[EmitEvent(event=Shutdown(reason="operator system process exited"))])),
         gateway,
     ])
