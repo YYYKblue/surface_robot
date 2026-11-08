@@ -153,7 +153,8 @@ def test_start_region_is_drawn_only_for_fresh_matching_map(app):
     assert canvas._start_region() is None
 
 
-def test_remaining_l_completion_never_claims_full_route_coverage(app, monkeypatch):
+@pytest.mark.parametrize("scope", ["remaining_open_route", "remaining_l_route"])
+def test_remaining_l_completion_never_claims_full_route_coverage(app, monkeypatch, scope):
     monkeypatch.setattr(SocketWorker, "start", lambda self: None)
     window = OperatorWindow("unused")
     try:
@@ -161,7 +162,7 @@ def test_remaining_l_completion_never_claims_full_route_coverage(app, monkeypatc
             "task_selection", "initial_pose", "start_conditions", "task_tracks"]))
         window._message(mapping())
         task = dict(map_id="map-a", fresh=True, phase="MOVE_START_SIDE", run_id="run",
-                    start_edge_id="edge_1", current_edge_id="edge_1", completion_scope="remaining_l_route",
+                    start_edge_id="edge_1", current_edge_id="edge_1", completion_scope=scope,
                     start_region=dict(reference_wall_point=[-2., 3.5]), coverage_complete=False)
         state = dict(type="telemetry", active_client="test", task_busy=True, active_tasks=["l"],
                      localization=dict(map_id="map-a", fresh=True), tasks=dict(l=task))
@@ -169,7 +170,7 @@ def test_remaining_l_completion_never_claims_full_route_coverage(app, monkeypatc
         assert "侧移" in window.task_status.text() and "edge_1" in window.start_details.text()
         task.update(phase="COMPLETE", completed_at_ns=time.time_ns())
         window._message(state)
-        assert "剩余 L 路线" in window.result_label.text()
+        assert "剩余开放墙链" in window.result_label.text()
         assert "覆盖记录仍有缺口" in window.result_label.text()
         assert "要求区间已覆盖" not in window.result_label.text()
     finally:

@@ -48,6 +48,7 @@ class Mission:
     WALL_PHASES = ("APPROACH_WALL", "APPROACH_EDGE", "FOLLOW",
                    "CORRECT_HEADING", "WAIT_WALL")
     TRANSFER_PHASES = ("EDGE_STOP", "MOVE_INWARD", "TURN_TO_NEXT_EDGE",
+                       "LEFT_EXIT_WALL", "LEFT_SHIFT_TO_ENTRY", "TURN_LEFT_TO_NEXT_EDGE",
                        "APPROACH_NEXT_EDGE")
 
     def __init__(self, config):
@@ -80,6 +81,8 @@ class Mission:
         self.transfer_action_started_ns = None
         self.transfer_turn_target_yaw = None
         self.transfer_turn_started_ns = None
+        self.transfer_turn_rad = 0.
+        self.left_exit_s_m = None
 
     @property
     def active(self):
@@ -108,6 +111,8 @@ class Mission:
         self.transfer_action_started_ns = None
         self.transfer_turn_target_yaw = None
         self.transfer_turn_started_ns = None
+        self.transfer_turn_rad = 0.
+        self.left_exit_s_m = None
         self._reset_edge_progress()
 
     def configure_edge(self, pool, edge, task_id=""):
@@ -250,6 +255,15 @@ class Mission:
         self.transfer_action_started_ns = None
         self.transfer_turn_target_yaw = next_edge.yaw_rad
         self.transfer_turn_started_ns = None
+        self.transfer_turn_rad = wrap(next_edge.yaw_rad - self.edge.yaw_rad)
+        if self.transfer_turn_rad > 0:
+            # Project a nominal next-entry centre onto the current heading.
+            # Keep a minimum forward exit; the following left shift is ended
+            # by next-edge progress, not by distance to the next wall.
+            entry = tuple(next_edge.start[i] + next_edge.tangent[i] * next_edge.entry_s_m
+                          - next_edge.left_normal[i] * self.c.wall_target_m for i in (0, 1))
+            along = sum((entry[i] - self.edge.end[i]) * self.edge.tangent[i] for i in (0, 1))
+            self.left_exit_s_m = self.edge.length_m + max(self.c.left_exit_forward_m, along)
         self.phase = "EDGE_STOP"
         self.reason = (f"{self.edge.id} stopped at {self.c.front_stop_m:.2f} m; "
                        f"preparing transfer to {next_edge.id}")
@@ -263,6 +277,8 @@ class Mission:
         self.transfer_action_started_ns = None
         self.transfer_turn_target_yaw = None
         self.transfer_turn_started_ns = None
+        self.transfer_turn_rad = 0.
+        self.left_exit_s_m = None
         self._reset_edge_progress()
         self.last_scan = -1
         self.wall_lost_since_ns = None
@@ -367,7 +383,18 @@ class Mission:
             self.halt("edge transfer timeout")
             return None
         pose = f.pose
+        if self.phase in ("LEFT_EXIT_WALL", "LEFT_SHIFT_TO_ENTRY", "TURN_LEFT_TO_NEXT_EDGE"):
+            return self._update_left_transfer(pose, now)
         if self.phase == "EDGE_STOP":
+            if self.transfer_turn_rad > 1e-6:
+                self.phase = "LEFT_EXIT_WALL"
+                self.reason = "left transfer: moving forward beyond current wall endpoint"
+                self.last_update_ns = now
+                self.last_effort = self._stop_effort(now, pose)
+                return self.last_effort
+            if abs(self.transfer_turn_rad) <= 1e-6:
+                self._finish_transfer_to_next_edge(pose, now)
+                return self.last_effort
             self.phase = "MOVE_INWARD"
             self.transfer_action_started_ns = now
             self.reason = ("moving inward: reverse and right push "
@@ -413,6 +440,63 @@ class Mission:
             return self.last_effort
         # APPROACH_NEXT_EDGE uses the ordinary wall controller on the new edge.
         return self._update_edge(f, now)
+
+    def _update_left_transfer(self, pose, now):
+        """Pose-only forward/left/turn sequence, without spatial clearance gates.
+
+        The original right-transfer implementation above is unchanged. The
+        old wall remains selected but disabled until the left turn finishes.
+        """
+        self.last_update_ns = now
+        direction, side = 0, 0.
+        if self.phase == "TURN_LEFT_TO_NEXT_EDGE":
+            error = wrap(self.transfer_turn_target_yaw - pose.yaw)
+            if abs(error) <= self.c.transfer_turn_tolerance_rad:
+                self._finish_transfer_to_next_edge(pose, now)
+                return self.last_effort
+            if (self.c.transfer_turn_timeout_sec > 0 and
+                    now - self.transfer_turn_started_ns >= self.c.transfer_turn_timeout_sec * 1e9):
+                self.halt("left turn timeout")
+                return None
+            if error < 0:
+                self.halt("next edge does not require the configured left turn")
+                return None
+            direction = 3
+            self.reason = f"turning left; heading error {math.degrees(error):.1f} deg"
+        else:
+            # Keep the incoming heading during both translations. A heading
+            # correction interrupts translation and inserts a stop cycle.
+            heading = wrap(self.edge.yaw_rad - pose.yaw)
+            if abs(heading) > self.c.heading_correction_deadband_rad:
+                direction = 3 if heading > 0 else 4
+                self.reason = "left transfer: holding incoming wall heading"
+            elif self.phase == "LEFT_EXIT_WALL":
+                p = self.edge.project(pose)
+                if p.s_m >= self.left_exit_s_m - self.c.left_transfer_position_tolerance_m:
+                    self.phase = "LEFT_SHIFT_TO_ENTRY"
+                    self.reason = "left transfer: shifting left into next wall entry region"
+                    self.last_effort = self._stop_effort(now, pose)
+                    return self.last_effort
+                direction = 1
+                self.reason = "left transfer: moving forward beyond current wall endpoint"
+            else:
+                p = self.transfer_next_edge.project(pose)
+                if p.s_m >= self.transfer_next_edge.entry_s_m - self.c.left_transfer_position_tolerance_m:
+                    self.phase = "TURN_LEFT_TO_NEXT_EDGE"
+                    self.transfer_turn_started_ns = now
+                    self.reason = f"turning left toward {self.transfer_next_edge.id}"
+                    self.last_effort = self._stop_effort(now, pose)
+                    return self.last_effort
+                side = self.c.side_percent
+                self.reason = "left transfer: shifting left into next wall entry region"
+        previous = self.last_effort
+        if (previous and (previous.direction or previous.side_left_percent)
+                and (previous.direction, previous.side_left_percent) != (direction, side)):
+            self.last_effort = self._stop_effort(now, pose)
+        else:
+            self.last_effort = Effort(now, self._deadline(now, pose), direction=direction,
+                                      side_left_percent=side)
+        return self.last_effort
 
     def _update_edge(self, f, now):
         if self.phase in self.TRANSFER_PHASES and self.phase != "APPROACH_NEXT_EDGE":

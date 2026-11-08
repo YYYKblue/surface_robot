@@ -257,7 +257,7 @@ class AutonomousMission(Mission):
 
     def _complete(self, f, now):
         self.halt("rectangle route and starting prefix finished; inspect coverage gaps" if self.closed else
-                  "remaining L route finished; no return or repair", "COMPLETE")
+                  "remaining open wall chain finished; no return or repair", "COMPLETE")
         self.last_effort = self._stop_effort(now, f.pose)
 
     def _begin_transfer(self, f, now):
@@ -334,4 +334,4 @@ class AutonomousMission(Mission):
                     coverage_complete=bool(self.required) and not any(gaps.values()),
                     returning_to_start=self.returning_to_start, remaining_edges=list(self.remaining_edges),
                     executed_edge_ids=list(dict.fromkeys(self.finished_edges)),
-                    completion_scope="rectangle_route" if self.closed else "remaining_l_route")
+                    completion_scope="rectangle_route" if self.closed else "remaining_open_route")

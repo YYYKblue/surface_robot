@@ -64,6 +64,11 @@ class Config:
     transfer_timeout_sec: float = 0.0
     transfer_turn_timeout_sec: float = 0.0
     transfer_turn_tolerance_rad: float = math.radians(20.)
+    # Left transfer: forward past the wall endpoint, then left to the next
+    # edge's entry progress, then turn. These are motion targets, not hull or
+    # neighbouring-corner clearance checks.
+    left_exit_forward_m: float = .35
+    left_transfer_position_tolerance_m: float = .05
 
     def validate(self):
         zero_allowed = ("origin_x_m", "origin_y_m", "axis_yaw_rad",
@@ -100,6 +105,7 @@ class Config:
                 or self.transfer_timeout_sec < 0
                 or self.transfer_turn_timeout_sec < 0
                 or not 0 < self.transfer_turn_tolerance_rad < math.pi / 2
+                or not 0 < self.left_transfer_position_tolerance_m < self.left_exit_forward_m
                 or self.brush_x_m < -self.hull_half_length_m
                 or abs(self.brush_tip_y_m) <= self.hull_half_width_m
                 or self.brush_compression_m < 0):

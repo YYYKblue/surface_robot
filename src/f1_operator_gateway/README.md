@@ -77,7 +77,7 @@ ros2 launch f1_operator_gateway operator_bringup.launch.py \
 该入口只启动一套 Cartographer/定位管理器、一套 bridge、一个网关，并启动地图几何校验通过的清洗控制器。定位统一使用 `/f1_localization/*`，任务分别使用 `/pool_cleaning/*`、`/l_cleaning/*`。不能与已有完整 bringup 重复启动。
 
 - 地图不支持某种任务时，不启动该控制器，并把具体推导错误传给 App；另一种可用任务仍可运行。
-- 不会在矩形地图上任意猜选两条边作为 L 路线。当前 L 推导存在歧义时不可用。
+- 开放任务保留类型 `l`，支持多段墙链；默认最长连续链，其他链在 `l_config` 中通过 `route_chain_index` 选择，不自动转场。完整闭合矩形不作为开放路线。
 - `start_bridge:=false` 复用已有 bridge；`start_localization:=false` 要求已有定位使用 `cleaning_prefix:=f1_localization` 且地图相同。
 - 可指定 `rectangle_config`、`l_config`、`localization_config`、`bridge_config`、`scan_topic`；已有雷达 TF 时设 `publish_lidar_tf:=false`。
 - 需要现场实际输出时加入 `output_enabled:=true`。复用的 bridge 需自行配置对应串口、运动、方向和第五路许可。
@@ -151,7 +151,7 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
 每个 `tasks[kind]` 新增：
 
 - `expected_track: {frame_id, map_id, cleaning_segments: [{edge_id, points: [[x,y], ...]}], navigation_path: [], start_region: {...}}`：来自控制器的船体中心清洗目标段和起始范围；`navigation_path` 为兼容字段，新版保持空列表，未确定起始范围时 `start_region` 为 null。
-- 任务状态顶层的 `start_edge_id/start_region/first_brush_contact/returning_to_start/remaining_edges/executed_edge_ids`：锁定起始墙、参考范围、首次有效开刷位置和执行进度，由网关透传。`completion_scope` 为 `rectangle_route` 或 `remaining_l_route`；`coverage_complete/required_contact_intervals/remaining_contact_intervals` 独立报告覆盖情况，`COMPLETE` 不保证缺口为空。旧 `repair_pass/active_cleaning_interval` 已不由新控制器输出。
+- 任务状态顶层的 `start_edge_id/start_region/first_brush_contact/returning_to_start/remaining_edges/executed_edge_ids`：锁定起始墙、参考范围、首次有效开刷位置和执行进度，由网关透传。`completion_scope` 为 `rectangle_route` 或 `remaining_open_route`（旧客户端字段为 `remaining_l_route`）；`coverage_complete/required_contact_intervals/remaining_contact_intervals` 独立报告覆盖情况，`COMPLETE` 不保证缺口为空。旧 `repair_pass/active_cleaning_interval` 已不由新控制器输出。
 - `actual_track: {frame_id, map_id, run_id, segments: [[[x,y], ...], ...], point_count, truncated}`：网关从有效的 map→base_link TF 采样，分段避免连接定位缺失/跳变。
 - `center_wall_distance_m`、`wall_fresh`、`wall_age_sec`：有效左墙线到 base_link 原点的垂直距离及源数据新鲜度；距离不可用时为 null。
 

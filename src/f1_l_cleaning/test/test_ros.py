@@ -1,4 +1,5 @@
 """ROS adapter smoke tests; all outputs remain preview-only."""
+import math
 import pytest
 import rclpy
 from rclpy.node import Node
@@ -151,5 +152,29 @@ def test_l_track_is_open_and_stop_service_is_isolated():
         assert "/pool_cleaning/stop" not in services
         assert node._stop_task(None, Trigger.Response()).success
         assert node.mission.phase == "STOPPED" and not node.mission.active
+    finally:
+        node.destroy_node()
+
+
+@pytest.mark.parametrize('phase', ['LEFT_EXIT_WALL', 'LEFT_SHIFT_TO_ENTRY', 'TURN_LEFT_TO_NEXT_EDGE'])
+def test_multiedge_adapter_disables_wall_target_during_left_transfer(phase, monkeypatch):
+    chain = [8., 2., 8., 1., 5., 1., 5., 2., 1., 2., 1., 9.]
+    node = LController(parameter_overrides=controller_parameters({
+        'route_xy': chain, 'use_map_tf': False, 'require_localization_ready': False}))
+    try:
+        node.timer.cancel()
+        assert len(node.pool.edges) == 5
+        assert len(node._expected_track()['cleaning_segments']) == 5
+        assert not node.live
+        node.pose = Pose(node.get_clock().now().nanoseconds, 5.4, 2., math.pi/2)
+        node._set_selected_edge(node.pool.edges[2])
+        node.mission.phase = phase
+        assert node.mission.active and not node.mission.wall_required
+        published = []
+        monkeypatch.setattr(node.edge_target_pub, 'publish', published.append)
+        node._publish_edge_target()
+        assert published and not published[-1].valid
+        assert node._stop_task(None, Trigger.Response()).success
+        assert node.mission.phase == 'STOPPED' and not node.mission.active
     finally:
         node.destroy_node()

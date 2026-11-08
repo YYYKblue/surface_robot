@@ -1,134 +1,106 @@
-# f1_l_cleaning：大 L 两段墙清洗
+# f1_l_cleaning：开放多段直墙清洗
 
-文档核对：2026-11-03。项目构建、部署和任务入口总览见[工作空间 README](../../README.md)。
+更新：2026-11-08。本包从原“大 L 两段墙”扩展为有方向的开放墙链，支持单条直墙及多次左转、右转。保留包名、`l_controller`、`l_bringup.launch.py`、`/l_cleaning/*` 和协议任务类型 `l`；App 显示“开放多边清洗”。定位与硬件输出继续复用共享组件，默认预览、等待显式 start。
 
-示例地图是 `maps/lidar_20261026_170703.pgm`，其左下方大 L 用于早期路线验证。当前路线由传入的地图推导，开放路线为
-`A → B → C`，只有 `edge_0`、`edge_1`，墙始终在船左侧。
-本包负责路线、配置和启动编排；沿墙、右转、租约及硬件输出复用
-`f1_pool_cleaning`，定位由独立的 [`f1_localization`](../f1_localization/README.md) 提供。默认只发布预览，不产生硬件输出，也不自动 start。
+## 路线与地图
 
-## 路线与动作
+`map:=` 仍是地图输入。同名 `.pbstream/.yaml/.pgm` 放在一起，定位使用 pbstream，路线使用栅格。地图文件不纳入 Git。
 
-| 点 | map x / m | map y / m | 含义 |
-|---|---:|---:|---|
-| A | -1.801431 | 0.681948 | 下方直墙右端 |
-| B | -10.462431 | -0.786552 | 左下角 |
-| C | -11.917931 | 10.962448 | 左侧直墙上端 |
+地图处理位于 `f1_pool_cleaning/map_profile.py` 与 `open_route.py`：
 
-上表为该示例地图的历史拟合点：AB 约 8.78 m，BC 约 11.84 m，右转约 92.56°。
-分辨率 0.05 m，原点 `[-29.576431, -11.162552, 0]`，不是实测控制点或当前配置中的固定值。
-当前默认配置不填写路线坐标。显式调整使用 `config/l_cleaning.yaml` 的 `route_xy`；不能填 `boundary_xy`，
-不能追加 C→A。参数必须是三个有限点且只包含一次 45°–135°右转。
+1. 按最大空闲连通域的外轮廓顺序分段拟合，合并栅格造成的共线碎片。
+2. 检查左侧实体墙、右侧空闲水域支持；持续缺墙和未知边界断开，不只用整条线的平均分数。
+3. 连续小角度同向弯折按曲线处理，不能当成一串直墙；相邻有限线段只有在端部附近才连接。
+4. 输出全部候选开放墙链，按长度降序排列。默认 `route_chain_index: 0` 选择最长的一条。不同墙链不自动转场、不拼接、不闭合首尾。
 
-动作顺序：第一段距终点约 0.30 m 关刷停车 → 同时后退、以 50% 右推 0.50 s
-→ 停车 → 根据地图航向右转 → 进入第二段方向 ±20°后停车
-→ 重新建立第二面墙关联、靠墙和纠偏 → 清洗第二段 → 距 C 约 0.30 m
-关刷停车并进入 `COMPLETE`。从 AB 中间起步只清后续 AB 和 BC；从 BC 起步只清后续 BC。
-不返回 A，不补起始前段或中途缺口。`COMPLETE` 表示本次剩余路线执行结束，覆盖记录单独显示。
+当前提取最短段为 0.65 m，短栅格缺口容差 0.20 m，几何连接容差 0.50 m。自动拟合属于启发式识别；不代表所有候选都是已确认的实墙。曲线、分叉、缺乏支持的边界不作为任意转场任务自动执行。闭合矩形仍使用矩形任务。
 
-两段墙的前向清洗推进仅靠 50% 滚刷：墙距 31–35 cm 且航向偏差不超过 ±10° 时开刷。四主电机只负责航向纠偏，偏角在 ±3° 内时为 STOP（中位），超过 ±3° 时执行 LEFT/RIGHT 25 挡、BOTH 纠偏，回到 ±3° 后恢复中位。船中心距当前边前墙 0.3 m 时按原规则停车。起点接近阶段的前后移动及换边后退动作保持原逻辑。
+本地 `lidar_20261026_170703` 默认得到五段连续路线：右下阶梯的三条短墙，接原大 L 下边和左边。当前拟合长度约为 **1.00 / 2.07 / 1.26 / 8.91 / 11.84 m**，转角约为 **右 64.15° / 右 93.13° / 左 94.54° / 右 92.70°**。这不是船体航点或实测尺寸；原来的 AB/BC 现在对应 `edge_3/edge_4`，旧的 `default_edge_id` 或 `set_edge` 选择需重新核对。
 
-沿墙调距和到初始点阶段的第五电推幅度均为 50%（`side_percent=50.0`），仍按原条件启停及选择方向。换边右推单独使用 `transfer_side_percent=50.0`。
+离线查看：
 
-“重新找墙”使用现有感知和近墙控制：新鲜但无有效墙线时保持零输出，
-最多等待 1.5 s；持续丢墙或数据过期进入 `PAUSED`。不会在无墙反馈时盲目推进。
-转角的停车是停止命令周期，不代表已通过速度传感器确认船体静止。
-默认转移超时仍沿用原包的 0（关闭），完成转向依赖航向反馈。
+```bash
+ros2 run f1_pool_cleaning map_profile "$PWD/maps/lidar_20261026_170703.yaml" --json
+# 检查另一条独立候选墙链（0 为最长；并非自动转场顺序）
+ros2 run f1_pool_cleaning map_profile "$PWD/maps/lidar_20261026_170703.yaml" --route-chain 1 --json
+```
 
-## 构建和启动
+输出中的 `leg_lengths_m`、`turns_deg` 对应全部边及转角，正角为左转，负角为右转；`chain_lengths_m` 列出候选墙链总长度。旧 `turn_deg` 为首个转角，保留兼容。
 
-在工作区根目录运行：
+配置文件中的 `route_chain_index` 选择墙链，修改后重启。`route_xy: [x0, y0, x1, y1, ...]` 可覆盖已成功推导的路线，接受两个以上有限点，保持顺序，不自动反向或闭合。调用方必须保证墙在左、水在右；保留重复点、自交、掉头重叠和原有有效清洗区间校验。不能使用 `boundary_xy`，手填路线仍不能绕过地图推导失败。
+
+## 沿墙与换边动作
+
+初始选墙、起始区域寻找和沿墙逻辑沿用原实现：左侧射线命中有限任务墙，锁定最近投影点，以旋转、前后移动、侧移进入起始范围，再确认新鲜墙观测。不会搜索绕障路径。墙距 31–35 cm 时按航向条件开刷，50% 滚刷负责沿墙推进；四主电机只作沿墙航向纠偏。侧推幅度 50%。
+
+每边距端点约 0.30 m 时关刷，进入换边；最后一边结束则停止。
+
+**右转保持原动作：**停止指令周期 → 同时后退、50% 右推 0.50 s → 停止 → 按地图航向右转 → 在 ±20°内切换新墙 → 复用靠墙、纠偏和清洗。
+
+**新增左转：**
+
+```text
+EDGE_STOP
+  → LEFT_EXIT_WALL：保持旧墙航向，主电机前进走出墙端
+  → LEFT_SHIFT_TO_ENTRY：保持旧墙航向，向左侧移至新墙入口沿程位置
+  → TURN_LEFT_TO_NEXT_EDGE：停止平移，按地图航向左转
+  → APPROACH_NEXT_EDGE：切换墙目标，等待新鲜观测后复用沿墙控制
+```
+
+左转全程关刷，平移时发生航向偏差先停止平移并纠偏；动作或方向变化先发一个停止周期。前行、侧移用地图位姿判定到位，左转使用原转向航向容差。约 90°左转时，第二步侧移与新墙平行，因此按新墙入口沿程位置结束，不能按距新墙距离结束。
+
+| 新参数 | 默认值 | 含义 |
+|---|---|---|
+| `left_exit_forward_m` | 0.35 m | 相对当前墙端的最小前行目标；同时考虑下一边名义入口在旧墙方向上的投影，取较大值 |
+| `left_transfer_position_tolerance_m` | 0.05 m | 前行和侧移到位容差 |
+
+这些是动作目标，不是船体净空保证。按本轮要求，**未增加相邻转角位置、船体/刷头扫掠或环境碰撞安全检查**；原入口余量、端点停车区、沿墙走廊、定位、数据新鲜度、租约和停止保护保留。停指令周期不代表实测船体已经停稳。短边和急转角的实船效果尚未验证。
+
+换边期间目标墙无效，不用旧墙反馈开刷；换边完成增加目标代次并拒绝切换前排队的旧观测。持续丢墙按原 1.5 s 规则暂停。原转移/转向超时默认仍为 0，可按现场配置启用。
+
+## 任务范围
+
+初始区域寻找保持原规则：可以从任意选中墙的附近开始，随后只执行该位置及后续边，到墙链末端停止，不返回、不补洗。
+
+**要执行全部五条边，应从 `edge_0` 的入口附近开始。** `specified/default_edge_id` 只指定第一条墙，参考点仍取船中心最近投影，不会自动把船送回整个墙链起点。默认射线命中 `edge_3` 时只执行 `edge_3/edge_4`，不会把未经过的前三条边算成已清洗。
+
+`COMPLETE` 表示本次路线结束；`completion_scope=remaining_open_route`，`coverage_complete` 和 `remaining_contact_intervals` 单独报告刷头轨迹覆盖缺口。既有角部留白不变，不将整场路线执行完成等同于实际去污效果。
+
+## 构建与启动
 
 ```bash
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-up-to f1_l_cleaning
 source install/local_setup.bash
 ros2 launch f1_l_cleaning l_bringup.launch.py \
-  map:="$PWD/maps/lidar_20261026_170703.pbstream" \
-  start_rviz:=true
+  map:="$PWD/maps/lidar_20261026_170703.pbstream" start_rviz:=true
 ```
 
-`map:=` 是本任务唯一的地图输入：`route_xy`、定位门限和控制器使用的地图范围
-都由它推导，换池子只换这一个路径。推导逻辑见
-[`f1_pool_cleaning/map_profile.py`](../f1_pool_cleaning/f1_pool_cleaning/map_profile.py)；
-地图若没有唯一一个"墙在左、水在右"的顺时针墙角，启动会直接报错，不会猜测。
-可以先离线检查：
+雷达需独立运行。先在 App 或 RViz 的 map 坐标系发布初始位姿，等待定位就绪，再调用任务：
 
 ```bash
-ros2 run f1_pool_cleaning map_profile "$PWD/maps/lidar_20261026_170703.pbstream"
-```
-
-需要在现场覆盖已成功推导的路线时，仍可在 `config/l_cleaning.yaml` 写
-`route_xy: [ax, ay, bx, by, cx, cy]`，显式参数优先于推导默认值。
-但控制器先执行 `_map_geometry()`，再读取 `route_xy`；地图路线推导失败会先退出，
-不能通过该参数强行启用被拒绝的地图。组合入口还会先按地图几何判断任务是否可用。
-
-地图文件由现场提供，不打包进源码。
-`maps/` 被 Git 忽略；当前根部署命令会同步它。每份地图的同名 `.pbstream`、`.yaml`、`.pgm` 直接放在 `maps/` 下，YAML 的 `image` 使用同目录 PGM 文件名。若需要单独传输大 L 地图，在 PC 确认三份文件存在后执行：
-
-```bash
-ssh nvidia@192.168.1.188 'mkdir -p /home/nvidia/surface_ws/maps'
-rsync -av /home/bboss/new-nano/surface_ws/maps/lidar_20261026_170703.{pbstream,yaml,pgm} \
-  nvidia@192.168.1.188:/home/nvidia/surface_ws/maps/
-```
-
-雷达驱动需已运行，默认扫描话题 `/pavo2_scan`。
-在 RViz 的 `2D Pose Estimate` 标记初始位姿。默认 `start_policy=left_ray` 从船中心沿 +y 命中第一面任务墙；公共角点按清洗方向与船头夹角选择。未命中有限 AB/BC 时拒绝启动，需调整朝向；不向无限延长线或最近墙回退。
-两种任务共用[简单靠近规则](../f1_pool_cleaning/README.md)：锁定墙和最近投影点，关刷旋转、前后移动和侧移进入旧版启动范围，再确认左墙。该阶段不做路径搜索或环境碰撞检查。也可用 `start_policy:=specified` 配合 `default_edge_id`，或通过 `set_edge` 指定起始段。定位状态变为
-`LOCALIZATION_READY` 后手动启动：
-
-```bash
-ros2 topic echo /l_cleaning/localization_status
+ros2 topic echo /l_cleaning/localization_status --once
 ros2 service call /l_cleaning/start std_srvs/srv/Trigger '{}'
-ros2 topic echo /l_cleaning/status
-ros2 topic echo /l_cleaning/command_preview
+ros2 topic echo /l_cleaning/status --once --full-length
 ros2 service call /l_cleaning/pause std_srvs/srv/Trigger '{}'
 ros2 service call /l_cleaning/cancel std_srvs/srv/Trigger '{}'
 ```
 
-暂停后重跑需先 cancel；完成后可 start 新任务。若需要重新清洗整条 L，请先遥控回到合适位置。
-从 `edge_0` 启动执行其剩余段和 `edge_1`；从 `edge_1` 启动只执行其剩余段。始终在 C 前约 30 cm 停止，不生成 C→A 转场，不补洗。相邻边仍使用原后退/右推和闭环右转。
+需要指定首边时，launch 加 `start_policy:=specified default_edge_id:=edge_0`。默认只预览；实际输出仍需 `output_enabled:=true` 及 bridge 的对应许可。本次开发未连接硬件或下发实船动作。
 
-现有节点复用：
+复用已有节点时用 `start_localization:=false` / `start_bridge:=false`；仅清洗入口为 `l_cleaning.launch.py`，也需同一地图。只有一套 bridge、定位和地图发布链。网关组合入口继续兼容 `task_type=l`，独立 bringup 的网关定位前缀为 `/l_cleaning`，组合入口共享 `/f1_localization`。
 
-- 已有适配本地图的定位与 `/l_cleaning/localization_status`：
-  `start_localization:=false`。
-- 已有 bridge：`start_bridge:=false`；复用共享 `/f1/*` 租约与命令接口。
-- 只启动定位：`start_cleaning:=false start_bridge:=false`。
-- 已有雷达静态 TF：`publish_lidar_tf:=false`。
-- 可通过 `config`、`perception_config`、`localization_config` 指定现场参数文件。
+`pause` 后需 cancel 再启动；`stop` 保留进度快照，`cancel` 清除任务边关联；重新 start 创建新任务，不是断点续跑。App 的“停止手动输出”不停止自动任务。
 
-不要同时启动两套 Cartographer/定位管理器或两个 bridge。定位范围现在由 `map:=`
-的空闲水域推导；这是定位粗范围检查。扫描与占用栅格重合、新鲜度、跳变检查仍然保留。
-普通 `l_cleaning.launch.py` 只启动感知和控制器，也必须传入同一 `map:=`；
-默认配置不含独立运行所需的固定几何值，不能省略地图。生产配置仍要求定位就绪。
-
-需要实际输出时，在完成现场检查后将同一启动命令加入 `output_enabled:=true`。
-该参数会为新启动的 bridge 开启串口与运动权限；如果复用已有 bridge，其权限
-必须在该 bridge 自身配置。预览用 `output_enabled:=false`；`brush_percent=0`
-不受现有控制配置支持，不能用它表示无输出模式。
-
-## Qt App 接入
-
-App 已支持任务类型选择、初始位姿发布、定位门控与任务完成显示。已有大 L bringup 时，网关设置 `localization_prefix:=/l_cleaning`；不再重映射任务的 `status/start/pause/stop/cancel`。也可以使用[网关组合入口](../f1_operator_gateway/README.md)统一启动，定位共享 `/f1_localization/*`，本任务消费同一定位状态。
-
-自动任务使用“停止任务”“取消任务”或“暂停任务”。App 顶部“停止手动输出”按钮只释放手动会话。暂停后需先取消再重新开始；带地图的自动任务完成后可直接开始新任务。
-
-## 验证边界
+## 验证
 
 ```bash
-colcon test --packages-select f1_localization f1_pool_cleaning f1_l_cleaning --event-handlers console_direct+
+export ROS_LOCALHOST_ONLY=1
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export CYCLONEDDS_URI="file://$PWD/src/f1_operator_gateway/test/cyclonedds_localhost.xml"
+colcon test --packages-select f1_pool_cleaning f1_l_cleaning --executor sequential --return-code-on-test-failure
 colcon test-result --verbose
+QT_QPA_PLATFORM=offscreen python3 -m pytest operator_app/test -q
 ```
 
-软件测试覆盖开放路线校验、一次后退右推和右转、第二墙重关联、第二段完成停车、
-默认禁用硬件输出和定位门控。现场仍需确认拟合端点、0.50 s 动作位移、
-实际余转、角部净空、定位稳定性及刷盘接触效果；进入 `COMPLETE` 表示本次剩余路线执行结束，
-覆盖记录由 `coverage_complete` 单独报告，不证明实际去污效果。原控制器的盲区限制仍然存在。
-射线选墙、简单靠近参数和覆盖状态字段见[共享实现说明](../f1_pool_cleaning/README.md)。
-
-## App 轨迹、停止与墙距扩展（2026-10-31）
-
-本包复用矩形控制器的 `expected_track`、`center_wall_distance_m` 与墙观测新鲜度字段，启动前目标轨迹显示两条独立清洗段，启动后按本次要求区间显示（从 BC 启动时仅显示 BC），保持开放的 L 路线，不增加回到起点的闭合边。历史轨迹按 L 任务的 map_id/run_id 单独记录，不与矩形任务混合。
-
-新增 Trigger `/l_cleaning/stop`，进入 STOPPED、关闭输出、释放租约并保留进度；`/l_cleaning/cancel` 另清除当前边关联。再次开始是新任务，不支持断点续跑。界面、历史保留范围与左墙距离定义见[App 说明](../../operator_app/README.md)。
+测试覆盖旋转地图与不同分辨率的五段墙链、短墙、缺墙断开、独立链选择、原右转换边、45°/90°/135°左转、混合转向连续执行、数据过期、墙目标失效与预览启动。部署地图存在时额外检查三条短墙加大 L 的提取结果。动作级模拟只验证控制输出和状态流，不能证明实船动力学或空间可行性。

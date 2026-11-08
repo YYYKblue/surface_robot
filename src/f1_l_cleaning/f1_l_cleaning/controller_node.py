@@ -1,4 +1,4 @@
-"""L route adapter; all motion, lease and failsafe logic stays shared."""
+"""Open wall-chain adapter; motion, lease and failsafe logic stays shared."""
 from dataclasses import replace
 
 from f1_pool_cleaning.controller_node import PoolController
@@ -25,13 +25,27 @@ class LController(PoolController):
         ]
         super().__init__(**kwargs)
 
+    def _map_geometry(self):
+        from f1_pool_cleaning.map_profile import route_profile
+
+        self.route_chain_index = self._declare_readonly("route_chain_index", 0)
+        self.route_chain_count = 0
+        if not self.map_path:
+            return {}
+        profile = route_profile(path=self.map_path, chain_index=self.route_chain_index)
+        self.route_chain_count = len(profile.chain_lengths_m)
+        self.get_logger().info(
+            f"Open wall chain {self.route_chain_index}/{self.route_chain_count}: "
+            f"{len(profile.leg_lengths_m)} edges; disconnected chains are not traversed")
+        return profile.overrides()
+
     def _build_pool(self):
         if not self.edge_task_enabled:
             raise ValueError("L cleaning requires edge_task_enabled=true")
         if not self.map_path and self.default_edge_id != "edge_0":
-            raise ValueError("L cleaning must start from edge_0 (A -> B)")
+            raise ValueError("map-free open cleaning must start from edge_0")
         if list(self.boundary_xy) != [0.0]:
-            raise ValueError("use route_xy for the open L, not a closed boundary_xy")
+            raise ValueError("use route_xy for an open wall chain, not a closed boundary_xy")
         # map:= already filled route_xy from the map; an explicit parameter is
         # still accepted for field overrides.
         self.route_xy = self._declare_readonly(
@@ -41,7 +55,7 @@ class LController(PoolController):
     def _set_edge(self, request, response):
         if not self.automatic and request.edge_id != "edge_0":
             response.success = False
-            response.message = "L cleaning starts from edge_0; edge_1 is reached by the single transfer"
+            response.message = "map-free open cleaning starts from edge_0 and traverses subsequent edges"
             return response
         return super()._set_edge(request, response)
 

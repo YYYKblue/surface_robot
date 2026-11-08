@@ -387,8 +387,8 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
                 details += f"\n起始参考点：({point[0]:.2f}, {point[1]:.2f}) m；紫框为到达范围"
             if task.get("returning_to_start"):
                 details += "\n正在补齐起始边前半段"
-            if task.get("completion_scope") == "remaining_l_route":
-                details += "\nL 形仅清洗起始位置之后的路线，到终点停止"
+            if task.get("completion_scope") in ("remaining_open_route", "remaining_l_route"):
+                details += "\n开放墙链仅清洗起始位置之后的路线；清洗全链请从首边入口开始"
         self.start_details.setText(details)
         result = self.completed_results.get(kind)
         self.result_label.setText(result[1] if result else "")
@@ -523,8 +523,8 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
                     ns = task.get("completed_at_ns")
                     when = datetime.fromtimestamp(ns/1e9).strftime("%Y-%m-%d %H:%M:%S") if ns else "时间未提供"
                     preview = "预览任务完成" if not task.get("output_enabled") else "任务完成"
-                    if task.get("completion_scope") == "remaining_l_route":
-                        result = "本次剩余 L 路线执行完成；不返回、不补洗"
+                    if task.get("completion_scope") in ("remaining_open_route", "remaining_l_route"):
+                        result = "本次剩余开放墙链执行完成；不返回、不补洗"
                     elif task.get("completion_scope") == "rectangle_route":
                         result = "矩形路线及起始边补齐执行完成"
                     else:

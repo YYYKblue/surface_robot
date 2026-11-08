@@ -8,10 +8,13 @@ PHASES = {
     "CORRECT_HEADING": "正在调整航向", "WAIT_WALL": "等待墙面重新识别",
     "EDGE_STOP": "当前边结束，正在停止输出", "MOVE_INWARD": "正在后退侧移",
     "TURN_TO_NEXT_EDGE": "正在转向下一条边",
+    "LEFT_EXIT_WALL": "左转换边：前行走出当前墙端",
+    "LEFT_SHIFT_TO_ENTRY": "左转换边：左移至下一墙入口",
+    "TURN_LEFT_TO_NEXT_EDGE": "左转换边：左转对齐下一墙",
     "APPROACH_START": "正在确认起始范围", "ALIGN_START": "正在调整起始船头方向",
     "MOVE_START_ALONG": "正在调整沿墙起始位置", "MOVE_START_SIDE": "正在侧移接近起始范围",
 }
-TASK_NAMES = {"l": "L 清洗", "rectangle": "矩形清洗"}
+TASK_NAMES = {"l": "开放多边清洗", "rectangle": "矩形清洗"}
 BLOCKERS = {
     "task_stale": "任务不可用或状态过期", "task_service": "任务服务不可用",
     "localization": "定位尚未就绪", "feedback": "反馈数据未就绪", "pose": "位姿数据未就绪",

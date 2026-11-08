@@ -125,3 +125,7 @@ python -m pytest operator_app/test -q
 ```
 
 协议仍为 `f1-operator-v1`，通过 `hello.capabilities` 协商新增能力，建图与选图使用 `mapping/map_catalog`。新版 App 连接旧网关时保留手动界面，禁用新增任务功能。App、网关、定位包及两个清洗包应一起升级；旧客户端不具备新界面的状态门控。
+
+## 2026-11-08 开放多段直墙
+
+原 L 任务显示为“开放多边清洗”，协议类型仍为 `l`。新增左转换边的前行、左移、左转状态显示；新完成范围为 `remaining_open_route`，仍兼容旧 `remaining_l_route`。从中途启动只执行后续墙段；要清洗全链，从首边入口附近开始。预期清洗线按边独立显示，不把转场画成清洗墙。

@@ -188,7 +188,7 @@ def test_l_only_cleans_remaining_route_and_stops_at_c(p, expected):
     assert not m.remaining_edges and m.prefix_end is None
     assert not m.returning_to_start
     assert end.y >= 4.-m.c.front_stop_m
-    assert m.status()['completion_scope'] == 'remaining_l_route'
+    assert m.status()['completion_scope'] == 'remaining_open_route'
 
 
 def test_l_does_not_claim_unvisited_wall_coverage():
@@ -255,3 +255,48 @@ def test_coverage_gaps_are_reported_without_triggering_repair_navigation():
 def test_invalid_approach_parameters_are_rejected():
     with pytest.raises(ValueError):
         AutonomousMission(system().c, system().pool, ApproachConfig(along_tolerance_m=float('nan')))
+
+
+@pytest.mark.parametrize('degrees', [45., 90., 135.])
+def test_left_transfer_runs_actual_forward_side_and_left_commands(degrees):
+    angle = math.radians(degrees)
+    points = [(0., 0.), (4., 0.), (4. + 4.*math.cos(angle), 4.*math.sin(angle))]
+    m = AutonomousMission(system().c, PoolModel.from_polyline(points))
+    phases, visits, motions, _ = run_boat(m, Pose(1, .3, -.33, 0.))
+    assert visits == ['edge_0', 'edge_1']
+    assert {'LEFT_EXIT_WALL', 'LEFT_SHIFT_TO_ENTRY', 'TURN_LEFT_TO_NEXT_EDGE'} <= phases
+    assert 'MOVE_INWARD' not in phases
+    for phase, direction, side in [('LEFT_EXIT_WALL', 1, 0.),
+                                   ('LEFT_SHIFT_TO_ENTRY', 0, 50.),
+                                   ('TURN_LEFT_TO_NEXT_EDGE', 3, 0.)]:
+        assert (phase, direction, side, 0.) in motions
+    assert all(not brush for phase, _, _, brush in motions
+               if phase in m.TRANSFER_PHASES and phase != 'APPROACH_NEXT_EDGE')
+
+
+def test_open_five_edge_chain_finishes_mixed_turns_without_closing():
+    points = [(8., 2.), (8., 1.), (5., 1.), (5., 2.), (1., 2.), (1., 9.)]
+    m = AutonomousMission(system().c, PoolModel.from_polyline(points))
+    phases, visits, _, _ = run_boat(m, Pose(1, 7.67, 1.7, -math.pi/2))
+    assert visits == [f'edge_{i}' for i in range(5)]
+    assert set(m.required) == set(visits)
+    assert {'MOVE_INWARD', 'TURN_TO_NEXT_EDGE', 'LEFT_EXIT_WALL',
+            'LEFT_SHIFT_TO_ENTRY', 'TURN_LEFT_TO_NEXT_EDGE'} <= phases
+    assert not m.remaining_edges and not m.returning_to_start
+
+
+@pytest.mark.parametrize('phase', ['LEFT_EXIT_WALL', 'LEFT_SHIFT_TO_ENTRY', 'TURN_LEFT_TO_NEXT_EDGE'])
+def test_left_transfer_stale_pose_and_cancel_keep_outputs_off(phase):
+    m = AutonomousMission(system().c, PoolModel.from_polyline([(0., 0.), (4., 0.), (4., 4.)]))
+    now = 1_000_000_000
+    p = Pose(now, 3.71, -.33, 0.)
+    m.edge = m.pool.edges[0]
+    m.remaining_edges = ['edge_1']
+    m.required = {'edge_0': (.3, 3.7), 'edge_1': (.3, 3.7)}
+    m._begin_transfer(Feedback(None, p), now)
+    m.phase = phase
+    assert not m.wall_required
+    assert m.update(Feedback(None, p), now + 300_000_000) is None
+    assert m.phase == 'PAUSED' and m.last_effort is None
+    m.halt('cancelled', 'CANCELLED')
+    assert m.update(Feedback(None, replace(p, stamp_ns=now+400_000_000)), now+400_000_000) is None

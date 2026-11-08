@@ -26,12 +26,24 @@ def test_map_route_is_open_two_edges_with_one_right_turn():
     [0., 0., 0.],
     [0., 0., 1., 0., math.nan, 1.],
     [0., 0., 1., 0., 0., 1., 0., 0.],
-    [0., 0., 1., 0., 0., 1.],  # Left turn.
-    [0., 0., 1., 0., 2., 0.],  # No turn.
+    [0., 0., 3., 0., 1., 0.],  # Reversing over the same wall.
 ])
 def test_invalid_l_routes_are_rejected(route):
     with pytest.raises(ValueError):
         build_l_route(route, synthetic_config().validate())
+
+
+@pytest.mark.parametrize("points", [
+    [(0., 0.), (4., 0.)],
+    [(0., 0.), (4., 0.), (7., 0.)],
+    [(0., 0.), (4., 0.), (4., 3.), (7., 3.), (7., 7.)],
+])
+def test_open_routes_accept_single_straight_and_mixed_turn_chains(points):
+    route = build_l_route([v for p in points for v in p], synthetic_config())
+    assert len(route.edges) == len(points) - 1
+    assert route.edges[0].start == points[0]
+    assert route.edges[-1].end == points[-1]
+    assert route.next_edge(route.edges[-1]) is None
 
 
 def test_shared_open_polyline_does_not_close_or_reorder():

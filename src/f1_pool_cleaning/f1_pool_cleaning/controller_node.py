@@ -238,8 +238,8 @@ class PoolController(Node):
         msg.task_id = self.edge_task_id
         msg.generation = self.edge_generation
         msg.edge_id = self.selected_edge.id if self.selected_edge else ""
-        transfer_without_wall = self.mission.phase in (
-            "EDGE_STOP", "MOVE_INWARD", "TURN_TO_NEXT_EDGE", "COMPLETE")
+        transfer_without_wall = (self.mission.phase in self.mission.TRANSFER_PHASES
+                                 and self.mission.phase != "APPROACH_NEXT_EDGE") or self.mission.phase == "COMPLETE"
         transfer_without_wall |= not getattr(self.mission, "target_wall_enabled", True)
         msg.valid = (bool(self.selected_edge and self.pose and not transfer_without_wall)
                      if valid is None else bool(valid))
@@ -297,7 +297,7 @@ class PoolController(Node):
         return True, reason
 
     def _sync_mission_edge(self):
-        """Publish a new wall target after the mission finishes a right turn."""
+        """Publish a new wall target after the mission finishes an edge transfer."""
         if not self.edge_task_enabled or self.mission.edge is None:
             return
         generation = getattr(self.mission, "target_generation", 0)
@@ -516,7 +516,8 @@ class PoolController(Node):
             if self.mission.target_wall_enabled:
                 self._publish_edge_target()
         if (self.edge_task_enabled and self.selected_edge is not None
-                and self.mission.phase in ("EDGE_STOP", "MOVE_INWARD", "TURN_TO_NEXT_EDGE")):
+                and self.mission.phase in self.mission.TRANSFER_PHASES
+                and self.mission.phase != "APPROACH_NEXT_EDGE"):
             # Break the old wall association as soon as a transfer begins;
             # transfer motion is driven by map pose, not a remembered wall fit.
             self._publish_edge_target(valid=False, reason=self.mission.reason)
@@ -580,7 +581,7 @@ class PoolController(Node):
             required = self.mission.required if self.automatic else {}
             for edge in self.pool.edges:
                 if required and edge.id not in required:
-                    continue  # An L run only includes the selected edge and its suffix.
+                    continue  # An open-chain run includes the selected edge and its suffix.
                 low, high = required.get(edge.id, (edge.clean_start_s_m, edge.clean_end_s_m))
                 points = [[edge.start[i] + edge.tangent[i]*(contact-self.config.brush_x_m)
                            - edge.left_normal[i]*self.config.wall_target_m for i in (0, 1)]
@@ -625,6 +626,8 @@ class PoolController(Node):
         blockers = self._start_blockers()
         status = dict(phase=self.mission.phase,
                       task_type="l" if self.MAP_PROFILE_KIND == "route" else "rectangle",
+                      route_chain_index=getattr(self, "route_chain_index", None),
+                      route_chain_count=getattr(self, "route_chain_count", None),
                       run_id=self.run_id, completed_at_ns=self.completed_at_ns,
                       map_id=self.map_id, stamp_ns=now,
                       can_start=not blockers, start_blockers=blockers,

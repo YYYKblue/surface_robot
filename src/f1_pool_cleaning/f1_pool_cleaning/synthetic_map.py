@@ -70,4 +70,9 @@ def l_map(directory, resolution=RESOLUTION):
         vertical = (x >= -11.8) & (x <= -9.8) & (y >= .2) & (y <= 11.8)
         return horizontal | vertical
     free, origin = grid(water, (-12.6, -0.6, 0.6, 12.6), resolution)
-    return write_map(directory, "l_shape", free, wall_band(free), origin, resolution)
+    # Only the south/west banks are mapped walls. The opposite banks and
+    # channel ends are unknown frontiers, so this is genuinely an open L,
+    # rather than a closed six-sided pool that happens to have an L shape.
+    walls, _ = grid(lambda x, y: (x < -11.8) | (y < .2),
+                    (-12.6, -0.6, 0.6, 12.6), resolution)
+    return write_map(directory, "l_shape", free, wall_band(free) & walls, origin, resolution)

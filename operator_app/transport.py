@@ -185,7 +185,7 @@ class SocketWorker(QThread):
                                                [route[0][0]-.1, route[0][1]-.85]])
                         tasks[kind].update(phase="APPROACH_START", run_id=uuid.uuid4().hex,
                                            start_edge_id="edge_0", current_edge_id="edge_0", start_region=region,
-                                           completion_scope="remaining_l_route" if kind == "l" else "rectangle_route",
+                                           completion_scope="remaining_open_route" if kind == "l" else "rectangle_route",
                                            coverage_complete=False, returning_to_start=False)
                         tasks[kind]["expected_track"]["start_region"] = region
                         start_pose = dict(pose)

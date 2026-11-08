@@ -1,5 +1,7 @@
 # 沿墙清洗流程图
 
+2026-11-08 开放路线扩展：地图可生成多段直墙链；原右转保持不变，左转新增 `LEFT_EXIT_WALL → LEFT_SHIFT_TO_ENTRY → TURN_LEFT_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`。换边期间关刷、旧墙目标无效，平移用位姿闭环，转后重新关联墙。未增加相邻转角和船体空间检查，原定位/租约/期限保护保留。下图的后退右推路径对应右转；开放路线遇左转走新增分支，详见 [开放任务说明](../../src/f1_l_cleaning/README.md)。
+
 2026-11-05 更新：沿墙前向推进仅靠 50% 滚刷，移除四主电机前进辅助及其距离阈值；主电机仅作沿墙航向纠偏。起点接近及换边动作保持原逻辑。
 
 核对：2026-11-02，代码基线 `53692ef`。带地图任务使用 `AutonomousMission` 射线选墙及简单靠近，随后复用 `Mission` 沿墙与相邻换边。没有路径搜索、地图足迹或雷达环境碰撞门控，靠近阶段不绕障；定位、控制租约、通信期限、停止和取消仍生效。基本测试反馈与软件回归记录见[开发与验收记录](DEVELOPMENT_AND_ACCEPTANCE.md#7-测试和证据要求)。
@@ -25,7 +27,7 @@ flowchart TD
     TYPE -- 矩形 --> RECT[相邻右转，顺时针清洗后续三边]
     RECT --> PREFIX[若从边中部开始，返回起始边补前段]
     PREFIX --> DONE[COMPLETE，记录覆盖缺口]
-    TYPE -- L形 --> L[沿当前段及后续段到 C]
+    TYPE -- 开放墙链 --> L[沿当前段及后续段到链尾]
     L --> DONE
 ```
 
@@ -55,13 +57,13 @@ flowchart TD
 
 `can_start` 只表示当前启动前置门控通过。射线交点和起始区间在 start 请求中检查，因此按钮可用时仍可能因 L 形无交点或起始区间不足而拒绝启动。
 
-矩形记录实际首次有效开刷位置，绕行后补齐其前段并重叠 10 cm；不搜索其他缺口的补洗路线。L 形从 AB 中间开始只清后续 AB/BC，从 BC 开始只清后续 BC，到 C 停止，不返回也不补洗。覆盖统计只记录连续有效开刷进度；路线完成不保证全墙已覆盖。
+矩形记录实际首次有效开刷位置，绕行后补齐其前段并重叠 10 cm；不搜索其他缺口的补洗路线。开放墙链从选中边的当前位置开始，只清后续部分，到链尾停止，不返回也不补洗；要执行全部边，应从首边入口附近开始。覆盖统计只记录连续有效开刷进度；路线完成不保证全墙已覆盖。
 
-Windows App 显示起始墙、参考点、紫色起始范围、当前动作和矩形补前段阶段。`expected_track.navigation_path` 为空。`completion_scope` 区分矩形路线与本次剩余 L 路线，`coverage_complete` 和 `remaining_contact_intervals` 分别报告覆盖结果。
+Windows App 显示起始墙、参考点、紫色起始范围、当前动作和矩形补前段阶段。`expected_track.navigation_path` 为空。`completion_scope` 区分矩形路线与本次剩余开放墙链，`coverage_complete` 和 `remaining_contact_intervals` 分别报告覆盖结果。
 
 ## 沿墙清洗与自动换边状态机
 
-下图保留旧版沿墙和相邻换边控制。矩形外层按四边顺时针编排，必要时返回起始边补前段；L 形只沿选中边之后的路线到终点。路线执行完成与覆盖记录无缺口是独立字段。
+下图保留旧版沿墙和相邻换边控制。矩形外层按四边顺时针编排，必要时返回起始边补前段；开放墙链只沿选中边之后的路线到终点。路线执行完成与覆盖记录无缺口是独立字段。
 
 ```mermaid
 flowchart TD
@@ -100,7 +102,12 @@ flowchart TD
 
     ESTOP --> NEXT{存在下一条边?}
     NEXT -- 否 --> COMPLETE([COMPLETE\n本次路线执行结束])
-    NEXT -- 是 --> MI[MOVE_INWARD\n0.5 s: reverse + 向右侧推 50%\n滚刷关闭]
+    NEXT -- 是 --> KIND{下一边转向}
+    KIND -- 左转 --> LX[LEFT_EXIT_WALL\n关刷前行走出墙端]
+    LX --> LS[LEFT_SHIFT_TO_ENTRY\n保持旧航向，左移至新墙入口]
+    LS --> LT[TURN_LEFT_TO_NEXT_EDGE\n左转至下一边方向]
+    LT --> AN
+    KIND -- 右转 --> MI[MOVE_INWARD\n0.5 s: reverse + 向右侧推 50%\n滚刷关闭]
     MI --> TURN[TURN_TO_NEXT_EDGE\n只按地图航向反馈右转]
     TURN --> YAW{目标航向误差\n<= ±20°?}
     YAW -- 否 --> TURN
@@ -126,8 +133,9 @@ flowchart TD
 | 滚刷门控 | 航向绝对值不超过 `10°` 且墙距在稳定区间时开刷 `50%`；纠偏和滚刷可以同时工作。 |
 | 丢墙恢复 | `WAIT_WALL` 最多等待 `1.5 s`；期间输出中位命令，超时转 `PAUSED`。 |
 | 端点判断 | 使用地图边投影的船中心到边端距离；小于等于 `0.30 m` 进入 `EDGE_STOP`。雷达前方观测只作为辅助安全信息。 |
-| 自动换边 | `EDGE_STOP → MOVE_INWARD → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`；换边期间旧墙目标无效，转弯完成后重新关联新墙。 |
-| 整场完成 | `AutonomousMission` 编排矩形一圈加起始边前段，或 L 形后续路线。`COMPLETE` 表示路线执行结束，覆盖缺口单独报告，不追加路径搜索。 |
+| 右转换边 | `EDGE_STOP → MOVE_INWARD → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`，保持原动作。 |
+| 左转换边 | `EDGE_STOP → LEFT_EXIT_WALL → LEFT_SHIFT_TO_ENTRY → TURN_LEFT_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`；两类换边均禁用旧墙目标，转后重新关联。 |
+| 整场完成 | `AutonomousMission` 编排矩形一圈加起始边前段，或开放墙链后续路线。`COMPLETE` 表示路线执行结束，覆盖缺口单独报告，不追加路径搜索。 |
 | 输出门控 | `controller_node.py` 在每个 tick 检查数据流、定位和 lease；异常进入 `PAUSED` 并调用 `_stop_outputs()`。 |
 
 ## 关键接口

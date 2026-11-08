@@ -10,10 +10,11 @@ l_controller:
     localization_status_max_age_sec: 0.60
     map_frame: map
     base_frame: base_link
-    # The open A -> B -> C route is derived from map:=<pbstream or map yaml>:
-    # the launch selects the single clockwise wall corner, keeps water on the
-    # right of travel and never closes C -> A.  Set route_xy here only to
-    # override a map whose route the derivation rejects.
+    # Map-derived directed open wall chain; any number of left/right turns.
+    # Chain 0 is the longest connected chain. Other chains are independent;
+    # inspect map_profile --json before selecting another index.
+    # route_xy may override a successfully derived chain with [x0,y0,...].
+    route_chain_index: 0
     default_edge_id: edge_0
     wall_target_m: 0.33
     side_on_distance_m: 0.35
@@ -37,6 +38,10 @@ l_controller:
     transfer_timeout_sec: 0.0
     transfer_turn_timeout_sec: 0.0
     transfer_turn_tolerance_rad: 0.3490658503988659
+    # Left turn: forward beyond endpoint, left shift to next entry, left turn.
+    # Motion targets only; no hull/adjacent-corner clearance checks.
+    left_exit_forward_m: 0.35
+    left_transfer_position_tolerance_m: 0.05
     fifth_left_sign: 1
     # Fifth-thruster magnitude for wall following and initial approach.
     side_percent: 50.0

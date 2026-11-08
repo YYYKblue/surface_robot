@@ -6,7 +6,7 @@ means changing the map path:
 
 * closed pool task -- ``origin_*``/``axis_yaw_rad``/``length_m``/``width_m``
   and the ``boundary_xy`` route;
-* open L task -- the ``route_xy`` polyline;
+* open wall-chain task -- the ``route_xy`` polyline;
 * localization -- the known-free extents used as a coarse pose gate.
 
 The map is the single source of truth.  Derivation never falls back to a
@@ -41,16 +41,11 @@ MIN_BAND_CELLS = 8
 # A closed-pool map must be mostly free water inside its wall rectangle; an
 # L-shaped or obstacle-filled map is not a rectangle task.
 MIN_POOL_FILL = .90
-# Shortest wall segment considered part of an open route.
-MIN_ROUTE_SEGMENT_M = 2.0
-# A route corner must be this close to both wall segments to count as a join.
-CORNER_JOIN_TOLERANCE_M = 1.0
 # Route quality: fraction of samples with wall alongside and open water on the
 # right (the single left-brush convention).
 ROUTE_WATER_OFFSETS_M = (.35, .55, .75, .95)
 ROUTE_WALL_OFFSETS_M = (.05, .10, .15, .20)
 MIN_ROUTE_QUALITY = .75
-MIN_ROUTE_MARGIN = .10
 
 
 @dataclass(frozen=True)
@@ -85,9 +80,16 @@ class RouteProfile:
 
     route_xy: tuple
     leg_lengths_m: tuple
-    turn_rad: float
+    turns_rad: tuple
     quality: float
     bounds: tuple  # (x_min, y_min, x_max, y_max) of the route vertices
+    chain_index: int = 0
+    chain_lengths_m: tuple = ()
+
+    @property
+    def turn_rad(self):
+        """Compatibility for callers displaying the first (historically only) turn."""
+        return self.turns_rad[0] if self.turns_rad else 0.
 
     def overrides(self):
         """Controller overrides: the route plus the box its pose gate covers.
@@ -97,6 +99,11 @@ class RouteProfile:
         bound; edge progress always comes from ``route_xy``.
         """
         x_min, y_min, x_max, y_max = self.bounds
+        # A single horizontal/vertical wall still needs nonzero coarse bounds.
+        if x_max - x_min < 1.:
+            x_min, x_max = (x_min + x_max) / 2 - .5, (x_min + x_max) / 2 + .5
+        if y_max - y_min < 1.:
+            y_min, y_max = (y_min + y_max) / 2 - .5, (y_min + y_max) / 2 + .5
         return dict(route_xy=list(self.route_xy), axis_yaw_rad=0.,
                     origin_x_m=x_min, origin_y_m=y_min,
                     length_m=x_max - x_min, width_m=y_max - y_min)
@@ -194,41 +201,11 @@ def rectangle_profile(occupancy=None, path=None):
                                "boundary_xy": tuple(v for point in corners for v in point)})
 
 
-def _clean_segments(occupancy, min_length):
-    """Straight water/wall boundary segments in map metres.
-
-    Detection runs on the free-region edge rather than on occupied cells: the
-    water boundary is one continuous line, while occupied returns can be
-    sparse or doubled by the far wall across a walkway.
-    """
-    import cv2
-    import numpy as np
-
-    edge = cv2.morphologyEx(occupancy.region, cv2.MORPH_GRADIENT,
-                            np.ones((3, 3), np.uint8))
-    lines = cv2.HoughLinesP(edge * 255, 1, math.pi / 720, threshold=60,
-                            minLineLength=int(min_length / occupancy.resolution_m),
-                            maxLineGap=25)
-    if lines is None:
-        return []
-    height = occupancy.height
-    segments = []
-    for x1, y1, x2, y2 in np.asarray(lines).reshape(-1, 4):
-        start = occupancy.xy(x1, y1)
-        end = occupancy.xy(x2, y2)
-        if math.dist(start, end) >= min_length:
-            segments.append((start, end))
-    return segments
-
-
-def _line_intersection(a, b):
-    (x1, y1), (x2, y2) = a
-    (x3, y3), (x4, y4) = b
-    denominator = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
-    if abs(denominator) < 1e-9:
-        return None
-    return (((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / denominator,
-            ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / denominator)
+def _wall_supported(occupancy, bx, by, ux, uy):
+    nx, ny = -uy, ux
+    wall = [occupancy.cell(bx + nx * o, by + ny * o) for o in ROUTE_WALL_OFFSETS_M]
+    water = [occupancy.cell(bx - nx * o, by - ny * o) for o in ROUTE_WATER_OFFSETS_M]
+    return "occupied" in wall and water.count("free") >= 3 and "occupied" not in water
 
 
 def _leg_quality(occupancy, start, end):
@@ -243,83 +220,38 @@ def _leg_quality(occupancy, start, end):
     if length <= 0:
         return 0.
     ux, uy = (end[0] - start[0]) / length, (end[1] - start[1]) / length
-    nx, ny = -uy, ux  # left normal
     samples = np.linspace(.05, .95, 13)
     good = 0
     for fraction in samples:
         bx, by = start[0] + ux * length * fraction, start[1] + uy * length * fraction
-        wall = [occupancy.cell(bx + nx * o, by + ny * o) for o in ROUTE_WALL_OFFSETS_M]
-        water = [occupancy.cell(bx - nx * o, by - ny * o) for o in ROUTE_WATER_OFFSETS_M]
-        if "occupied" in wall and water.count("free") >= 3 and "occupied" not in water:
+        if _wall_supported(occupancy, bx, by, ux, uy):
             good += 1
     return good / len(samples)
 
 
-def _route_candidates(occupancy):
-    """All clockwise-corner wall pairs that could be an open cleaning route."""
-    segments = _clean_segments(occupancy, MIN_ROUTE_SEGMENT_M)
-    candidates = []
-    for index, first in enumerate(segments):
-        for second in segments[index + 1:]:
-            corner = _line_intersection(first, second)
-            if corner is None:
-                continue
-            if min(min(math.dist(corner, point) for point in first),
-                   min(math.dist(corner, point) for point in second)) > CORNER_JOIN_TOLERANCE_M:
-                continue
-            for a, b in ((first, second), (second, first)):
-                start = max(a, key=lambda point: math.dist(point, corner))
-                finish = max(b, key=lambda point: math.dist(point, corner))
-                first_leg = math.dist(start, corner)
-                second_leg = math.dist(corner, finish)
-                if min(first_leg, second_leg) < MIN_ROUTE_SEGMENT_M:
-                    continue
-                # The L route has exactly one right-angled clockwise corner.
-                inbound = math.atan2(corner[1] - start[1], corner[0] - start[0])
-                outbound = math.atan2(finish[1] - corner[1], finish[0] - corner[0])
-                turn = math.atan2(math.sin(outbound - inbound), math.cos(outbound - inbound))
-                if not -math.radians(135.) <= turn <= -math.radians(45.):
-                    continue
-                quality = min(_leg_quality(occupancy, start, corner),
-                              _leg_quality(occupancy, corner, finish))
-                candidates.append(dict(start=start, corner=corner, finish=finish,
-                                       lengths=(first_leg, second_leg),
-                                       turn=turn, quality=quality))
-    return candidates
+def route_profile(occupancy=None, path=None, chain_index=0):
+    """Derive a complete connected open wall chain, longest first.
 
-
-def route_profile(occupancy=None, path=None):
-    """Best two-leg clockwise route, or a :class:`MapProfileError`.
-
-    Candidate routes are ranked by how well each leg matches the left-brush
-    convention.  A map with several comparable candidates is reported as
-    ambiguous rather than resolved by guesswork.
+    Disconnected chains are never joined by fictitious cleaning edges. The
+    selected chain may contain any number of left/right corners; callers can
+    inspect chain_lengths_m and select a different chain explicitly.
     """
+    from .open_route import wall_chains
+
     occupancy = occupancy or load_occupancy(path)
-    candidates = _route_candidates(occupancy)
-    if not candidates:
-        raise MapProfileError(
-            "no pair of water boundaries forms a single clockwise 45-135 degree "
-            "corner with two usable legs; this map has no open L route")
-    candidates.sort(key=lambda item: (item["quality"], sum(item["lengths"])),
-                    reverse=True)
-    best = candidates[0]
-    if best["quality"] < MIN_ROUTE_QUALITY:
-        raise MapProfileError(
-            f"best L candidate only scores {best['quality']:.2f} (< {MIN_ROUTE_QUALITY}); "
-            "the walls do not keep water on the right along both legs")
-    runners = [item for item in candidates[1:]
-               if math.dist(item["corner"], best["corner"]) > 1.5]
-    if runners and best["quality"] - runners[0]["quality"] < MIN_ROUTE_MARGIN:
-        raise MapProfileError(
-            "map has two comparable L candidates "
-            f"(quality {best['quality']:.2f} vs {runners[0]['quality']:.2f}); "
-            "the route is ambiguous")
-    points = (best["start"], best["corner"], best["finish"])
+    chains = wall_chains(occupancy, _leg_quality, _wall_supported, MIN_ROUTE_QUALITY)
+    if type(chain_index) is not int or not 0 <= chain_index < len(chains):
+        raise MapProfileError(f"route_chain_index must be between 0 and {len(chains) - 1}")
+    points, quality = chains[chain_index]
+    lengths = tuple(math.dist(a, b) for a, b in zip(points, points[1:]))
+    headings = [math.atan2(b[1] - a[1], b[0] - a[0]) for a, b in zip(points, points[1:])]
+    turns = tuple(math.atan2(math.sin(b - a), math.cos(b - a)) for a, b in zip(headings, headings[1:]))
     return RouteProfile(
         route_xy=tuple(v for point in points for v in point),
-        leg_lengths_m=tuple(best["lengths"]), turn_rad=best["turn"],
-        quality=best["quality"], bounds=bounds_of(points))
+        leg_lengths_m=lengths, turns_rad=turns, quality=quality,
+        bounds=bounds_of(points), chain_index=chain_index,
+        chain_lengths_m=tuple(sum(math.dist(a, b) for a, b in zip(chain, chain[1:]))
+                              for chain, _ in chains))
 
 
 def profile(path):
@@ -350,8 +282,8 @@ def profile(path):
 def require(path, kind):
     """Derived overrides for ``kind`` in ``{'rectangle', 'route'}``.
 
-    Only the requested geometry is computed: the route search is quadratic in
-    the number of wall lines, so a closed-pool launch must not pay for it.
+    Only the requested geometry is computed; rectangle launch does not run
+    open wall-chain extraction.
     """
     if kind not in ("rectangle", "route"):
         raise ValueError("kind must be 'rectangle' or 'route'")
@@ -359,9 +291,12 @@ def require(path, kind):
         load_occupancy(path))
 
 
-def describe(path):
+def describe(path, chain_index=0):
     """Operator-facing summary used by the CLI and by launch logging."""
     derived = profile(path)
+    if chain_index:
+        from dataclasses import replace
+        derived = replace(derived, route=route_profile(path=path, chain_index=chain_index))
     summary = dict(map=str(derived.map_yaml),
                    resolution_m=derived.resolution_m,
                    free_area_m2=round(derived.free_area_m2, 2),
@@ -380,6 +315,9 @@ def describe(path):
             route_xy=[round(v, 4) for v in derived.route.route_xy],
             leg_lengths_m=[round(v, 3) for v in derived.route.leg_lengths_m],
             turn_deg=round(math.degrees(derived.route.turn_rad), 2),
+            turns_deg=[round(math.degrees(v), 2) for v in derived.route.turns_rad],
+            chain_index=derived.route.chain_index,
+            chain_lengths_m=[round(v, 3) for v in derived.route.chain_lengths_m],
             quality=round(derived.route.quality, 3))
     summary.update(errors=derived.errors)
     return summary
@@ -394,9 +332,11 @@ def main(args=None):
         description="Derive cleaning geometry from a saved map and report it.")
     parser.add_argument("map", help=".pbstream or map .yaml")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
+    parser.add_argument("--route-chain", type=int, default=0,
+                        help="open chain index, ordered by descending length (default 0)")
     options = parser.parse_args(args)
     try:
-        summary = describe(options.map)
+        summary = describe(options.map, options.route_chain)
     except MapProfileError as exc:
         parser.error(str(exc))
     print(json.dumps(summary, indent=2, ensure_ascii=False) if options.json

@@ -1,6 +1,6 @@
 # 项目架构与代码导读
 
-核对日期：2026-11-02，代码基线 `53692ef`。本文依据当前源码、launch、YAML 与测试整理。操作入口见[根 README](../README.md)，目标机安装见[部署指南](../DEPLOY_NANO.md)。历史验证记录只说明当时的测试结果，不能用来证明当前实船状态。
+开放多段路线更新：2026-11-08。其余架构核对日期：2026-11-02，代码基线 `53692ef`。本文依据当前源码、launch、YAML 与测试整理。操作入口见[根 README](../README.md)，目标机安装见[部署指南](../DEPLOY_NANO.md)。历史验证记录只说明当时的测试结果，不能用来证明当前实船状态。
 
 ## 1. 项目组成与依赖
 
@@ -12,7 +12,7 @@
 | `f1_mapping_bringup` | [lidar_mapping.launch.py](../src/f1_mapping_bringup/launch/lidar_mapping.launch.py)、`config/pavo2_2d.lua` | Cartographer 纯雷达建图、地图发布、平面安装 TF |
 | `f1_localization` | [localization_node.py](../src/f1_localization/f1_localization/localization_node.py)、`localization.py`、`map_io.py` | 冻结地图、初始位姿、轨迹生命周期、定位门控和栅格读取 |
 | `f1_pool_cleaning` | [controller_node.py](../src/f1_pool_cleaning/f1_pool_cleaning/controller_node.py)、`autonomous.py`、`mission.py` | 矩形任务及两类任务共用的简单靠近、沿墙、覆盖、感知实现 |
-| `f1_l_cleaning` | [controller_node.py](../src/f1_l_cleaning/f1_l_cleaning/controller_node.py)、`route.py`、`topics.py` | 继承共享控制器，提供开放 L 路线及 `/l_cleaning/*` 接口 |
+| `f1_l_cleaning` | [controller_node.py](../src/f1_l_cleaning/f1_l_cleaning/controller_node.py)、`route.py`、`topics.py` | 继承共享控制器，提供开放多段路线及 `/l_cleaning/*` 接口 |
 | `f1_nano_bridge` | [node.py](../src/f1_nano_bridge/nano_ros_bridge/node.py)、`session.py`、`protocol.py`、`transport.py` | 控制租约、协议编解码、串口、CTRL/ACK、IMU 遥测 |
 | `f1_interfaces` | `msg/`、`srv/` | 公共消息与服务定义；修改后需要重建使用方 |
 | `f1_operator_gateway` | [node.py](../src/f1_operator_gateway/operator_gateway/node.py)、`task_control.py`、`runtime.py`、`map_store.py`、`tracks.py` | 手动会话、任务操作、受管进程、地图保存与轨迹遥测 |
@@ -64,7 +64,7 @@ flowchart LR
 ## 4. 地图和参数如何进入控制器
 
 1. `map_io.py` 解析地图文件、读取栅格和最大空闲连通域；定位由这些数据计算范围门控。
-2. `map_profile.py` 推导矩形四边或唯一合格的顺时针 L 墙角；`map_profile <地图>` 可离线查看结果。
+2. `map_profile.py` 推导矩形四边或开放直墙链（`open_route.py` 分段拟合与连接，默认最长链）；`map_profile <地图>` 可离线查看结果。
 3. `PoolController._map_geometry()` 先要求对应任务的地图推导成功，再把几何值作为 ROS 参数默认值。
 4. 参数 YAML 的显式几何值可以覆盖这些默认值，但不能绕过第 3 步的失败。启动文件传入的同名显式参数又会覆盖 YAML，例如 `output_enabled`、`start_policy` 和 `default_edge_id`。
 5. `edge_task_enabled=true` 且传入地图时使用 `AutonomousMission`；无地图的旧任务/测试模式使用 `Mission`，必须自行提供完整几何，不能照搬默认 launch 省略地图。
@@ -73,11 +73,11 @@ flowchart LR
 
 ## 5. 自动任务和停止语义
 
-`AutonomousMission` 负责左侧射线选墙、锁定最近投影点、关刷简单动作靠近和矩形起始边补齐；`Mission` 负责沿墙纠偏和相邻边后退右推/右转。详细状态流见[清洗流程图](pool_cleaning/WALL_CLEANING_FLOW.md)。
+`AutonomousMission` 负责左侧射线选墙、锁定最近投影点、关刷简单动作靠近和矩形起始边补齐；`Mission` 负责沿墙纠偏和原有相邻边后退右推/右转，以及新增前行出墙端、左移至新墙入口、左转。详细状态流见[清洗流程图](pool_cleaning/WALL_CLEANING_FLOW.md)。
 
 默认 `left_ray` 沿船体 +y 选择第一面命中的有限墙段；公共角点按清洗方向与船头夹角选墙。无交点拒绝启动，不延长墙或回退最近墙。显式 `set_edge` 或 `start_policy=specified` 可覆盖。开始前检查定位和位姿，锁定墙及最近投影点，取得控制权后旋转、前后移动和侧移进入旧版合理起始范围，再确认墙面。没有路径搜索、足迹或雷达环境碰撞检查；控制租约、定位与通信期限仍生效。
 
-覆盖由 `coverage.py` 和 `AutonomousMission` 统计左刷接触中心线区间，默认缺口容差 0.05 m。矩形顺时针绕行后只补齐首次有效开刷位置之前的起始边，并重叠 0.10 m；不再规划其他缺口的补洗。L 形只执行选中段之后到 C 的路线，不返回、不补洗。`COMPLETE` 表示本次路线执行结束，`coverage_complete` 和剩余缺口单独报告。
+覆盖由 `coverage.py` 和 `AutonomousMission` 统计左刷接触中心线区间，默认缺口容差 0.05 m。矩形顺时针绕行后只补齐首次有效开刷位置之前的起始边，并重叠 0.10 m；不再规划其他缺口的补洗。开放任务只执行选中位置之后到墙链末端的路线，不返回、不补洗。`COMPLETE` 表示本次路线执行结束，`coverage_complete` 和剩余缺口单独报告。
 
 | 操作或状态 | 行为 |
 |---|---|

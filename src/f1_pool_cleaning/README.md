@@ -1,6 +1,8 @@
 # f1_pool_cleaning：泳池沿边清洗
 
-文档核对：2026-11-03。本页说明矩形四边任务及共享清洗实现；开放大 L 两段墙任务由 [`f1_l_cleaning`](../f1_l_cleaning/README.md) 配置和适配，使用 `/l_cleaning/*` 接口。
+文档核对：2026-11-03。本页说明矩形四边任务及共享清洗实现；开放多段直墙任务由 [`f1_l_cleaning`](../f1_l_cleaning/README.md) 配置和适配，使用 `/l_cleaning/*` 接口。
+
+2026-11-08：共享换边增加左转分支：前行出墙端 → 左移至下一边入口 → 左转 → 重新关联墙；原右转动作不变。多段墙链提取见 `open_route.py`，本次未增加相邻转角或船体空间检查。
 
 2026-10-30：定位实现、Lua/RViz 配置及定位单元测试迁至 [`f1_localization`](../f1_localization/README.md)。本包保留定位状态消费与停机门控，原定位 launch/脚本仅做兼容转发；矩形与大 L 的 bringup 直接启动新包。
 
@@ -138,7 +140,7 @@ ros2 service call /pool_cleaning/set_edge f1_interfaces/srv/SetEdge '{edge_id: e
 
 启动状态为 `APPROACH_START → ALIGN_START / MOVE_START_ALONG / MOVE_START_SIDE → ACQUIRE_WALL → APPROACH_WALL → FOLLOW`。动作根据位姿闭环，在动作类型切换时发停止指令周期；靠近时滚刷关闭。获取租约后才允许运动。
 
-矩形从实际首次有效开刷位置清到起始边末端，再按相邻边顺时针清洗其余三边；若起始边前段尚未清洗，再经原转弯动作返回起始边，清到首次开刷位置加默认 10 cm 重叠后结束。不搜索其他缺口的补洗路线。L 形仅沿选中段到 C 的后续路线执行，未经过的起始前段不属于本次要求区间。
+矩形从实际首次有效开刷位置清到起始边末端，再按相邻边顺时针清洗其余三边；若起始边前段尚未清洗，再经原转弯动作返回起始边，清到首次开刷位置加默认 10 cm 重叠后结束。不搜索其他缺口的补洗路线。开放墙链仅沿选中位置到链尾的后续路线执行，未经过的起始前段不属于本次要求区间。
 
 `COMPLETE` 表示本次路线执行结束，不保证覆盖记录无缺口。状态包含 `acquisition_mode`、`start_edge_id`、`start_region`、`first_brush_contact`、`returning_to_start`、`remaining_edges`、`executed_edge_ids`、`completion_scope`、`coverage_complete`、`required_contact_intervals` 和 `remaining_contact_intervals`。覆盖只累计上一条仍有效的开刷命令与新鲜有效墙观测之间的连续进度，默认缺口容差 5 cm。真实覆盖不足会保留并显示，不发起额外导航。
 
