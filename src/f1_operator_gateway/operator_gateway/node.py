@@ -23,6 +23,7 @@ from .protocol import ManualInput, decode
 from .task_control import TaskControl
 from .websocket_hub import WebSocketHub
 from .runtime import RuntimeControl
+from .diagnostics import DiagnosticHistory
 
 
 class OperatorGateway(RuntimeControl, TaskControl, Node):
@@ -52,6 +53,7 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self._init_runtime()
         self.control_state = {}
+        self.diagnostic_history = DiagnosticHistory()
         self.control_received = 0.
         self.manual_generation = 0
         self._manual_acquires = 0
@@ -91,6 +93,7 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
             state[name] = value
         self.control_state = state
         self.control_received = time.monotonic()
+        self.diagnostic_history.bridge(state)
 
     def _map(self, message):
         if self.runtime_enabled and (not self.runtime_accept_map or
@@ -168,7 +171,7 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
             return
         if packet["op"] == "hello":
             self.hub.send(client_id, {"type": "hello", "protocol": "f1-operator-v1", "telemetry_hz": 10,
-                "client_id": client_id, "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks"]
+                "client_id": client_id, "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks", "diagnostic_history"]
                     + (["mapping", "map_catalog"] if self.runtime_enabled else [])})
             if self.map_data:
                 self.hub.send(client_id, {"type": "map", "map": self.map_data})
@@ -285,6 +288,16 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         self.publisher.publish(message)
 
     def _stop_manual(self, reason):
+        # Capture timing before clearing input, including disconnects whose event
+        # can only reach the operator after reconnecting.
+        if self.token or self.pending_acquire or self.last_input_at is not None:
+            self.diagnostic_history.record(
+                "gateway", reason,
+                input_age_ms=(None if self.last_input_at is None else
+                              round((time.monotonic() - self.last_input_at) * 1000, 1)),
+                input_timeout_ms=round(self.input_timeout * 1000, 1),
+                had_lease=bool(self.token),
+                **DiagnosticHistory.snapshot(self.control_state))
         self.manual_generation += 1
         token = self.token
         self.token = ""
@@ -348,6 +361,7 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
 
     def _telemetry(self):
         self.hub.broadcast({"type": "telemetry", "state": self.control_state,
+                            "diagnostics": self.diagnostic_history.view(),
                             "control_fresh": time.monotonic() - self.control_received < .3,
                             "pose": self.pose, "scan": self._map_scan(),
                             "task": self.tasks.get("rectangle", {}),

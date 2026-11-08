@@ -286,3 +286,73 @@ def test_reconnect_queries_state_without_replaying_old_commands(app, monkeypatch
     assert len(connections) == 2
     assert connections[1].sent[0]['op'] == 'hello'
     assert all(packet.get('request_id') != 'old' for connection in connections for packet in connection.sent)
+
+
+def test_diagnostics_replays_deduplicates_exports_and_reports_stale_controls(app, monkeypatch, tmp_path):
+    monkeypatch.setattr(SocketWorker, "start", lambda self: None)
+    window = OperatorWindow("unused")
+    try:
+        window._message(dict(type="hello", client_id="test", capabilities=["diagnostic_history"]))
+        packet = dict(type="telemetry", active_client="test", control_fresh=True,
+                      state=dict(state="READY", source="NANO", last_stop_reason="command deadline expired"),
+                      diagnostics=dict(session="gateway-1", events=[dict(
+                          id=1, time_unix=time.time(), source="gateway", reason="input_timeout",
+                          details=dict(input_age_ms=310, input_timeout_ms=250))]))
+        window._message(packet)
+        for _ in range(10):
+            window._message(packet)
+        assert window.log_view.toPlainText().count("(input_timeout)") == 1
+        assert "310" in window.log_view.toPlainText()
+        window._status("连接失败：test")
+        assert not window.drive_buttons["FORWARD"].isEnabled()
+        assert "遥测" in window.mode_label.text()
+        window._status("已连接")
+        packet["diagnostics"]["events"].append(dict(id=2, time_unix=time.time(), source="bridge",
+            reason="ACK progress timeout", details=dict(ack_age_sec=.42)))
+        window._message(packet)
+        assert window.log_view.toPlainText().count("(input_timeout)") == 1
+        assert "下位机 ACK 确认超时" in window.log_view.toPlainText()
+        # Gateway restarts reset IDs; history still gets displayed.
+        packet["diagnostics"].update(session="gateway-2", events=[dict(
+            id=1, time_unix=time.time(), source="gateway", reason="app_disconnected", details={})])
+        window._message(packet)
+        assert "app_disconnected" in window.log_view.toPlainText()
+        window._copy_diagnostics()
+        assert QApplication.clipboard().text() == window.log_view.toPlainText()
+        destination = tmp_path / "诊断日志.txt"
+        window._write_diagnostics(destination)
+        assert "ACK progress timeout" in destination.read_text(encoding="utf-8-sig")
+        window._expand_diagnostics()
+        window._log("App", "expanded live record")
+        assert "expanded live record" in window._log_dialog.findChild(type(window.log_view)).toPlainText()
+        window._log_dialog.close()
+        window.log_view.clear()
+        window._message(packet)
+        assert "app_disconnected" not in window.log_view.toPlainText()  # Clear does not replay history.
+        for i in range(2100):
+            window._log("App", f"event {i}")
+        assert window.log_view.document().blockCount() == 2000
+    finally:
+        window.close()
+
+
+def test_diagnostics_old_gateway_and_delayed_send_timer(app, monkeypatch):
+    monkeypatch.setattr(SocketWorker, "start", lambda self: None)
+    window = OperatorWindow("unused")
+    try:
+        window._message(dict(type="hello", client_id="test", capabilities=[]))
+        packet = dict(type="telemetry", state=dict(state="HANDSHAKE", reason="CTRL timeout"))
+        window._message(packet)
+        window._message(packet)
+        assert "完整日志需更新 Nano 网关" in window.log_view.toPlainText()
+        assert window.log_view.toPlainText().count("(CTRL timeout)") == 1
+        window._last_send_tick = time.monotonic() - .35
+        window._send_input()
+        assert "手动发送定时器延迟" in window.log_view.toPlainText()
+        window.last_telemetry_at = time.monotonic() - 1
+        window._refresh_controls()
+        assert "手动按钮已禁用" in window.log_view.toPlainText()
+        assert "超过 800 ms" in window.log_view.toPlainText()
+        assert "已过期" in window.diagnostic_summary.text()
+    finally:
+        window.close()

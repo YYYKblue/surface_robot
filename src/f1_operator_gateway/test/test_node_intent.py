@@ -1,5 +1,6 @@
 from operator_gateway.node import OperatorGateway
 from operator_gateway.protocol import ManualInput
+from operator_gateway.diagnostics import DiagnosticHistory
 
 
 class FakeHub:
@@ -16,6 +17,7 @@ def gateway(allow_fifth):
     node.task_locks = set()
     node.last_app_seq = -1
     node.control_state = {"allow_fifth_thruster": allow_fifth}
+    node.diagnostic_history = DiagnosticHistory()
     node.hub = FakeHub()
     node.token = ""
     node.last_input = None
@@ -107,3 +109,43 @@ def test_late_manual_acquire_is_released_after_switch_to_task():
     pending.set_result(SimpleNamespace(success=True, token="late-manual-token"))
     assert released == ["late-manual-token"]
     assert not published and not node.token and node._manual_acquires == 0
+
+
+def test_manual_timeout_history_survives_release_without_exposing_token():
+    import time
+    from types import SimpleNamespace
+    node = gateway(True)
+    node.pending_acquire = False
+    node.manual_generation = 0
+    node.input_timeout = .25
+    node.token = "private-control-token"
+    node.control_state.update(source="NANO", state="ACTIVE", ctrl_age_sec=.02)
+    node.last_input = command()
+    node.last_input_at = time.monotonic() - .3
+    node.get_logger = lambda: SimpleNamespace(info=lambda message: None)
+    released = []
+    node._release_token = released.append
+    node._stop_manual("input_timeout")
+    event = node.diagnostic_history.view()["events"][-1]
+    assert event["reason"] == "input_timeout"
+    assert event["details"]["input_age_ms"] >= 300
+    assert event["details"]["input_timeout_ms"] == 250
+    assert event["details"]["had_lease"] is True
+    assert event["details"]["source"] == "NANO"
+    assert "private-control-token" not in str(event)
+    assert released == ["private-control-token"] and node.last_input_at is None
+
+
+def test_bridge_history_preserves_short_lived_stop_and_is_bounded():
+    history = DiagnosticHistory()
+    history.bridge(dict(state="ACTIVE", source="NANO", reason="executing leased command"))
+    for age in range(100):
+        history.bridge(dict(state="ACTIVE", source="NANO", reason="executing leased command", ctrl_age_sec=age / 1000))
+    assert len(history.events) == 1
+    history.bridge(dict(state="HANDSHAKE", reason="command deadline expired",
+                        last_stop_reason="command deadline expired"))
+    history.bridge(dict(state="READY", reason="neutral acknowledged; waiting for explicit acquire"))
+    assert history.view()["events"][1]["reason"] == "command deadline expired"
+    for _ in range(100):
+        history.record("gateway", "input_timeout")
+    assert len(history.events) == 50 and history.sequence == 103

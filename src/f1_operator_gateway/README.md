@@ -131,6 +131,8 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
 
 协议名仍为 `f1-operator-v1`；`hello` 新增 `client_id` 和 `capabilities`。手动消息字段与原版本一致。
 
+`diagnostic_history` 能力表示遥测含 `diagnostics: {session, events}`：网关保留最近 50 条桥状态变化和手动停止事件，事件带单调递增 `id`、`time_unix`、`source`、`reason`、`details`。手动停止记录清除前的输入年龄及超时阈值，桥事件记录 CTRL/ACK 年龄和最近撤销原因，不包含控制 token。App 按 session/id 去重，重连可补读；进程重启不保留旧历史。旧客户端可忽略此新增字段。
+
 ```json
 {"op":"task","task_type":"l","action":"start","request_id":"唯一请求编号"}
 {"op":"initial_pose","x":1.2,"y":3.4,"yaw":1.57,"map_revision":1,"request_id":"另一请求编号"}

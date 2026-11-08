@@ -18,6 +18,56 @@ import websockets
 from operator_gateway.node import OperatorGateway
 
 
+def test_websocket_manual_timeout_history_is_available_after_reconnect():
+    # STOP-only input exercises the real watchdog without acquiring control.
+    rclpy.init(args=["--ros-args", "-p", "port:=0"])
+    gateway = OperatorGateway()
+    executor = SingleThreadedExecutor()
+    executor.add_node(gateway)
+    pool = ThreadPoolExecutor(max_workers=1)
+    port = gateway.hub.server.sockets[0].getsockname()[1]
+
+    async def scenario():
+        async def until(ws, predicate):
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                packet = json.loads(await asyncio.wait_for(ws.recv(), 5))
+                if predicate(packet):
+                    return packet
+            raise AssertionError("diagnostic telemetry not received")
+
+        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+            await ws.send(json.dumps(dict(op="hello", client="diagnostics-test")))
+            hello = await until(ws, lambda p: p.get("type") == "hello")
+            assert "diagnostic_history" in hello["capabilities"]
+            await ws.send(json.dumps(dict(op="manual_input", seq=1, direction="STOP",
+                speed_percent=25, mode="BOTH", brush_enabled=False, brush_percent=0,
+                thrust_enabled=False, thrust_percent=0)))
+            packet = await until(ws, lambda p: any(e["reason"] == "input_timeout"
+                for e in p.get("diagnostics", {}).get("events", [])))
+            history = packet["diagnostics"]
+            event = next(e for e in history["events"] if e["reason"] == "input_timeout")
+            assert event["details"]["input_age_ms"] >= 250
+            assert event["details"]["had_lease"] is False
+        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+            replay = await until(ws, lambda p: bool(p.get("diagnostics", {}).get("events")))
+            assert replay["diagnostics"]["session"] == history["session"]
+            assert event in replay["diagnostics"]["events"]
+
+    future = pool.submit(asyncio.run, scenario())
+    try:
+        deadline = time.monotonic() + 15
+        while not future.done() and time.monotonic() < deadline:
+            executor.spin_once(timeout_sec=.02)
+        assert future.done()
+        future.result()
+    finally:
+        gateway.destroy_node()
+        executor.shutdown()
+        rclpy.shutdown()
+        pool.shutdown(wait=True)
+
+
 def test_websocket_initial_pose_task_routing_completion_and_localization_loss():
     rclpy.init(args=["--ros-args", "-p", "port:=0"])
     gateway = OperatorGateway()

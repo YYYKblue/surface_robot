@@ -19,14 +19,16 @@ try:
     from .transport import SocketWorker
     from .task_state import PHASES, TASK_NAMES, blocker_text
     from .mapping_panel import MappingPanel
+    from .diagnostics import DiagnosticPanel
 except ImportError:
     from map_canvas import MapCanvas
     from transport import SocketWorker
     from task_state import PHASES, TASK_NAMES, blocker_text
     from mapping_panel import MappingPanel
+    from diagnostics import DiagnosticPanel
 
 
-class OperatorWindow(MappingPanel, QMainWindow):
+class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
     def __init__(self, url, *, mock=False):
         super().__init__()
         self.setWindowTitle("F1 水面机器人控制台")
@@ -112,12 +114,13 @@ class OperatorWindow(MappingPanel, QMainWindow):
         mapping_content = QWidget(); self._build_mapping(mapping_content)
         mapping = QScrollArea(); mapping.setWidgetResizable(True); mapping.setFrameShape(QFrame.NoFrame)
         mapping.setWidget(mapping_content); tabs.addTab(mapping, "建图与选图")
+        self._build_diagnostics(tabs)
         camera = QFrame(); camera.setObjectName("card"); camera_layout = QVBoxLayout(camera); camera_layout.addWidget(QLabel("前向摄像头")); camera_label = QLabel("摄像头画面预留\n接入 WebRTC 后显示"); camera_label.setAlignment(Qt.AlignCenter); camera_label.setMinimumHeight(125); camera_label.setStyleSheet("background:#172a39;color:#a9bdc9;border-radius:8px;"); camera_layout.addWidget(camera_label); side_layout.addWidget(camera)
         self.status_bar = QLabel("等待网关状态"); self.status_bar.setObjectName("muted"); layout.addWidget(self.status_bar)
 
     def _build_manual(self, parent):
         box = QVBoxLayout(parent); box.setContentsMargins(4, 8, 4, 8)
-        self.mode_label = QLabel("手动控制 · 网关自动管理会话"); box.addWidget(self.mode_label)
+        self.mode_label = QLabel("手动控制 · 网关自动管理会话"); self.mode_label.setWordWrap(True); box.addWidget(self.mode_label)
         box.addWidget(QLabel("PWM 档位"))
         speeds = QHBoxLayout()
         self.speed_buttons = {}
@@ -274,7 +277,21 @@ class OperatorWindow(MappingPanel, QMainWindow):
         selecting = self.pose_button.isChecked()
         runtime = packet.get("runtime") or {}
         typing = isinstance(QApplication.focusWidget(), (QLineEdit, QAbstractSpinBox))
-        locked = bool(busy or local_pending or selecting or not fresh or not operator or runtime.get("busy") or typing)
+        lock_reasons = tuple(label for condition, label in (
+            (busy, "自动任务占用"), (local_pending, "操作等待回复"),
+            (selecting, "正在选择初始位姿"), (not fresh, "遥测未收到或超过 800 ms"),
+            (not operator, "其他操作端占用"), (runtime.get("busy"), "建图/选图操作处理中"),
+            (typing, "输入框持有焦点")) if condition)
+        locked = bool(lock_reasons)
+        self._log_change("manual_lock", lock_reasons, "App",
+                         "手动按钮已禁用" if locked else "手动按钮已可用",
+                         {"reasons": lock_reasons,
+                          "telemetry_age_ms": round((time.monotonic()-self.last_telemetry_at)*1000, 1)
+                          if self.last_telemetry_at else None})
+        self.mode_label.setText("手动不可用：" + "；".join(lock_reasons) if locked
+                                else "手动控制 · 网关自动管理会话")
+        if not fresh:
+            self.diagnostic_summary.setText("遥测未收到或已过期；先前桥状态不能代表当前状态")
         if locked and not self.manual_locked:
             self._clear_manual()
         self.manual_locked = locked
@@ -391,6 +408,13 @@ class OperatorWindow(MappingPanel, QMainWindow):
     def _packet(self, op, **fields):
         self.seq += 1; return {"op": op, "seq": self.seq, **fields}
     def _send_input(self):
+        now = time.monotonic()
+        if self._last_send_tick is not None:
+            gap_ms = (now - self._last_send_tick) * 1000
+            self._log_change("send_delay", gap_ms >= 200, "App",
+                             "手动发送定时器延迟" if gap_ms >= 200 else "手动发送定时器正常",
+                             {"interval_ms": round(gap_ms, 1), "expected_ms": 50})
+        self._last_send_tick = now
         if self.manual_locked:
             return
         self.worker.send_packet(self._packet("manual_input", direction=self.direction,
@@ -407,6 +431,7 @@ class OperatorWindow(MappingPanel, QMainWindow):
         self.brush = self.thrust = False
 
     def _stop(self, reason):
+        self._log("App", reason, {"direction": self.direction, "brush": self.brush, "thrust": self.thrust})
         self._clear_manual()
         self.worker.send_packet(self._packet("manual_stop", reason=reason))
 
@@ -419,6 +444,7 @@ class OperatorWindow(MappingPanel, QMainWindow):
         self._send_request("task", action=action, task_type=kind)
 
     def _status(self, text):
+        self._log_change("connection", text, "连接", text)
         self.connection.setText(text)
         if text.startswith("连接失败"):
             self.last_telemetry_at = 0.
@@ -460,11 +486,15 @@ class OperatorWindow(MappingPanel, QMainWindow):
         if packet.get("type") == "hello":
             self.client_id = packet.get("client_id")
             self.capabilities = set(packet.get("capabilities", []))
+            self._log("连接", "网关握手完成", {"diagnostic_history": "diagnostic_history" in self.capabilities})
+            if "diagnostic_history" not in self.capabilities:
+                self._log("App", "网关未声明诊断历史支持；仅记录本地事件与收到的桥状态，完整日志需更新 Nano 网关")
             if "map_catalog" in self.capabilities:
                 self._send_request("mapping", action="list")
         elif packet.get("type") == "map":
             self.canvas.set_telemetry(packet)
         elif packet.get("type") == "telemetry":
+            self._diagnostic_telemetry(packet)
             self.telemetry = packet
             self.last_telemetry_at = time.monotonic()
             self._mapping_telemetry(packet)
@@ -509,6 +539,10 @@ class OperatorWindow(MappingPanel, QMainWindow):
                         self.seen_completions.add((kind, run_id))
                         self.status_bar.setText(text.replace("\n", " · "))
         elif packet.get("type") == "reply":
+            if packet.get("message") or packet.get("success") is False:
+                self._log_change("reply", (packet.get("op"), packet.get("success"), packet.get("message")),
+                                 "网关回复", str(packet.get("message", "操作未完成")),
+                                 {"op": packet.get("op"), "success": packet.get("success")})
             if not packet.get("pending"):
                 self.pending_requests.pop(packet.get("request_id"), None)
             self._mapping_reply(packet)
@@ -516,6 +550,7 @@ class OperatorWindow(MappingPanel, QMainWindow):
                 prefix = "操作反馈：" if packet.get("success") else "操作未完成："
                 self.status_bar.setText(prefix + str(packet["message"]))
         elif packet.get("type") == "error":
+            self._log_change("error", packet.get("message"), "网关错误", str(packet.get("message", "未知错误")))
             self.status_bar.setText("网关错误：" + str(packet.get("message", "未知错误")))
         self._refresh_controls()
 
