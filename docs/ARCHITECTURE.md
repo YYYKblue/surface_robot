@@ -1,6 +1,6 @@
 # 项目架构与代码导读
 
-开放多段路线更新：2026-11-08。其余架构核对日期：2026-11-02，代码基线 `53692ef`。本文依据当前源码、launch、YAML 与测试整理。操作入口见[根 README](../README.md)，目标机安装见[部署指南](../DEPLOY_NANO.md)。历史验证记录只说明当时的测试结果，不能用来证明当前实船状态。
+核对日期：2026-11-08，源码基线 `0c0e4e2`。本文依据当前源码、launch、YAML 与测试整理。操作入口见[根 README](../README.md)，目标机安装见[部署指南](../DEPLOY_NANO.md)。历史验证记录只说明当时的测试结果，不能用来证明当前实船状态。
 
 ## 1. 项目组成与依赖
 
@@ -11,12 +11,12 @@
 | `f1_lidar_driver` | [pavo2_scan_node.cpp](../src/f1_lidar_driver/src/pavo2_scan_node.cpp)、`vendor/pavo2_sdk/` | 连接雷达、发布扫描，不发布安装 TF |
 | `f1_mapping_bringup` | [lidar_mapping.launch.py](../src/f1_mapping_bringup/launch/lidar_mapping.launch.py)、`config/pavo2_2d.lua` | Cartographer 纯雷达建图、地图发布、平面安装 TF |
 | `f1_localization` | [localization_node.py](../src/f1_localization/f1_localization/localization_node.py)、`localization.py`、`map_io.py` | 冻结地图、初始位姿、轨迹生命周期、定位门控和栅格读取 |
-| `f1_pool_cleaning` | [controller_node.py](../src/f1_pool_cleaning/f1_pool_cleaning/controller_node.py)、`autonomous.py`、`mission.py` | 矩形任务及两类任务共用的简单靠近、沿墙、覆盖、感知实现 |
+| `f1_pool_cleaning` | [controller_node.py](../src/f1_pool_cleaning/f1_pool_cleaning/controller_node.py)、`autonomous.py`、`mission.py`、`map_profile.py`、`open_route.py` | 矩形任务及两类任务共用的简单靠近、沿墙、覆盖、感知实现 |
 | `f1_l_cleaning` | [controller_node.py](../src/f1_l_cleaning/f1_l_cleaning/controller_node.py)、`route.py`、`topics.py` | 继承共享控制器，提供开放多段路线及 `/l_cleaning/*` 接口 |
 | `f1_nano_bridge` | [node.py](../src/f1_nano_bridge/nano_ros_bridge/node.py)、`session.py`、`protocol.py`、`transport.py` | 控制租约、协议编解码、串口、CTRL/ACK、IMU 遥测 |
 | `f1_interfaces` | `msg/`、`srv/` | 公共消息与服务定义；修改后需要重建使用方 |
-| `f1_operator_gateway` | [node.py](../src/f1_operator_gateway/operator_gateway/node.py)、`task_control.py`、`runtime.py`、`map_store.py`、`tracks.py` | 手动会话、任务操作、受管进程、地图保存与轨迹遥测 |
-| `operator_app` | [window.py](../operator_app/window.py)、`transport.py`、`map_canvas.py`、`mapping_panel.py` | Qt 界面、WebSocket、地图交互、建图选图；不持有硬件 token |
+| `f1_operator_gateway` | [node.py](../src/f1_operator_gateway/operator_gateway/node.py)、`task_control.py`、`runtime.py`、`map_store.py`、`tracks.py`、`diagnostics.py` | 手动会话、任务操作、受管进程、地图保存、轨迹遥测与诊断历史 |
+| `operator_app` | [window.py](../operator_app/window.py)、`transport.py`、`map_canvas.py`、`mapping_panel.py`、`diagnostics.py` | Qt 界面、WebSocket、地图交互、建图选图与诊断日志；不持有硬件 token |
 
 `f1_localization` 依赖接口和建图配置包，建图配置包再依赖雷达驱动。因此 `--packages-up-to f1_localization` 当前构建四个仓库包；`--packages-up-to f1_operator_gateway` 构建全部八包。构建依赖并不意味着 launch 会启动所有依赖节点：雷达始终独立运行。
 
@@ -50,7 +50,7 @@ flowchart LR
 | `f1_mapping_bringup lidar_mapping.launch.py` | 建图、地图发布、可选安装 TF/RViz | 已有扫描，未运行固定地图定位 |
 | `f1_localization localization.launch.py` | 冻结地图定位和门控 | 地图三件套与扫描已准备 |
 | `f1_pool_cleaning pool_bringup.launch.py` | 定位、bridge、矩形感知与控制器 | 传入适配矩形任务的 `map:=` |
-| `f1_l_cleaning l_bringup.launch.py` | 定位、bridge、L 感知与控制器 | 传入适配开放 L 的 `map:=` |
+| `f1_l_cleaning l_bringup.launch.py` | 定位、bridge、L 感知与控制器 | 传入含有效开放直墙链的 `map:=` |
 | `f1_operator_gateway operator_gateway.launch.py` | 仅网关 | 复用已运行的 ROS 节点 |
 | `f1_operator_gateway operator_bringup.launch.py` | 共享定位、bridge、可用任务及网关 | 指定已有地图，任务能力按几何校验决定 |
 | `f1_operator_gateway operator_system.launch.py` | 常驻 bridge/网关，按 App 操作启动模式子进程 | 指定绝对 `workspace_root:=`，可无地图待机 |
@@ -60,6 +60,8 @@ flowchart LR
 受管入口通过 `runtime.py`、`managed_process.py` 和 `operator_mode.launch.py` 管理“待机／建图／固定地图定位与清洗”。建图和定位互斥，加载地图后重新发布初始位姿。地图导出由 `map_store.py` 保存同名 `.pbstream/.yaml/.pgm`，临时快照和日志的恢复规则见[网关说明](../src/f1_operator_gateway/README.md#地图文件与恢复)。
 
 同一机器人仅启动一套 bridge 和地图/定位发布链。默认 launch 的 `output_enabled=false`；`pool_nano` 快捷脚本默认传 `true`，仓库 `f1-operator.service` 模板也设置 `F1_OUTPUT_ENABLED=true`。预览时要在使用的入口明确核对该值。所有入口均等待操作请求，不会仅因启动就自动清洗。
+
+服务模板通过 `wait-operator-clock.py --offline-after 20` 先等 NTP；未同步时再要求合理本地日期和新的 5 秒稳定窗口。运行中桥接检测时钟故障后撤销租约、尽力发中性帧并以 75 退出；受管 launch 关闭，systemd 重新检查时间后启动至无地图待机。该恢复不沿用旧命令或任务，直接 launch 没有 systemd 自动恢复。完整条件与限流见[服务部署](../DEPLOY_NANO.md#app-建图选图与开机服务)。
 
 ## 4. 地图和参数如何进入控制器
 
@@ -77,6 +79,8 @@ flowchart LR
 
 默认 `left_ray` 沿船体 +y 选择第一面命中的有限墙段；公共角点按清洗方向与船头夹角选墙。无交点拒绝启动，不延长墙或回退最近墙。显式 `set_edge` 或 `start_policy=specified` 可覆盖。开始前检查定位和位姿，锁定墙及最近投影点，取得控制权后旋转、前后移动和侧移进入旧版合理起始范围，再确认墙面。没有路径搜索、足迹或雷达环境碰撞检查；控制租约、定位与通信期限仍生效。
 
+当前墙距目标为 0.33 m，控制区间 0.31–0.35 m；刷盘与侧推默认幅度为 50%。沿墙时四主电机仅在航向偏差超过 ±3° 时纠偏，滚刷在墙距合格且航向在 ±10° 内时推进，不再附加主电机 FORWARD。`transfer_side_percent` 控制右转换边侧推，`side_percent` 用于沿墙、初始侧移及左转换边侧移。
+
 覆盖由 `coverage.py` 和 `AutonomousMission` 统计左刷接触中心线区间，默认缺口容差 0.05 m。矩形顺时针绕行后只补齐首次有效开刷位置之前的起始边，并重叠 0.10 m；不再规划其他缺口的补洗。开放任务只执行选中位置之后到墙链末端的路线，不返回、不补洗。`COMPLETE` 表示本次路线执行结束，`coverage_complete` 和剩余缺口单独报告。
 
 | 操作或状态 | 行为 |
@@ -89,7 +93,11 @@ flowchart LR
 
 原路径规划模块 `navigation.py` 已删除。简单靠近不执行栅格、船体/刷盘包络或扫描碰撞检查，也不检查所选墙的路径可达性；定位管理器仍检查扫描新鲜度与地图一致性，沿墙阶段仍要求有效墙观测。30 cm 停车阈值和 `STOPPED` 均不表示通过速度测量确认船体已经静止。
 
-## 6. 验证和维护入口
+## 6. 诊断数据的保存范围
+
+网关 `diagnostics.py` 在内存中保留最近 50 条桥状态变化及手动停止事件，随 `telemetry.diagnostics` 发布；App 按 `session/id` 去重并最多保留 2000 条，支持复制和导出。网关重启会清空网关历史，App 退出会丢失未导出的本地日志。受管模式子进程的持久日志另存于 `workspace_root/log/operator_runtime/<session_id>.log`，与这两类诊断历史不同。详见[App 日志说明](../operator_app/README.md#诊断日志)。
+
+## 7. 验证和维护入口
 
 ROS 包通过 `CMakeLists.txt` 注册 pytest/GoogleTest，使用 `colcon test` 执行；Qt 测试单独运行。仓库现有测试包含纯逻辑、模拟 ROS 服务、localhost DDS、WebSocket 以及合成扫描的 Cartographer 集成。涉及外部固件的两个组需要 `F1_FIRMWARE_DIR`，见[部署测试说明](../DEPLOY_NANO.md#7-nano离线测试)。
 
@@ -106,4 +114,4 @@ source install/local_setup.bash
   src/f1_l_cleaning/test/test_mission.py
 ```
 
-简化算法修改时的回归记录为清洗/L 形 226 项、网关 79 项、Qt App 13 项通过，共 318 项；不是本次文档核对重新执行的结果。2026-11-02 用户反馈基本测试未发现问题，具体场景与运行记录尚未随反馈提供，详见[验证记录](pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#7-测试和证据要求)。本次仅更新文档，未执行 Nano 部署或实船操作。后续改动接口时检查消息生成与调用方；改动入口时检查参数转发、节点重复和输出默认值；改动地图/任务规则时同步更新包 README、部署步骤与验收流程。
+仓库保留简化接近逻辑、开放墙链扩展等不同版本的软件回归和现场反馈，见[验证记录](pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#7-测试和证据要求)。其中 2026-11-08 开放墙链开发记录为清洗 280 项、开放任务 28 项、网关 92 项、Qt 16 项通过；这是既有记录，不是本次文档核对重新执行的结果，也不证明新增左转的实船效果。本次仅更新文档，未执行 Nano 部署或实船操作。后续改动接口时检查消息生成与调用方；改动入口时检查参数转发、节点重复和输出默认值；改动地图/任务规则时同步更新包 README、部署步骤与验收流程。

@@ -1,6 +1,6 @@
 # f1_pool_cleaning：泳池沿边清洗
 
-文档核对：2026-11-03。本页说明矩形四边任务及共享清洗实现；开放多段直墙任务由 [`f1_l_cleaning`](../f1_l_cleaning/README.md) 配置和适配，使用 `/l_cleaning/*` 接口。
+文档核对：2026-11-08，源码基线 `0c0e4e2`。本页说明矩形四边任务及共享清洗实现；开放多段直墙任务由 [`f1_l_cleaning`](../f1_l_cleaning/README.md) 配置和适配，使用 `/l_cleaning/*` 接口。
 
 2026-11-08：共享换边增加左转分支：前行出墙端 → 左移至下一边入口 → 左转 → 重新关联墙；原右转动作不变。多段墙链提取见 `open_route.py`，本次未增加相邻转角或船体空间检查。
 
@@ -14,9 +14,9 @@ Windows App 现已支持任务类型选择、初始位姿发布、启动条件�
 
 完整状态机和 ROS 数据流见[沿墙清洗流程图](../../docs/pool_cleaning/WALL_CLEANING_FLOW.md)。
 
-当前执行器参数：滚刷 50%，沿墙及起始点接近阶段第五电机双向推力 ±50%，滚刷角度门控 ±10°，四主电机从偏角超过 ±3° 就开始纠偏，开刷与纠偏可以同时进行。中心墙距 31–35 cm 时第五路关闭并允许滚刷工作；超出该区间时先侧推调整。换边时滚刷关闭，`REVERSE` 与向右侧推 50% 同时持续 0.5 s。
+当前执行器参数：滚刷 50%，沿墙及起始点接近阶段第五电机双向推力 ±50%，滚刷角度门控 ±10°，四主电机从偏角超过 ±3° 就开始纠偏，开刷与纠偏可以同时进行。中心墙距 31–35 cm 时第五路关闭并允许滚刷工作；超出该区间时先侧推调整。右转换边时滚刷关闭，`REVERSE` 与向右侧推 50% 同时持续 0.5 s。
 
-第五电推参数 `side_percent=50.0` 同时用于沿墙调距和起始点接近侧移；`transfer_side_percent=50.0` 独立控制换边时的右侧推。启停条件和侧推方向保持原逻辑，墙距在 31–35 cm 时第五路关闭。
+第五电推参数 `side_percent=50.0` 用于沿墙调距、起始点接近侧移和左转换边侧移；`transfer_side_percent=50.0` 独立控制换边时的右侧推。启停条件和侧推方向保持原逻辑，墙距在 31–35 cm 时第五路关闭。
 
 沿墙清洗前向推进仅靠 50% 滚刷，四主电机只负责航向纠偏：偏角在 ±3° 内时主电机中位，超过 ±3° 时以 LEFT/RIGHT 25 挡、BOTH 纠偏，回到 ±3° 后恢复中位。25 是 PWM 挡位，不是实测船速。带地图任务在墙距超出 31–35 cm 时关闭滚刷；旧单边入口保留原先只按角度开刷的规则。船中心距前墙 0.3 m 时按原规则停车换边。起点接近阶段的前后移动及换边后退动作保持原逻辑。
 
@@ -35,7 +35,7 @@ Windows App 现已支持任务类型选择、初始位姿发布、启动条件�
 | 中心到左墙 **>35 cm** | 第五电机向左推，默认 **+50%** |
 | 中心到左墙 **<31 cm** | 第五电机向右推，默认 **-50%** |
 | 中心墙距 **31–35 cm**，包括边界 | 第五电机关闭；不保留上一次推力 |
-| 船中心到前墙 **≤30 cm** | 滚刷、主电机、第五电机全部关闭，进入换边停稳流程 |
+| 船中心到前墙 **≤30 cm** | 滚刷、主电机、第五电机全部关闭，进入换边停止指令周期（不测量物理停稳） |
 
 `ψ = WallObservation.tangent_rad` 是左墙切线相对船头的夹角；正误差发 LEFT，负误差发 RIGHT。每个新墙观测都重新计算航向与侧推，纠偏时第五电机仍工作。超出 ±10° 也可以启动任务，先纠偏再开滚刷。
 
@@ -43,7 +43,7 @@ Windows App 现已支持任务类型选择、初始位姿发布、启动条件�
 
 换边阶段保留转移数据新鲜度、通信超时、执行器命令期限、遥控接管和取消/暂停关闭输出；转角使用连续地图航向反馈，不用固定时间代替 90°完成判断。地图边身份与左墙目标关联由 `EdgeTarget` 恢复，防止换边后误认相邻墙。
 
-默认无固定运行时长上限。定位管理器检查通过后发布 `LOCALIZATION_READY`，控制器在 start 时选墙并进入简单靠近，直边状态序列为 `APPROACH_WALL → APPROACH_EDGE → FOLLOW ↔ CORRECT_HEADING/WAIT_WALL → EDGE_STOP`，换边状态序列为 `EDGE_STOP → MOVE_INWARD → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`；端点和后退右推之间各保留一个停止指令周期，不等待物理停稳。转向目标航向误差放宽为 ±20°，转向和整段换边的时间超时默认关闭。临时丢墙为 `WAIT_WALL`。`wall_recovery_sec` 默认 1.5 秒；持续丢墙、反馈过期、定位退化或通信异常进入 `PAUSED`。手动暂停、取消和过期数据不会因反馈恢复而自动续跑；暂停后必须 `cancel` 再 `start`。
+默认无固定运行时长上限。定位管理器检查通过后发布 `LOCALIZATION_READY`，控制器在 start 时选墙并进入简单靠近，直边状态序列为 `APPROACH_WALL → APPROACH_EDGE → FOLLOW ↔ CORRECT_HEADING/WAIT_WALL → EDGE_STOP`，矩形右转换边状态序列为 `EDGE_STOP → MOVE_INWARD → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`；端点和后退右推之间各保留一个停止指令周期，不等待物理停稳。转向目标航向误差放宽为 ±20°，转向和整段换边的时间超时默认关闭。临时丢墙为 `WAIT_WALL`。`wall_recovery_sec` 默认 1.5 秒；持续丢墙、反馈过期、定位退化或通信异常进入 `PAUSED`。手动暂停、取消和过期数据不会因反馈恢复而自动续跑；暂停后必须 `cancel` 再 `start`。
 
 启动不要求预先靠墙，但默认左侧射线必须命中当前任务墙段。L 形未命中时拒绝启动，提示调整朝向；不延长墙段、不回退最近墙。角点默认容差 1 cm，转角相同时按边 ID 排序。`specified` 配合 `default_edge_id` 或空闲时的 `set_edge` 可显式指定墙。旧配置名 `nearest_reachable` 仅作为兼容别名转为 `left_ray`，会输出弃用提示。
 
@@ -70,7 +70,8 @@ Windows App 现已支持任务类型选择、初始位姿发布、启动条件�
 
 - `perception.py` / `perception_node.py`：墙线拟合、关联和空间观测；`perception_config.py` 只含感知与几何参数。
 - `geometry.py`：矩形/有序边界、顺时针左墙边段、投影和边选择。
-- `mission.py` / `config.py`：边段状态机、靠墙/入口调整、端点停止、后退右推、右转和四边任务参数。
+- `mission.py` / `config.py`：边段状态机、靠墙/入口调整、端点停止、左右换边动作和共享控制参数。
+- `map_profile.py` / `open_route.py`：地图几何推导、开放直墙链拟合、候选墙链选择及命令行检查。
 - `autonomous.py` / `coverage.py`：射线选墙、简单动作靠近、矩形起始边补齐和覆盖记录；沿墙和相邻换边复用 `mission.py`。
 - `controller_node.py` / `lease.py`：任务服务、状态、预览与 bridge 租约输出。
 - `ros_support.py` / `runner.py`：公共消息转换、时间戳和节点退出处理。
@@ -200,6 +201,6 @@ Qt App 经网关分别连接矩形与 L 的任务接口。顶部“停止手动�
 
 `/pool_cleaning/stop`（Trigger）进入 `STOPPED`，关闭全部任务输出并释放租约，保留覆盖记录与当前边快照；`cancel` 额外清除当前边关联。都不会自动续跑，自动任务再次 start 会重置进度并生成新 run_id。
 
-状态 JSON 的 `expected_track` 提供 map 坐标系的 `cleaning_segments` 和 `start_region`（参考点及到达范围四边形）；`navigation_path` 保留为空数组以兼容客户端。清洗目标点由接触区间减去 brush_x_m，再向水侧偏移 wall_target_m 得到船中心目标；各边独立绘制，L 形仅显示本次后续任务段。
+状态 JSON 的 `expected_track` 提供 map 坐标系的 `cleaning_segments` 和 `start_region`（参考点及到达范围四边形）；`navigation_path` 保留为空数组以兼容客户端。清洗目标点由接触区间减去 brush_x_m，再向水侧偏移 wall_target_m 得到船中心目标；各边独立绘制，开放墙链仅显示本次后续任务段。
 
 `center_wall_distance_m` 使用左墙观测的垂直距离，并同时检查源时间与接收时间是否小于 wall_max_age_sec；无效/过期时为 null。兼容字段 wall_distance_m、left_wall_distance_cm 使用同样有效性条件，wall_valid 不再对过期观测保持 true。历史轨迹由网关采集，详见[App 操作说明](../../operator_app/README.md)。

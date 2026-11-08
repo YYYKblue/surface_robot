@@ -4,7 +4,7 @@
 
 2026-11-05 更新：沿墙前向推进仅靠 50% 滚刷，移除四主电机前进辅助及其距离阈值；主电机仅作沿墙航向纠偏。起点接近及换边动作保持原逻辑。
 
-核对：2026-11-02，代码基线 `53692ef`。带地图任务使用 `AutonomousMission` 射线选墙及简单靠近，随后复用 `Mission` 沿墙与相邻换边。没有路径搜索、地图足迹或雷达环境碰撞门控，靠近阶段不绕障；定位、控制租约、通信期限、停止和取消仍生效。基本测试反馈与软件回归记录见[开发与验收记录](DEVELOPMENT_AND_ACCEPTANCE.md#7-测试和证据要求)。
+核对：2026-11-08，源码基线 `0c0e4e2`。带地图任务使用 `AutonomousMission` 射线选墙及简单靠近，随后复用 `Mission` 沿墙与相邻换边。没有路径搜索、地图足迹或雷达环境碰撞门控，靠近阶段不绕障；定位、控制租约、通信期限、停止和取消仍生效。基本测试反馈与软件回归记录见[开发与验收记录](DEVELOPMENT_AND_ACCEPTANCE.md#7-测试和证据要求)。
 
 ## 总体流程
 
@@ -55,7 +55,7 @@ flowchart TD
 | `approach_coverage_tolerance_m` | 0.05 m | 覆盖缺口容差及是否需要补起始前段的判据 |
 | `approach_coverage_overlap_m` | 0.10 m | 矩形前段补齐的目标重叠长度，受有效区间末端限制 |
 
-`can_start` 只表示当前启动前置门控通过。射线交点和起始区间在 start 请求中检查，因此按钮可用时仍可能因 L 形无交点或起始区间不足而拒绝启动。
+`can_start` 只表示当前启动前置门控通过。射线交点和起始区间在 start 请求中检查，因此按钮可用时仍可能因 开放墙链无交点或起始区间不足而拒绝启动。
 
 矩形记录实际首次有效开刷位置，绕行后补齐其前段并重叠 10 cm；不搜索其他缺口的补洗路线。开放墙链从选中边的当前位置开始，只清后续部分，到链尾停止，不返回也不补洗；要执行全部边，应从首边入口附近开始。覆盖统计只记录连续有效开刷进度；路线完成不保证全墙已覆盖。
 
@@ -63,7 +63,7 @@ Windows App 显示起始墙、参考点、紫色起始范围、当前动作和�
 
 ## 沿墙清洗与自动换边状态机
 
-下图保留旧版沿墙和相邻换边控制。矩形外层按四边顺时针编排，必要时返回起始边补前段；开放墙链只沿选中边之后的路线到终点。路线执行完成与覆盖记录无缺口是独立字段。
+下图对应当前沿墙控制及左右换边分支。矩形外层按四边顺时针编排，必要时返回起始边补前段；开放墙链只沿选中边之后的路线到终点。路线执行完成与覆盖记录无缺口是独立字段。
 
 ```mermaid
 flowchart TD
@@ -103,6 +103,7 @@ flowchart TD
     ESTOP --> NEXT{存在下一条边?}
     NEXT -- 否 --> COMPLETE([COMPLETE\n本次路线执行结束])
     NEXT -- 是 --> KIND{下一边转向}
+    KIND -- 同向共线 --> AN
     KIND -- 左转 --> LX[LEFT_EXIT_WALL\n关刷前行走出墙端]
     LX --> LS[LEFT_SHIFT_TO_ENTRY\n保持旧航向，左移至新墙入口]
     LS --> LT[TURN_LEFT_TO_NEXT_EDGE\n左转至下一边方向]
@@ -155,6 +156,6 @@ flowchart TD
 
 射线选墙位于 [geometry.py](../../src/f1_pool_cleaning/f1_pool_cleaning/geometry.py)，简单靠近与路线编排位于 [autonomous.py](../../src/f1_pool_cleaning/f1_pool_cleaning/autonomous.py)，沿墙与换边位于 [mission.py](../../src/f1_pool_cleaning/f1_pool_cleaning/mission.py)。沿墙默认参数位于 [pool_cleaning.yaml](../../src/f1_pool_cleaning/config/pool_cleaning.yaml)，`approach_*` 默认值由 `ApproachConfig` 定义并由控制器声明。
 
-组合入口的定位状态为 `/f1_localization/localization_status`；L 任务的控制接口为 `/l_cleaning/*`。`stop/cancel` 均不支持断点续跑，App 的 `manual_stop` 仅停止手动会话。
+组合入口的定位状态为 `/f1_localization/localization_status`；开放任务的控制接口为 `/l_cleaning/*`。`stop/cancel` 均不支持断点续跑，App 的 `manual_stop` 仅停止手动会话。
 
 > 说明：`COMPLETE` 表示本次路线执行结束；`coverage_complete` 单独表示记录的要求区间是否满足覆盖容差；`cleaned_intervals` 的统计基准是左侧滚刷接触中心线，不应单独解释为池底面积覆盖率。实船漂移、角部留白和实际清洁效果仍需现场验收记录。

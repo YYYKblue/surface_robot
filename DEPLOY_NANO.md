@@ -375,6 +375,15 @@ ros2 launch f1_operator_gateway operator_bringup.launch.py \
 
 该入口默认预览，不会自动 start。已有完整 bringup 时不要再运行它；仅启动网关即可，已有 L 定位使用 `localization_prefix:=/l_cleaning`。两类任务接口不再重映射。完整操作与验收边界见[网关](src/f1_operator_gateway/README.md)和 [App](operator_app/README.md)文档。
 
+### 当前版本升级核对（2026-11-08，`0c0e4e2`）
+
+- `l` 任务已扩展为开放多段墙链，App 显示“开放多边清洗”。同步两个清洗包、网关及整个 Windows App；使用 exe 时重新打包。先运行 `ros2 run f1_pool_cleaning map_profile <现场地图> --json` 核对墙链和边编号，原示例大 L 的两条边现为 `edge_3/edge_4`。默认最长链，其他候选通过 `l_config` 的 `route_chain_index` 选择。
+- 现场自定义 YAML 不会自动获得新默认值。核对 `wall_target_m=0.33`、墙距区间 `0.31–0.35` m、`brush_percent=50.0`、`side_percent=50.0` 和独立的 `transfer_side_percent=50.0`；感知配置的 `brush_max_compression_m=0.02`。沿墙主电机 FORWARD 辅助已移除，实船预期见[矩形验收步骤](src/f1_pool_cleaning/DEPLOY_TEST_NANO.md)。
+- 定位 Lua 当前为 `motion_filter.max_time_seconds=0.3`、`optimize_every_n_nodes=5`；更频繁优化不等于定位就绪，需观察 Nano 负载与定位状态，见[定位调优说明](src/f1_localization/README.md)。
+- 网关新增可补读的停止诊断历史，App 支持日志导出。更换工作空间内服务模板不会自动更新 `/etc/systemd/system/` 中已安装的副本；采用当前校时与恢复策略时，按下节重新安装模板并 `daemon-reload`。
+
+发生手动停止或连接异常时，关闭 App 前导出“诊断日志”，并保留同一时段的 `journalctl -u f1-operator.service`。App 内存日志、网关最近 50 条事件、`log/operator_runtime/` 模式子进程日志分别记录不同层次，不会相互替代；时间含义与保留范围见[App 诊断说明](operator_app/README.md#诊断日志)。
+
 
 ## App 建图选图与开机服务
 

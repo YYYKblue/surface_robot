@@ -1,6 +1,6 @@
 # f1_l_cleaning：开放多段直墙清洗
 
-更新：2026-11-08。本包从原“大 L 两段墙”扩展为有方向的开放墙链，支持单条直墙及多次左转、右转。保留包名、`l_controller`、`l_bringup.launch.py`、`/l_cleaning/*` 和协议任务类型 `l`；App 显示“开放多边清洗”。定位与硬件输出继续复用共享组件，默认预览、等待显式 start。
+更新：2026-11-08，源码基线 `0c0e4e2`。本包从原“大 L 两段墙”扩展为有方向的开放墙链，支持单条直墙及多次左转、右转。保留包名、`l_controller`、`l_bringup.launch.py`、`/l_cleaning/*` 和协议任务类型 `l`；App 显示“开放多边清洗”。定位与硬件输出继续复用共享组件，默认预览、等待显式 start。
 
 ## 路线与地图
 
@@ -27,11 +27,13 @@ ros2 run f1_pool_cleaning map_profile "$PWD/maps/lidar_20261026_170703.yaml" --r
 
 输出中的 `leg_lengths_m`、`turns_deg` 对应全部边及转角，正角为左转，负角为右转；`chain_lengths_m` 列出候选墙链总长度。旧 `turn_deg` 为首个转角，保留兼容。
 
-配置文件中的 `route_chain_index` 选择墙链，修改后重启。`route_xy: [x0, y0, x1, y1, ...]` 可覆盖已成功推导的路线，接受两个以上有限点，保持顺序，不自动反向或闭合。调用方必须保证墙在左、水在右；保留重复点、自交、掉头重叠和原有有效清洗区间校验。不能使用 `boundary_xy`，手填路线仍不能绕过地图推导失败。
+配置文件中的 `route_chain_index` 选择墙链，修改后重启；它是控制器 YAML 参数，不是直接传入 launch 的参数。`route_xy: [x0, y0, x1, y1, ...]` 可覆盖已成功推导的路线，接受两个以上有限点，保持顺序，不自动反向或闭合。调用方必须保证墙在左、水在右；保留重复点、自交、掉头重叠和原有有效清洗区间校验。不能使用 `boundary_xy`，手填路线仍不能绕过地图推导失败。
+
+使用自定义配置时，复制 `config/l_cleaning.yaml` 并修改 `l_controller.ros__parameters.route_chain_index`。独立 `l_bringup.launch.py` / `l_cleaning.launch.py` 通过 `config:=/绝对路径/配置.yaml` 加载；网关组合或受管入口使用 `l_config:=/绝对路径/配置.yaml`。
 
 ## 沿墙与换边动作
 
-初始选墙、起始区域寻找和沿墙逻辑沿用原实现：左侧射线命中有限任务墙，锁定最近投影点，以旋转、前后移动、侧移进入起始范围，再确认新鲜墙观测。不会搜索绕障路径。墙距 31–35 cm 时按航向条件开刷，50% 滚刷负责沿墙推进；四主电机只作沿墙航向纠偏。侧推幅度 50%。
+初始选墙、起始区域寻找和沿墙逻辑沿用原实现：左侧射线命中有限任务墙，锁定最近投影点，以旋转、前后移动、侧移进入起始范围，再确认新鲜墙观测。不会搜索绕障路径。墙距 31–35 cm 时按航向条件开刷，50% 滚刷负责沿墙推进；四主电机只作沿墙航向纠偏。侧推幅度 50%。沿墙、初始侧移及左转换边侧移使用 `side_percent`，右转换边侧推使用独立参数 `transfer_side_percent`。
 
 每边距端点约 0.30 m 时关刷，进入换边；最后一边结束则停止。
 
@@ -63,6 +65,8 @@ EDGE_STOP
 初始区域寻找保持原规则：可以从任意选中墙的附近开始，随后只执行该位置及后续边，到墙链末端停止，不返回、不补洗。
 
 **要执行全部五条边，应从 `edge_0` 的入口附近开始。** `specified/default_edge_id` 只指定第一条墙，参考点仍取船中心最近投影，不会自动把船送回整个墙链起点。默认射线命中 `edge_3` 时只执行 `edge_3/edge_4`，不会把未经过的前三条边算成已清洗。
+
+状态中的 `route_chain_index`、`route_chain_count` 分别报告所选候选链索引和候选总数。
 
 `COMPLETE` 表示本次路线结束；`completion_scope=remaining_open_route`，`coverage_complete` 和 `remaining_contact_intervals` 单独报告刷头轨迹覆盖缺口。既有角部留白不变，不将整场路线执行完成等同于实际去污效果。
 
@@ -96,6 +100,7 @@ ros2 service call /l_cleaning/cancel std_srvs/srv/Trigger '{}'
 
 ```bash
 export ROS_LOCALHOST_ONLY=1
+export ROS_DOMAIN_ID=173
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export CYCLONEDDS_URI="file://$PWD/src/f1_operator_gateway/test/cyclonedds_localhost.xml"
 colcon test --packages-select f1_pool_cleaning f1_l_cleaning --executor sequential --return-code-on-test-failure

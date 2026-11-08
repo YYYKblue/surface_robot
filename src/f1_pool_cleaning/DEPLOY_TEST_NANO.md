@@ -1,6 +1,6 @@
 # Nano：阶段 4 矩形四边自动清洁一周部署与验收
 
-文档核对：2026-11-02。本页适用于矩形任务；大 L 使用[独立任务入口与地图](../f1_l_cleaning/README.md)。通过 Qt App 操作时，自动任务使用“停止任务”“暂停任务”或“取消任务”；顶部红色“停止手动输出”只释放网关的手动租约。App 建图、选图和共享定位使用[受管入口](../f1_operator_gateway/README.md)，与下述完整 bringup 择一运行。
+文档核对：2026-11-08，源码基线 `0c0e4e2`。本页适用于矩形任务；开放多段直墙使用[独立任务入口与地图](../f1_l_cleaning/README.md)。通过 Qt App 操作时，自动任务使用“停止任务”“暂停任务”或“取消任务”；顶部红色“停止手动输出”只释放网关的手动租约。App 建图、选图和共享定位使用[受管入口](../f1_operator_gateway/README.md)，与下述完整 bringup 择一运行。
 
 当前任务使用冻结地图定位，默认 `start_policy=left_ray`：沿船体 +y 射线选墙并锁定最近投影点，关刷旋转、前后移动和侧移进入旧版起始范围；不做路径搜索或环境碰撞检查。随后复用旧版沿墙/换边。矩形仅补齐起始边前段，L 形到终点停且不返回、不补洗。`COMPLETE` 表示路线执行完成，覆盖缺口单独记录。
 
@@ -32,7 +32,7 @@ colcon build --symlink-install --packages-up-to f1_pool_cleaning
 source install/local_setup.bash
 ros2 run f1_pool_cleaning pool_demo
 export ROS_LOCALHOST_ONLY=1 ROS_DOMAIN_ID=173 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-export CYCLONEDDS_URI="file://$PWD/src/f1_pool_cleaning/test/cyclonedds_localhost.xml"
+export CYCLONEDDS_URI="file://$PWD/src/f1_lidar_driver/test/cyclonedds_localhost.xml"
 colcon test --executor sequential \
   --packages-select f1_localization f1_pool_cleaning --return-code-on-test-failure
 colcon test-result --verbose
@@ -157,12 +157,12 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 
 | 测试 | 预期 |
 |---|---|
-| 已进入 31–35 cm 且夹角在 ±10° 内 | 刷盘 30%；夹角在 ±3° 内且中心距前墙 >0.8 m 时四主电机 FORWARD 25挡、BOTH，超过 ±3° 则优先纠偏；第五路关闭 |
+| 已进入 31–35 cm 且夹角在 ±10° 内 | 刷盘 50%；夹角在 ±3° 内时四主电机 STOP，超过 ±3° 时以 LEFT/RIGHT 25 挡、BOTH 纠偏；第五路关闭 |
 | d 从 0.33 增到 >0.35，再回到 0.33，再降到 <0.31 | 第五路依次关、+50%、关、-50%；31–35 cm 范围内均关闭 |
 | 夹角超过 +10° / -10° | 刷盘关；四个主电机 LEFT / RIGHT 25%、BOTH 持续纠偏，没有脉冲/中位等待 |
-| 误差在 3° 到 10° 之间 | 继续 LEFT / RIGHT 纠偏，同时开启刷盘 30% |
-| 墙距在 31–35 cm，误差恢复到 ±3° 内且中心距前墙 >0.8 m | 四主电机 FORWARD 25挡、BOTH，刷盘保持 30% |
-| 中心距前墙从 >0.8 m 降至 0.8 m 及以下（尚未到 0.3 m 停车区） | 主电机取消 FORWARD；滚刷和 LEFT/RIGHT 纠偏仍按原门控工作 |
+| 误差绝对值 >3° 且 ≤10°，墙距在 31–35 cm | 继续 LEFT / RIGHT 纠偏，同时开启刷盘 50% |
+| 墙距在 31–35 cm，误差恢复到 ±3° 内 | 四主电机 STOP，刷盘保持 50% 推进 |
+| 中心距前墙仍 >0.30 m | 继续按墙距和航向控制；沿墙没有主电机 FORWARD 辅助或 0.8 m 切换阈值 |
 | 换边后退右推 | 主电机 REVERSE 与第五路向右 50% 同时持续 0.5 s |
 | 纠偏方向的空间标志为 false | 仍按夹角纠偏，不暂停 |
 | 墙线在 ±70° 内、相邻有效观测角度变化 ≤30° | 拟合质量满足条件时继续跟踪；刷盘仍只在 ±10° 内开启 |
@@ -204,7 +204,7 @@ ros2 launch f1_pool_cleaning pool_cleaning.launch.py \
 ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 ```
 
-start 返回 acquire requested 仅表示已请求租约；看 status 的 `lease_held` 与 phase 确认实际启动。第五路按墙距输出 +50% / 0 / -50%，刷盘默认 30%。默认 `run_timeout_sec=0`，没有固定时长上限；靠墙、入口、边端点和换边均由反馈与地图进度决定。`brush_percent` 改变推进效果也改变刷洗强度，本版不闭环控制速度。
+start 返回 acquire requested 仅表示已请求租约；看 status 的 `lease_held` 与 phase 确认实际启动。第五路按墙距输出 +50% / 0 / -50%，刷盘默认 50%。默认 `run_timeout_sec=0`，没有固定时长上限；靠墙、入口、边端点和换边均由反馈与地图进度决定。`brush_percent` 改变推进效果也改变刷洗强度，本版不闭环控制速度。
 
 使用本次默认配置；不要套用历史 `diagnostics/single_side_remote_20261023/rectangle_current_side.yaml`，该文件仍保存旧 ±3° 与 8 秒限制。
 
@@ -228,6 +228,6 @@ ros2 bag record -o rectangle_one_loop_trial \
   /pool_cleaning/status /pool_cleaning/command_preview /f1/control_state
 ```
 
-按本次所选起始边及顺时针顺序记录四条边的实际墙距、夹角、靠墙和入口调整时间、30% 刷盘是否能推进、第五路双向纠偏是否振荡、每次 `EDGE_STOP` 触发位置、后退右推位移、转向误差、每条边的 `cleaned_intervals`、最终 `completed_edges` 和未覆盖原因。刷尖约距中心 0.33 m，33 cm 作为名义中心值；实际接触压缩仍需实船测量。
+按本次所选起始边及顺时针顺序记录四条边的实际墙距、夹角、靠墙和入口调整时间、50% 刷盘是否能推进、第五路双向纠偏是否振荡、每次 `EDGE_STOP` 触发位置、后退右推位移、转向误差、每条边的 `cleaned_intervals`、最终 `completed_edges` 和未覆盖原因。刷尖约距中心 0.33 m，33 cm 作为名义中心值；实际接触压缩仍需实船测量。
 
 一周任务的现场记录至少应包含：起始初始位姿、地图版本、实际选中起始边与 `run_id`，四条边及起始边补齐段的轨迹、简单靠近和相邻换边的停止原因与漂移，暂停/停止/取消/遥控接管记录，以及最终状态中的 `phase`、`completed_edges`、要求区间、已覆盖区间和剩余缺口。角部留白和短边有效清洗长度应单独标注，不能只凭最终 `COMPLETE` 声明全池面积已覆盖。
