@@ -62,6 +62,7 @@ def test_shipped_profiles_use_fifty_percent_brush_only_propulsion(package, node)
     parameters = yaml.safe_load(profile.read_text())[node]["ros__parameters"]
     assert parameters["side_off_distance_m"] == .32
     assert parameters["side_on_distance_m"] == .36
+    assert parameters["front_stop_m"] == .40
     m = started(synthetic_config(brush_percent=parameters["brush_percent"]))
     effort = update(m)
     assert effort.brush_percent == 50. and effort.direction == 0
@@ -161,7 +162,7 @@ def test_brush_only_propulsion_and_correction_until_endpoint(route, index):
             (1.1, 0, 0, 50), (.801, 0, 0, 50), (.800, 0, 0, 50), (.799, 0, 0, 50),
             (.6, 4, 3, 50), (.6, -4, 4, 50),
             (.6, 12, 3, 0), (.6, -12, 4, 0), (.5, 0, 0, 50),
-            (.301, 0, 0, 50), (.299, 0, 0, 0)]):
+            (.401, 0, 0, 50), (.399, 0, 0, 0)]):
         now = NOW + i * 50_000_000
         effort = m.update(feedback_at(now, front, angle), now)
         assert (effort.direction, effort.brush_percent, effort.side_left_percent) == (direction, brush, 0.)
@@ -240,7 +241,7 @@ def test_map_bow_clearance_accounts_for_heading_and_stops_on_pose_only():
     assert m.phase == "STOPPED"
 
 
-def test_rectangle_transfer_stops_at_thirty_cm_and_combines_reverse_right_push():
+def test_rectangle_transfer_stops_at_forty_cm_and_combines_reverse_right_push():
     c = synthetic_config().validate()
     pool = PoolModel.rectangle(c)
     m = Mission(c)
@@ -425,9 +426,9 @@ def test_rectangle_route_completes_all_four_edges_in_clockwise_order():
     assert m.completed_edges == ["edge_0", "edge_1", "edge_2", "edge_3"]
 
 
-@pytest.mark.parametrize("clearance,stopped", [(0., True), (.049, True), (.05, True),
-                                              (.051, False), (.2, False), (.8, False)])
-def test_available_front_observation_uses_thirty_cm_stop_threshold(clearance, stopped):
+@pytest.mark.parametrize("clearance,stopped", [(0., True), (.149, True), (.15, True),
+                                              (.151, False), (.2, False), (.8, False)])
+def test_available_front_observation_uses_forty_cm_stop_threshold(clearance, stopped):
     m = started()
     f = sample(m.c, NOW, front_observed=True)
     e = m.update(replace(f, wall=replace(f.wall, front_clearance=clearance)), NOW)

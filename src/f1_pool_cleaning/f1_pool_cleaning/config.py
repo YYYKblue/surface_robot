@@ -25,9 +25,9 @@ class Config:
     wall_target_m: float = .33
     side_on_distance_m: float = .36
     side_off_distance_m: float = .32
-    # Stop when the boat centre is about 30 cm from the front wall.  This is
+    # Stop when the boat centre is about 40 cm from the front wall.  This is
     # the common endpoint trigger for every rectangle edge.
-    front_stop_m: float = .30
+    front_stop_m: float = .40
     heading_deadband_rad: float = math.radians(10.)
     heading_correction_deadband_rad: float = math.radians(3.)
     pose_max_age_sec: float = .25

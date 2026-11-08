@@ -48,7 +48,7 @@ pool_controller:
     # local wall fit still rejects unrelated perpendicular corner walls.
     edge_target_angle_tolerance_rad: 1.2217304763960306
     # Common endpoint trigger for all four edges: boat centre to front wall.
-    front_stop_m: 0.30
+    front_stop_m: 0.40
     # Reverse and right-side push are issued together for 0.5 s before each
     # 90-degree right turn.  These values are bounded motion parameters, not
     # a substitute for turn-angle feedback.

@@ -31,7 +31,7 @@ l_controller:
     edge_progress_jump_m: 0.35
     corner_exclusion_m: 0.30
     endpoint_margin_m: 0.30
-    front_stop_m: 0.30
+    front_stop_m: 0.40
     # Reuse simultaneous reverse + right push, then feedback-based right turn.
     transfer_move_duration_sec: 0.50
     transfer_side_percent: 50.0
