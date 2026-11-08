@@ -171,7 +171,7 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
             return
         if packet["op"] == "hello":
             self.hub.send(client_id, {"type": "hello", "protocol": "f1-operator-v1", "telemetry_hz": 10,
-                "client_id": client_id, "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks", "diagnostic_history"]
+                "client_id": client_id, "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks", "diagnostic_history", "forward_boost"]
                     + (["mapping", "map_catalog"] if self.runtime_enabled else [])})
             if self.map_data:
                 self.hub.send(client_id, {"type": "map", "map": self.map_data})

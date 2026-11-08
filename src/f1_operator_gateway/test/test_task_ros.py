@@ -10,7 +10,7 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
-from std_srvs.srv import Trigger
+from std_srvs.srv import Trigger, SetBool
 from nav_msgs.msg import OccupancyGrid
 from f1_interfaces.srv import SetInitialPose
 import websockets
@@ -79,6 +79,7 @@ def test_websocket_initial_pose_task_routing_completion_and_localization_loss():
     state = dict(initial=False, pose_stamp=0, publish_loc=True, started=None, auto_complete=True)
     calls = []
     statuses = {kind: dict(task_type=kind, phase="IDLE", run_id="", can_start=True,
+        forward_boost_enabled=False, forward_boost_editable=True,
         start_blockers=[], map_id="test-map", output_enabled=False, edge_count=2 if kind == "l" else 4)
         for kind in ("l", "rectangle")}
     qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -117,6 +118,12 @@ def test_websocket_initial_pose_task_routing_completion_and_localization_loss():
     for kind, prefix in (("l", "/l_cleaning"), ("rectangle", "/pool_cleaning")):
         for action in ("start", "pause", "stop", "cancel"):
             peer.create_service(Trigger, prefix + "/" + action, task_callback(kind, action))
+        def boost_callback(request, response, k=kind):
+            calls.append((k, "set_forward_boost"))
+            statuses[k]["forward_boost_enabled"] = request.data
+            response.success, response.message = True, "setting accepted"
+            return response
+        peer.create_service(SetBool, prefix + "/set_forward_boost", boost_callback)
 
     def publish():
         now = peer.get_clock().now().nanoseconds
@@ -149,6 +156,11 @@ def test_websocket_initial_pose_task_routing_completion_and_localization_loss():
             await send(dict(op="initial_pose", request_id="pose", map_revision=1, x=2., y=3., yaw=1.))
             await until(lambda p: p.get("request_id") == "pose" and p.get("success"))
             await until(lambda p: p.get("type") == "telemetry" and p["tasks"]["l"]["can_start"])
+            await until(lambda p: p.get("type") == "telemetry" and p["tasks"]["l"]["can_set_forward_boost"])
+            await send(dict(op="task", request_id="boost", task_type="l", action="set_forward_boost", enabled=True))
+            await until(lambda p: p.get("request_id") == "boost" and p.get("success") and not p.get("pending"))
+            assert statuses["l"]["forward_boost_enabled"] is True
+            assert statuses["rectangle"]["forward_boost_enabled"] is False
             await send(dict(op="task", request_id="start", task_type="l", action="start"))
             await until(lambda p: p.get("request_id") == "start" and p.get("success"))
             done = await until(lambda p: p.get("type") == "telemetry" and p["tasks"]["l"].get("phase") == "COMPLETE")
@@ -156,6 +168,9 @@ def test_websocket_initial_pose_task_routing_completion_and_localization_loss():
             state["auto_complete"] = False
             await send(dict(op="task", request_id="second-start", task_type="l", action="start"))
             await until(lambda p: p.get("request_id") == "second-start" and p.get("success"))
+            await send(dict(op="task", request_id="locked-boost", task_type="l", action="set_forward_boost", enabled=False))
+            rejected = await until(lambda p: p.get("request_id") == "locked-boost")
+            assert not rejected["success"] and statuses["l"]["forward_boost_enabled"]
             await send(dict(op="task", request_id="stop", task_type="l", action="stop"))
             await until(lambda p: p.get("request_id") == "stop" and p.get("success"))
             stopped = await until(lambda p: p.get("type") == "telemetry" and p["tasks"]["l"].get("phase") == "STOPPED")

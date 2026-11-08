@@ -60,6 +60,33 @@ def run_boat(mission, initial, maximum=8000):
     return phases, visits, motions, pose
 
 
+@pytest.mark.parametrize("closed", [True, False])
+def test_enabled_boost_completes_route_with_brush_only_near_endpoints(closed):
+    m = system(closed)
+    assert m.set_forward_boost(True)[0]
+    initial = Pose(1, 2., 1.67, 0.) if closed else Pose(1, 2., .33, math.pi)
+    original_update = m.update
+    boosted, near_end, prefix = [], [], []
+
+    def checked_update(f, now):
+        e = original_update(f, now)
+        if e and e.forward_boost:
+            assert m.phase == "FOLLOW" and e.direction == 1 and e.brush_percent == 50.
+            assert m.boost_remaining(f) > .8
+            boosted.append(m.edge.id)
+        if e and m.phase == "FOLLOW" and m.boost_remaining(f) <= .8:
+            assert e.direction == 0 and not e.forward_boost
+            near_end.append(m.edge.id)
+            if m.returning_to_start:
+                prefix.append(True)
+        return e
+
+    m.update = checked_update
+    run_boat(m, initial)
+    assert boosted and near_end
+    assert bool(prefix) is closed
+
+
 @pytest.mark.parametrize('yaw, expected', [(0., 'edge_0'), (math.pi/2, 'edge_3'),
                                            (math.pi, 'edge_2'), (-math.pi/2, 'edge_1')])
 def test_ray_selects_first_wall_in_body_left_direction(yaw, expected):

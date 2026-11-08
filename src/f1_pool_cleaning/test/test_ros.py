@@ -12,7 +12,7 @@ from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_msgs.msg import String
-from std_srvs.srv import Trigger
+from std_srvs.srv import Trigger, SetBool
 from f1_interfaces.msg import ActuatorCommand, WallObservation
 from f1_interfaces.srv import SetEdge
 from f1_pool_cleaning.ros_support import stamp, to_observation_message
@@ -130,6 +130,39 @@ def test_real_ros_brush_preview_and_stream_watchdog(harness):
     h.enabled = True
     h.wait(lambda: h.controller.wall is not None and h.controller._stream_error() == "")
     assert h.controller.mission.phase == "PAUSED"
+
+
+def test_boost_service_locks_during_run_and_preview_cuts_off_at_80cm(harness):
+    h = harness
+    client = h.peer.create_client(SetBool, "/pool_cleaning/set_forward_boost")
+    h.wait(client.service_is_ready)
+    future = client.call_async(SetBool.Request(data=True))
+    h.wait(future.done)
+    assert future.result().success
+    h.start()
+    h.wait(lambda: any(m.direction == ActuatorCommand.FORWARD and m.brush_enabled for m in h.commands))
+    h.wait(lambda: any(s.get("forward_boost_active") for s in h.statuses))
+    future = client.call_async(SetBool.Request(data=False))
+    h.wait(future.done)
+    assert not future.result().success
+    assert h.controller.mission.forward_boost_enabled
+    h.along = h.controller.config.length_m-.8
+    h.wait(lambda: h.controller.mission.forward_boost_cutoff_reached)
+    h.wait(lambda: h.commands[-1].direction == 0 and h.commands[-1].brush_enabled)
+    h.angle = .07
+    h.wait(lambda: h.commands[-1].direction == ActuatorCommand.LEFT)
+    h.enabled = False
+    h.wait(lambda: h.controller.mission.phase == "PAUSED")
+    future = client.call_async(SetBool.Request(data=False))
+    h.wait(future.done)
+    assert not future.result().success  # Pause does not unlock configuration.
+    cancel = h.peer.create_client(Trigger, "/pool_cleaning/cancel")
+    h.wait(cancel.service_is_ready)
+    future = cancel.call_async(Trigger.Request())
+    h.wait(future.done)
+    future = client.call_async(SetBool.Request(data=False))
+    h.wait(future.done)
+    assert future.result().success and not h.controller.mission.forward_boost_enabled
 
 
 def test_perception_restart_latches_pause(harness):

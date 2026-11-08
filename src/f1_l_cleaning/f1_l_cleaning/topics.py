@@ -3,7 +3,7 @@
 POOL_ENDPOINTS = (
     "wall_observation", "wall_marker", "edge_target", "reset_observation",
     "map_pose", "command_preview", "status", "start", "pause", "stop", "cancel",
-    "set_edge", "localization_status", "localization_ready",
+    "set_edge", "set_forward_boost", "localization_status", "localization_ready",
     "set_initial_pose", "relocalize",
 )
 REMAPPINGS = [(f"/pool_cleaning/{name}", f"/l_cleaning/{name}")

@@ -59,3 +59,14 @@ def test_mapping_requests_require_ids_and_confine_file_names():
                    dict(op='mapping', action='shell', request_id='a')):
         with pytest.raises(ValueError):
             decode(json.dumps(packet))
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_forward_boost_requires_boolean_and_request_identity(enabled):
+    packet = dict(op="task", action="set_forward_boost", task_type="l", request_id="boost", enabled=enabled)
+    assert decode(json.dumps(packet)) == packet
+    for invalid in [None, 1, 0, "true", [], {}]:
+        with pytest.raises(ValueError):
+            decode(json.dumps(dict(packet, enabled=invalid)))
+    with pytest.raises(ValueError):
+        decode(json.dumps(dict(packet, request_id="")))

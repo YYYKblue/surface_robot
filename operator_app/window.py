@@ -178,6 +178,14 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
             self.task_combo.addItem(TASK_NAMES[kind], kind)
         self.task_combo.currentIndexChanged.connect(self._refresh_controls)
         box.addWidget(self.task_combo)
+        self.forward_boost_button = QPushButton("主电机提速：状态未知")
+        self.forward_boost_button.setCheckable(True)
+        self.forward_boost_button.setEnabled(False)
+        self.forward_boost_button.clicked.connect(self._set_forward_boost)
+        box.addWidget(self.forward_boost_button)
+        self.forward_boost_status = QLabel("仅在任务开始前设置；距墙端 80 cm 内关闭前进辅助")
+        self.forward_boost_status.setWordWrap(True)
+        box.addWidget(self.forward_boost_status)
         self.map_status = QLabel("地图：等待加载")
         self.map_status.setWordWrap(True); box.addWidget(self.map_status)
         self.pose_button = QPushButton("设置初始位置和船头方向")
@@ -251,6 +259,13 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self._send_request("initial_pose", **self.initial_pose)
         self.pose_button.setChecked(False)
 
+    def _set_forward_boost(self, checked):
+        if not self.forward_boost_button.isEnabled():
+            return
+        self._clear_manual()
+        self._send_request("task", action="set_forward_boost",
+                           task_type=self.task_combo.currentData(), enabled=bool(checked))
+
     def _send_request(self, op, **fields):
         packet = self._packet(op, request_id=uuid.uuid4().hex, **fields)
         if self.worker.send_packet(packet):
@@ -300,6 +315,32 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.brush_button.setEnabled(not locked)
         self.thrust_button.setEnabled(not locked and packet.get("state", {}).get("allow_fifth_thruster") is True)
         self.task_combo.setEnabled(fresh and operator and not busy and not local_pending and not selecting)
+        boost_supported = "forward_boost" in self.capabilities
+        boost_known = fresh and task_fresh and type(task.get("forward_boost_enabled")) is bool
+        boost_enabled = boost_known and task["forward_boost_enabled"]
+        self.forward_boost_button.setChecked(boost_enabled)
+        self.forward_boost_button.setText("主电机提速：" + (
+            ("开启" if boost_enabled else "关闭") if boost_known else "状态未知"))
+        self.forward_boost_button.setEnabled(bool(boost_supported and boost_known and operator
+            and not busy and not local_pending and not selecting
+            and task.get("can_set_forward_boost") is True))
+        self.forward_boost_button.setToolTip(task.get("forward_boost_setting_error") or
+            "只在任务开始前设置；运行中和暂停期间锁定。四电推最低档前进，纠偏优先。")
+        boost_text = {
+            "disabled": "提速已关闭，沿墙前进依靠滚刷",
+            "active": "已启用，正在输出最低档前进辅助",
+            "inactive_task": "已启用，等待开始下一次任务",
+            "endpoint_cutoff": "已启用，已进入近端区，本墙段保持滚刷推进",
+            "heading_correction": "已启用，航向纠偏中，前进辅助关闭",
+            "waiting_follow": "已启用，等待稳定沿墙条件",
+        }.get(task.get("forward_boost_reason"), "等待提速状态")
+        if not boost_supported:
+            boost_text = "提速功能需要更新 Nano 网关和清洗控制器"
+        elif not boost_known:
+            boost_text = "提速状态未确认，不能修改"
+        if any(p.get("action") == "set_forward_boost" for _, p in self.pending_requests.values()):
+            boost_text = "提速设置尚未确认，等待机器人回复"
+        self.forward_boost_status.setText(boost_text)
         for index in range(self.task_combo.count()):
             option = tasks.get(self.task_combo.itemData(index), {})
             item = self.task_combo.model().item(index)

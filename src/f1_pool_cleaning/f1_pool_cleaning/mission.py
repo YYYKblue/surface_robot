@@ -1,5 +1,5 @@
 """Left-wall control and the rectangle edge-transfer state machine."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 
 from f1_pool_cleaning.perception import Observation
@@ -33,6 +33,7 @@ class Effort:
     direction: int = 0
     side_left_percent: float = 0.
     brush_percent: float = 0.
+    forward_boost: bool = False
 
 
 def command_fields(effort, config):
@@ -44,6 +45,9 @@ def command_fields(effort, config):
 
 class Mission:
     """One left-brush task, optionally traversing every configured rectangle edge."""
+
+    BOOST_CUTOFF_M = .80
+    BOOST_EDIT_PHASES = ("IDLE", "CANCELLED", "STOPPED", "COMPLETE")
 
     WALL_PHASES = ("APPROACH_WALL", "APPROACH_EDGE", "FOLLOW",
                    "CORRECT_HEADING", "WAIT_WALL")
@@ -61,6 +65,8 @@ class Mission:
         self.last_scan = -1
         self.last_effort = None
         self.wall_lost_since_ns = None
+        self.forward_boost_enabled = False
+        self.forward_boost_cutoff_reached = False
 
         self.pool = None
         self.edge = None
@@ -97,10 +103,69 @@ class Mission:
         return self.phase in self.WALL_PHASES or self.phase == "APPROACH_NEXT_EDGE"
 
     def _reset_edge_progress(self):
+        self.forward_boost_cutoff_reached = False
         self.edge_projection = None
         self.last_edge_s = self.last_contact_s = None
         self.last_coverage_ns = None
         self.cleaned_intervals = []
+
+    def set_forward_boost(self, enabled):
+        if type(enabled) is not bool:
+            return False, "forward boost requires a boolean"
+        if self.phase not in self.BOOST_EDIT_PHASES:
+            return False, "主电机提速只能在任务开始前设置；暂停后请先取消任务"
+        self.forward_boost_enabled = enabled
+        return True, "主电机提速已开启" if enabled else "主电机提速已关闭"
+
+    def boost_remaining(self, f):
+        if self.edge_active:
+            return self.edge.length_m - self.edge.project(f.pose).s_m
+        return self.front_remaining(f.pose)
+
+    def _check_boost_cutoff(self, f):
+        remaining = self.boost_remaining(f)
+        # Tolerate only floating-point roundoff at the inclusive 80 cm boundary.
+        if math.isfinite(remaining) and remaining <= self.BOOST_CUTOFF_M + 1e-9:
+            self.forward_boost_cutoff_reached = True
+
+    def _without_new_scan(self, now):
+        previous = self.last_effort
+        if previous and now >= previous.valid_until_ns:
+            self.halt("command deadline expired without a fresh scan")
+        elif previous and previous.forward_boost and self.forward_boost_cutoff_reached:
+            # Revoke forward assistance on fresh pose alone. Never extend the
+            # old wall command's computation time or validity deadline.
+            self.last_effort = replace(previous, direction=0, forward_boost=False)
+            self.reason = "near endpoint; brush propulsion"
+            return self.last_effort
+        return None
+
+    def _with_forward_boost(self, effort, f):
+        remaining = self.boost_remaining(f)
+        if (self.forward_boost_enabled and not self.forward_boost_cutoff_reached
+                and self.phase == "FOLLOW" and effort.direction == 0
+                and effort.brush_percent > 0 and f.wall.valid
+                and self.c.side_off_distance_m <= f.wall.distance <= self.c.side_on_distance_m
+                and math.isfinite(remaining) and remaining > self.BOOST_CUTOFF_M + 1e-9):
+            self.reason = "within wall and heading bands; brush with main-motor forward boost"
+            return replace(effort, direction=1, forward_boost=True)
+        return effort
+
+    def forward_boost_status(self, now):
+        effort = self.last_effort
+        active = bool(self.active and effort and effort.forward_boost
+                      and now < effort.valid_until_ns)
+        reason = ("disabled" if not self.forward_boost_enabled else
+                  "active" if active else
+                  "inactive_task" if not self.active else
+                  "heading_correction" if self.phase == "CORRECT_HEADING" else
+                  "endpoint_cutoff" if self.forward_boost_cutoff_reached else
+                  "waiting_follow")
+        return dict(forward_boost_enabled=self.forward_boost_enabled,
+                    forward_boost_active=active, forward_boost_reason=reason,
+                    forward_boost_editable=self.phase in self.BOOST_EDIT_PHASES,
+                    forward_boost_cutoff_m=self.BOOST_CUTOFF_M,
+                    forward_boost_cutoff_reached=self.forward_boost_cutoff_reached)
 
     def _reset_route(self):
         self.cleaned_by_edge = {}
@@ -182,6 +247,7 @@ class Mission:
         if self.front_remaining(f.pose) <= self.c.front_stop_m or self._visible_front_stop(f.wall):
             return False, "already inside front-wall stopping zone"
         self.halt("single left side started", "FOLLOW" if f.wall.valid else "WAIT_WALL")
+        self.forward_boost_cutoff_reached = False
         if not f.wall.valid:
             self.wall_lost_since_ns = now
             self.reason = "lease acquired; waiting for left wall: " + (f.wall.reason or "no wall fit")
@@ -304,14 +370,13 @@ class Mission:
             return None
         self.last_update_ns = now
         front_center_distance = self.front_remaining(f.pose)
+        self._check_boost_cutoff(f)
         if front_center_distance <= self.c.front_stop_m or self._visible_front_stop(f.wall):
             self.halt("front stop threshold reached; outputs off, drift unmeasured", "STOPPED")
             self.last_effort = self._stop_effort(now, f.pose, f.wall)
             return self.last_effort
         if f.wall.stamp_ns <= self.last_scan:
-            if self.last_effort and now >= self.last_effort.valid_until_ns:
-                self.halt("command deadline expired without a fresh scan")
-            return None
+            return self._without_new_scan(now)
         self.last_scan = f.wall.stamp_ns
         w, c = f.wall, self.c
         deadline = self._deadline(now, f.pose, w)
@@ -341,8 +406,8 @@ class Mission:
                        "correcting heading into brush band" if turn_direction else
                        "within heading band; brush propulsion")
         brush = c.brush_percent if brush_aligned else 0.
-        # Along-wall forward propulsion comes only from the brush.
         effort = Effort(now, deadline, 0, turn_direction, side_output, brush)
+        effort = self._with_forward_boost(effort, f)
         self.last_effort = effort
         return effort
 
@@ -525,14 +590,13 @@ class Mission:
         self.last_update_ns = now
 
         front_center_distance = self.edge.length_m - projection.s_m
+        self._check_boost_cutoff(f)
         if front_center_distance <= self.c.front_stop_m:
             self._begin_transfer(f, now)
             return self.last_effort
 
         if f.wall is None or f.wall.stamp_ns <= self.last_scan:
-            if self.last_effort and now >= self.last_effort.valid_until_ns:
-                self.halt("command deadline expired without a fresh scan")
-            return None
+            return self._without_new_scan(now)
         self.last_scan = f.wall.stamp_ns
         w, c = f.wall, self.c
         deadline = self._deadline(now, f.pose, w)
@@ -571,8 +635,8 @@ class Mission:
                            "correcting heading into brush band" if turn_direction else
                            "within configured wall band; brush propulsion")
         brush = c.brush_percent if wall_in_band and brush_aligned else 0.
-        # Along-wall main motors only correct heading, including during wall approach.
         effort = Effort(now, deadline, 0, turn_direction, side_output, brush)
+        effort = self._with_forward_boost(effort, f)
         self.last_effort = effort
         if brush and projection.s_m >= self.edge.clean_start_s_m:
             self._record_coverage(projection, now)

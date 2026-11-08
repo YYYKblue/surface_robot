@@ -55,6 +55,9 @@ def test_l_controller_owns_two_edges_under_isolated_names():
         assert "/l_cleaning/command_preview" in names
         assert "/pool_cleaning/status" not in names
         assert "/f1/actuator_command" not in names
+        services = {name for name, _ in peer.get_service_names_and_types_by_node("l_controller", "/")}
+        assert "/l_cleaning/set_forward_boost" in services
+        assert "/pool_cleaning/set_forward_boost" not in services
     finally:
         if peer is not None:
             peer.destroy_node()

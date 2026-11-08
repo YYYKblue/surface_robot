@@ -13,7 +13,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_msgs.msg import String
-from std_srvs.srv import Trigger
+from std_srvs.srv import Trigger, SetBool
 from f1_interfaces.msg import ActuatorCommand, EdgeTarget, WallObservation
 from f1_interfaces.srv import SetEdge
 from f1_pool_cleaning.ros_support import stamp, stamp_ns, from_observation_message
@@ -145,6 +145,7 @@ class PoolController(Node):
             self.create_service(Trigger, "/pool_cleaning/stop", self._stop_task),
             self.create_service(Trigger, "/pool_cleaning/cancel", self._cancel),
             self.create_service(SetEdge, "/pool_cleaning/set_edge", self._set_edge),
+            self.create_service(SetBool, "/pool_cleaning/set_forward_boost", self._set_forward_boost),
         ]
         steady = Clock(clock_type=ClockType.STEADY_TIME)
         self.timer = self.create_timer(.02, self._tick, clock=steady)
@@ -475,6 +476,11 @@ class PoolController(Node):
                 self._tick()
         return response
 
+    def _set_forward_boost(self, request, response):
+        response.success, response.message = self.mission.set_forward_boost(request.data)
+        self._status()
+        return response
+
     def _pause(self, request, response):
         self._halt("user pause; cancel before restarting")
         response.success, response.message = True, self.mission.reason
@@ -695,6 +701,7 @@ class PoolController(Node):
                       cleaned_intervals_by_edge=cleaned_by_edge,
                       coverage_available=bool(edge))
         status["start_policy"] = self.start_policy
+        status.update(self.mission.forward_boost_status(now))
         if self.automatic:
             status.update(self.mission.status())
         self.status_pub.publish(String(data=json.dumps(status, ensure_ascii=False, allow_nan=False)))

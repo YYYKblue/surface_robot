@@ -83,6 +83,10 @@ def test_mock_workflow_localization_start_completion_and_stale_gate(app, kind, e
     try:
         QTest.qWait(250)
         window.task_combo.setCurrentIndex(window.task_combo.findData(kind))
+        assert window.forward_boost_button.isEnabled()
+        window.forward_boost_button.click()
+        QTest.qWait(250)
+        assert window.forward_boost_button.isChecked()
         assert not window.task_buttons["start"].isEnabled()
         window.pose_button.setChecked(True)
         window._pose_selected(dict(x=1., y=1., yaw=0., map_revision=1))
@@ -92,6 +96,7 @@ def test_mock_workflow_localization_start_completion_and_stale_gate(app, kind, e
         QTest.qWait(1400)
         assert window.task_buttons["start"].isEnabled()
         window._task("start")
+        assert not window.forward_boost_button.isEnabled()
         assert not window.task_buttons["start"].isEnabled()
         assert not window.drive_buttons["FORWARD"].isEnabled()
         QTest.qWait(8500)
@@ -204,6 +209,53 @@ def test_stop_cancel_and_wall_distance_follow_robot_state(app, monkeypatch):
         assert "无有效观测" in window.wall_distance.text()
         window._task("cancel")
         assert window.worker._take_outgoing()[-1]["action"] == "cancel"
+    finally:
+        window.close()
+
+
+def test_forward_boost_button_tracks_confirmed_state_and_locks(app, monkeypatch):
+    monkeypatch.setattr(SocketWorker, "start", lambda self: None)
+    window = OperatorWindow("unused")
+    try:
+        window._message(dict(type="hello", client_id="test", capabilities=[
+            "task_selection", "initial_pose", "start_conditions", "forward_boost"]))
+        task = dict(map_id="map-a", fresh=True, phase="IDLE", run_id="", can_start=True,
+                    forward_boost_enabled=False, forward_boost_active=False,
+                    forward_boost_reason="disabled", can_set_forward_boost=True)
+        state = dict(type="telemetry", active_client="test", task_busy=False, active_tasks=[],
+                     localization=dict(map_id="map-a", fresh=True), tasks=dict(l=task))
+        window._message(state)
+        assert window.forward_boost_button.isEnabled()
+        window.forward_boost_button.click()
+        sent = window.worker._take_outgoing()[-1]
+        assert sent["task_type"] == "l" and sent["action"] == "set_forward_boost" and sent["enabled"] is True
+        assert not window.forward_boost_button.isChecked()  # Not optimistic.
+        assert not window.forward_boost_button.isEnabled()
+        assert not window.task_buttons["start"].isEnabled()
+        window._message(dict(type="reply", request_id=sent["request_id"], success=False, message="rejected"))
+        assert not window.forward_boost_button.isChecked()
+        task.update(forward_boost_enabled=True, forward_boost_reason="inactive_task")
+        window._message(state)  # Also represents readback after reconnect.
+        assert window.forward_boost_button.isChecked()
+        for phase in ("ACQUIRING", "FOLLOW", "PAUSED"):
+            task.update(phase=phase, can_set_forward_boost=False)
+            state.update(task_busy=phase != "PAUSED")
+            window._message(state)
+            assert not window.forward_boost_button.isEnabled()
+            assert window.forward_boost_button.isChecked()
+        task.update(phase="CANCELLED", can_set_forward_boost=True)
+        state.update(task_busy=False)
+        window._message(state)
+        assert window.forward_boost_button.isEnabled()
+        window.last_telemetry_at = time.monotonic()-2
+        window._refresh_controls()
+        assert not window.forward_boost_button.isEnabled()
+        assert "未知" in window.forward_boost_button.text()
+        window._message(state)
+        window.capabilities.discard("forward_boost")
+        window._refresh_controls()
+        assert not window.forward_boost_button.isEnabled()
+        assert "更新" in window.forward_boost_status.text()
     finally:
         window.close()
 

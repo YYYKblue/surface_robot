@@ -90,6 +90,67 @@ def initial_pose():
     return dict(op="initial_pose", request_id="pose-1", map_revision=1, x=2., y=3., yaw=math.pi/2)
 
 
+@pytest.mark.parametrize("kind", ["rectangle", "l"])
+def test_forward_boost_setting_waits_for_ack_and_fresh_matching_status(kind):
+    g = Gateway()
+    g.status(kind, forward_boost_enabled=False, forward_boost_editable=True)
+    packet = dict(task(kind, "set_forward_boost"), enabled=True)
+    assert g._task_view(kind)["can_set_forward_boost"]
+    g._operation_request("app", packet)
+    client = g.task_clients[kind]["set_forward_boost"]
+    assert client.calls[-1][0].data is True
+    g._operation_request("app", packet)  # Duplicate never writes twice.
+    assert len(client.calls) == 1
+    respond(client)
+    g._task_tick()
+    assert g.command_pending["stage"] == "boost_status"
+    g._operation_request("app", task(kind, request_id="start-before-confirmation"))
+    assert not g.task_clients[kind]["start"].calls
+    g.status(kind, forward_boost_enabled=True, forward_boost_editable=True)
+    g._task_tick()
+    assert g.command_pending is None and g.sent[-1]["success"]
+    g._operation_request("app", packet)
+    assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize("failure", ["running", "paused", "stale", "old_controller", "other_task", "service", "handover"])
+def test_forward_boost_rejected_unless_confirmed_pre_start(failure):
+    g = Gateway()
+    g.status("l", forward_boost_enabled=False, forward_boost_editable=True)
+    packet = dict(task("l", "set_forward_boost"), enabled=True)
+    if failure == "running":
+        g.status("l", phase="FOLLOW", forward_boost_enabled=False, forward_boost_editable=False)
+    elif failure == "paused":
+        g.status("l", phase="PAUSED", forward_boost_enabled=False, forward_boost_editable=False)
+    elif failure == "stale":
+        g.task_received["l"] -= 1
+    elif failure == "old_controller":
+        g.tasks["l"].pop("forward_boost_enabled")
+    elif failure == "other_task":
+        g.status("rectangle", phase="FOLLOW")
+    elif failure == "service":
+        g.task_clients["l"]["set_forward_boost"].available = False
+    elif failure == "handover":
+        g._manual_acquires = 1
+        g._operation_request("app", packet)
+        g.status("l", phase="FOLLOW")
+        g._manual_acquires = 0
+        g._task_tick()
+    if failure != "handover":
+        g._operation_request("app", packet)
+    assert not g.task_clients["l"]["set_forward_boost"].calls
+    assert not g.sent[-1]["success"]
+
+
+def test_forward_boost_service_failure_does_not_change_reported_setting():
+    g = Gateway()
+    g.status("l", forward_boost_enabled=False, forward_boost_editable=True)
+    g._operation_request("app", dict(task("l", "set_forward_boost"), enabled=True))
+    respond(g.task_clients["l"]["set_forward_boost"], success=False)
+    assert not g.sent[-1]["success"] and g.command_pending is None
+    assert g._task_view("l")["forward_boost_enabled"] is False
+
+
 def respond(client, success=True):
     client.calls[-1][1].set_result(SimpleNamespace(success=success, message="response"))
 

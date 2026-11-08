@@ -277,6 +277,15 @@ class AutonomousMission(Mission):
         self.coverage_anchor = None
         self.target_generation += 1
 
+    def boost_remaining(self, f):
+        remaining = super().boost_remaining(f)
+        if self.returning_to_start and self.prefix_end is not None:
+            p = self.edge.project(f.pose, self.c.brush_x_m, self.c.brush_tip_y_m)
+            # Match the actual prefix completion gate, including brush offset
+            # and coverage tolerance, rather than the far physical wall end.
+            remaining = min(remaining, self.prefix_end-self.a.coverage_tolerance_m/2-p.contact_s_m)
+        return remaining
+
     def update(self, f, now):
         if not self.active:
             return None

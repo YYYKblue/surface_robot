@@ -7,7 +7,7 @@ from collections import OrderedDict
 from f1_interfaces.srv import SetInitialPose
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
-from std_srvs.srv import Trigger
+from std_srvs.srv import Trigger, SetBool
 
 from .tracks import TaskTrack
 
@@ -34,6 +34,9 @@ class TaskControl:
             kind: {action: self.create_client(Trigger, f"{namespace}/{action}")
                    for action in ("start", "pause", "stop", "cancel")}
             for kind, namespace in TASK_PREFIXES.items()}
+        for kind, namespace in TASK_PREFIXES.items():
+            self.task_clients[kind]["set_forward_boost"] = self.create_client(
+                SetBool, f"{namespace}/set_forward_boost")
         self.tasks, self.task_received = {}, {}
         self.task_tracks = {kind: TaskTrack() for kind in TASK_PREFIXES}
         self.localization, self.localization_received = {}, 0.
@@ -144,7 +147,29 @@ class TaskControl:
         if self.command_pending and not for_start:
             add("pending", "操作处理中")
         value.update(task_type=kind, fresh=fresh, can_start=not blockers, start_blockers=blockers)
+        boost_error = self._forward_boost_error(kind)
+        value.update(can_set_forward_boost=not boost_error and not self.command_pending,
+                     forward_boost_setting_error=boost_error)
         return value
+
+    def _forward_boost_error(self, kind):
+        if not self._runtime_task_allowed() or self._runtime_busy():
+            return "请先加载地图，等待地图操作结束"
+        if self.task_locks or self.uncertain_tasks:
+            return "任务运行中或结果未确认，不能修改主电机提速"
+        task = self.tasks.get(kind, {})
+        if not self._source_fresh(task, self.task_received.get(kind, 0)):
+            return "任务状态未收到或已过期"
+        if (task.get("task_type") != kind or not task.get("map_id")
+                or task.get("map_id") != self.localization.get("map_id")):
+            return "任务类型或地图未确认"
+        if (task.get("phase") not in ("IDLE", "CANCELLED", "STOPPED", "COMPLETE")
+                or task.get("forward_boost_editable") is not True):
+            return "只能在任务开始前设置提速；暂停后请先取消任务"
+        if (type(task.get("forward_boost_enabled")) is not bool
+                or not self.task_clients[kind]["set_forward_boost"].service_is_ready()):
+            return "提速设置服务不可用，请升级清洗控制器"
+        return ""
 
     def _rpc_reply(self, client_id, packet, success, message, **fields):
         result = dict(type="reply", op=packet["op"], request_id=packet.get("request_id", ""),
@@ -198,6 +223,8 @@ class TaskControl:
             error = self._initial_pose_error(packet)
         elif packet["action"] == "start":
             error = "; ".join(item["message"] for item in self._task_view(packet["task_type"])["start_blockers"])
+        elif packet["action"] == "set_forward_boost":
+            error = self._forward_boost_error(packet["task_type"])
         else:
             # Route cancellation to the requested actual controller even if
             # its telemetry is stale; discovery/service response is authoritative.
@@ -240,6 +267,14 @@ class TaskControl:
             self.hub.send(pending["client"], dict(type="reply", op=pending["packet"]["op"],
                 request_id=pending["packet"].get("request_id", ""), success=False, pending=True,
                 message="操作超时，结果尚未确认；不会自动重发"))
+        if pending["stage"] == "boost_status":
+            packet = pending["packet"]
+            task = self.tasks.get(packet["task_type"], {})
+            if (self._source_fresh(task, self.task_received.get(packet["task_type"], 0))
+                    and task.get("stamp_ns", 0) >= pending["sent_ns"]
+                    and task.get("forward_boost_enabled") is packet["enabled"]):
+                self._finish_operation(pending, True, "主电机提速设置已确认")
+            return
         if pending["stage"] == "status":
             kind = pending["packet"]["task_type"]
             task = self.tasks.get(kind, {})
@@ -266,7 +301,15 @@ class TaskControl:
                 if blockers:
                     self._finish_operation(pending, False, "; ".join(b["message"] for b in blockers))
                     return
-            client, request = self.task_clients[kind][action], Trigger.Request()
+            if action == "set_forward_boost":
+                error = self._forward_boost_error(kind)
+                if error:
+                    self._finish_operation(pending, False, error)
+                    return
+                request = SetBool.Request(data=packet["enabled"])
+            else:
+                request = Trigger.Request()
+            client = self.task_clients[kind][action]
         else:
             error = self._initial_pose_error(packet)
             if error:
@@ -288,6 +331,7 @@ class TaskControl:
             request.pose.pose.covariance[35] = math.radians(15)**2
             self.initial_pose_stamp = request.pose.header.stamp.sec*10**9 + request.pose.header.stamp.nanosec
         pending["stage"] = "service"
+        pending["sent_ns"] = self.get_clock().now().nanoseconds
         if packet.get("action") == "start":
             self.task_locks.add(packet["task_type"])
         try:
@@ -310,6 +354,9 @@ class TaskControl:
             return
         kind = pending["packet"].get("task_type")
         action = pending["packet"].get("action")
+        if result.success and action == "set_forward_boost":
+            pending["stage"] = "boost_status"
+            return
         if kind and ((action == "start" and not result.success)
                      or (action in ("pause", "stop", "cancel") and result.success)):
             self.uncertain_tasks.discard(kind)

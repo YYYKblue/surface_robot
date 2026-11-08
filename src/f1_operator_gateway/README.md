@@ -114,6 +114,7 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
 | `/map`、TF、`/pavo2_scan` | 地图、船体位姿、按扫描时间转换的地图雷达点 |
 | `/pool_cleaning/status`、`/l_cleaning/status` | 两种任务的独立状态 |
 | 两组任务的 `start/pause/stop/cancel` | 任务操作 |
+| 两组任务的 `set_forward_boost`（`std_srvs/srv/SetBool`） | 启动前设置主电机前进辅助 |
 | `${localization_prefix}/set_initial_pose` | 提交 map 坐标系初始位姿 |
 | `${localization_prefix}/localization_status` | 定位诊断、稳定窗口与就绪状态 |
 
@@ -130,6 +131,14 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
 ## WebSocket 协议
 
 协议名仍为 `f1-operator-v1`；`hello` 新增 `client_id` 和 `capabilities`。手动消息字段与原版本一致。
+
+`forward_boost` capability 表示网关支持启动前提速设置。请求示例：
+
+```json
+{"op":"task","action":"set_forward_boost","task_type":"l","request_id":"boost-1","enabled":true}
+```
+
+`enabled` 必须是布尔值，`request_id` 必填；沿用任务操作的串行、去重和权限控制。网关检查新鲜任务状态、地图/任务类型及服务，仅 `IDLE/CANCELLED/STOPPED/COMPLETE` 可修改，控制器再次校验，暂停不放行。服务成功后还等待请求发出之后、开关一致的新鲜状态；超时表示结果待确认，不自动重发。设置确认前不能开始任务。遥测透传控制器的 `forward_boost_*` 字段，并提供 `can_set_forward_boost` 与 `forward_boost_setting_error`。开关由控制器持有，App 重连不重置或重发，重载控制器默认关闭。
 
 `diagnostic_history` 能力表示遥测含 `diagnostics: {session, events}`：网关保留最近 50 条桥状态变化和手动停止事件，事件带单调递增 `id`、`time_unix`、`source`、`reason`、`details`。手动停止记录清除前的输入年龄及超时阈值，桥事件记录 CTRL/ACK 年龄和最近撤销原因，不包含控制 token。App 按 session/id 去重，重连可补读；进程重启不保留旧历史。旧客户端可忽略此新增字段。
 

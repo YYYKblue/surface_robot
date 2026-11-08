@@ -12,7 +12,7 @@ MAX_PAYLOAD = 128 * 1024
 OPERATIONS = {"hello", "manual_input", "manual_stop", "task", "initial_pose", "mapping"}
 DIRECTIONS = {"STOP", "FORWARD", "REVERSE", "LEFT", "RIGHT"}
 MODES = {"FRONT", "BOTH", "BACK"}
-TASKS = {"start", "pause", "stop", "cancel"}
+TASKS = {"start", "pause", "stop", "cancel", "set_forward_boost"}
 
 
 @dataclass(frozen=True)
@@ -100,7 +100,12 @@ def decode(raw):
         task_type = packet.get("task_type", "rectangle")
         if task_type not in ("rectangle", "l"):
             raise ValueError("invalid task_type")
-        return dict(op=op, action=action, task_type=task_type, request_id=request_id)
+        result = dict(op=op, action=action, task_type=task_type, request_id=request_id)
+        if action == "set_forward_boost":
+            if not request_id or type(packet.get("enabled")) is not bool:
+                raise ValueError("set_forward_boost requires request_id and boolean enabled")
+            result["enabled"] = packet["enabled"]
+        return result
     sequence = packet.get("seq")
     if type(sequence) is not int or not 0 <= sequence < 2**64:
         raise ValueError("seq must be uint64")

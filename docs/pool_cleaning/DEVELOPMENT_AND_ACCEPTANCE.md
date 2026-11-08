@@ -19,7 +19,7 @@
 
 - 左墙线提取、墙线关联、短暂丢墙恢复和墙线可视化；
 - 墙距 31–35 cm 的第五路侧推控制，目标中心值 33 cm，默认侧推幅度 50%；
-- 沿墙以 50% 滚刷推进，四主电机仅作航向纠偏；初始接近和换边仍可使用主电机平移；
+- 沿墙默认以 50% 滚刷推进；启动前可启用四主电机最低档辅助，距墙端/补洗结束位置 >80 cm 且稳定沿墙时生效，进入近端后本墙段锁定关闭，纠偏优先；初始接近和换边仍可使用主电机平移；
 - 墙角 ±10° 刷盘门控和 ±3° 连续主电机纠偏；
 - 固定地图 `map → base_link` 位姿输入及前墙停车判断；
 - 任务租约、遥控接管、数据过期停机和显式 start/cancel 流程。
@@ -389,6 +389,7 @@ colcon test-result --test-result-base build/f1_pool_cleaning --verbose
 | 2026-11-02 用户反馈 | “目前基本测试没发现问题” | 未随反馈提供地图、矩形/L 场景、次数、运行版本或日志，记录为基本测试反馈，不推断完整现场验收范围 |
 | 2026-11-08 开放墙链开发回归 | 清洗 280 项、开放任务 28 项、网关 92 项、Qt offscreen 16 项通过 | 既有开发记录，详见文末；未部署 Nano 或进行新增左转实船试验 |
 | 本轮文档核对（基于 `0c0e4e2`） | 核对源码、launch、默认配置及文档本地链接；重新推导两张示例地图，尺寸、五段长度和转角与说明一致 | 只修改文档；未重跑 ROS/Qt 回归，未部署 Nano 或执行实船操作 |
+| 2026-11-08 主电机提速 | 清洗 340 项、开放任务 28 项、网关 104 项、Qt offscreen 17 项，共 489 项通过 | 本次功能修改后重新执行，按 pytest 用例计数；未部署 Nano 或完成实船提速验收 |
 
 已有软件用例覆盖射线/角点选墙、投影与目标锁定、动作切换停车、近墙直接交接、新墙观测门控、矩形前段补齐、开放墙链中途启动、左右混合换边并停在链尾、覆盖缺口与路线完成分离，以及定位/租约/停止流程。测试入口见[根 README](../../README.md#离线验证)与[App 开发验证](../../operator_app/README.md#开发验证)。
 
@@ -463,3 +464,16 @@ colcon test-result --test-result-base build/f1_pool_cleaning --verbose
 - 补充验证：旋转与不同分辨率的短边墙链、缺墙断开、独立链选择、连续较小左折角、45°/90°/135°左转换边、旧右转回归、换墙观测失效、定位反馈过期与取消。
 - ROS 测试使用本机 DDS。沙箱内网络接口枚举受限，因此在沙箱外以本机隔离配置完成；本机缺少的 websockets 10.4 仅安装在 `/tmp/f1-open-route-test-deps`，通过测试进程 PYTHONPATH 引入，未修改系统 Python。网关旧安装目录经本地重建更新。
 - 本次未部署 Nano、未连接串口或进行实船试验；按用户要求未增加相邻转角位置、船体或刷头空间检查。原起始区域规则与端点余量保留，从中途启动只执行剩余墙链。
+
+## 2026-11-08 主电机提速验证
+
+Windows App 在任务开始前设置四电推最低档辅助；运行、获取租约和暂停期间锁定。开关默认关闭，停止/完成后可以为下一次任务修改，控制器重启或重新加载地图后恢复关闭。稳定沿墙且船中心沿墙方向距末端大于 0.80 m 时使用 `FORWARD + BOTH + 25`，纠偏优先；进入近端区后本墙段锁定关闭，矩形补洗同时考虑实际完成位置。
+
+- 构建：`colcon build --symlink-install --packages-select f1_pool_cleaning f1_l_cleaning f1_operator_gateway --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3`，三个包通过。
+- 回归：`colcon test --executor sequential --packages-select f1_pool_cleaning f1_l_cleaning f1_operator_gateway --return-code-on-test-failure`，实际 pytest 用例分别为 340 / 28 / 104，均无失败或跳过；`colcon test-result` 的 350 / 32 / 114 汇总另含 CTest 入口，不重复计入用例总数。
+- Qt：`QT_QPA_PLATFORM=offscreen python3 -m pytest -q operator_app/test/test_app.py`，17 项通过；离屏界面预览确认开关位于清洗任务页顶部。
+- 覆盖默认关闭、25 档 BOTH、四条矩形边及左右转开放墙、0.801/0.800 m 边界及近端区、短墙、纠偏优先及恢复、近端定位抖动不重启、无新雷达帧时按位姿撤销且不延长原命令期限、换边复位、矩形补洗提前撤销、反馈失效和停止。
+- 接口覆盖 SetBool 服务、两任务命名空间、运行/暂停拒绝设置、服务失败、重复请求去重、设置确认前不能开始、WebSocket 到 ROS 状态确认，以及 App 断线/旧版本门控。开启提速的矩形及开放路线动作模拟均完成。
+- ROS 测试使用 `ROS_LOCALHOST_ONLY=1`、隔离域及 `src/f1_operator_gateway/test/cyclonedds_localhost.xml`。沙箱禁止网络接口枚举，ROS 联调在沙箱外的本机隔离环境完成。缺失的 websockets 10.4 仅安装到 `/tmp/f1-boost-test-deps` 并由测试 PYTHONPATH 引入，未修改系统 Python。
+
+本次只修改和验证本地工作空间，未部署 Nano、未驱动实船、未生成 Windows exe。实际部署需同步 Nano 三个功能包和 Windows App（exe 需重新打包）。现场应核对最低档前进方向、实际提速幅度、80 cm 撤销后的滑行、端部刷洗效果及补洗结束点；当前没有实测速度或停稳反馈，软件测试不代替这些记录。

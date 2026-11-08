@@ -102,7 +102,7 @@ class SocketWorker(QThread):
     def _mock_loop(self):
         """Interactive UI fixture only; never opens a hardware connection."""
         import uuid
-        self.message.emit({"type": "hello", "client_id": "mock", "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks", "mapping", "map_catalog"]})
+        self.message.emit({"type": "hello", "client_id": "mock", "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks", "mapping", "map_catalog", "forward_boost"]})
         mock_map = {"resolution": .02, "width": 160, "height": 100,
             "frame_id": "map", "revision": 1, "origin": {"x": 0, "y": 0, "yaw": 0}, "data": [0]*16000}
         self.message.emit({"type": "map", "map": mock_map})
@@ -114,6 +114,7 @@ class SocketWorker(QThread):
         active = None
         started = None
         tasks = {kind: dict(task_type=kind, phase="IDLE", run_id="", output_enabled=False,
+                           forward_boost_enabled=False, forward_boost_active=False,
                            map_id="mock-map", edge_count=2 if kind == "l" else 4) for kind in ("l", "rectangle")}
         pose = dict(x=1.15, y=1., yaw=0.)
         route = [[.45, 1.65], [2.75, 1.65], [2.75, .35], [.45, .35], [.45, 1.65]]
@@ -167,7 +168,7 @@ class SocketWorker(QThread):
                         mock_map["revision"] += 1
                         self.message.emit(dict(type="map", map=dict(mock_map)))
                         for task in tasks.values():
-                            task.update(phase="IDLE", run_id="")
+                            task.update(phase="IDLE", run_id="", forward_boost_enabled=False)
                             task["actual_track"].update(run_id="", segments=[], point_count=0)
                     else:
                         success, message = False, "当前模式不支持此操作"
@@ -176,7 +177,12 @@ class SocketWorker(QThread):
                     pose = {key: packet[key] for key in ("x", "y", "yaw")}
                 elif op == "task":
                     kind, action = packet["task_type"], packet["action"]
-                    if action == "start" and ready and active is None:
+                    if action == "set_forward_boost":
+                        if active is None and tasks[kind]["phase"] in ("IDLE", "CANCELLED", "STOPPED", "COMPLETE"):
+                            tasks[kind]["forward_boost_enabled"] = packet["enabled"]
+                        else:
+                            success, message = False, "只能在任务开始前设置提速"
+                    elif action == "start" and ready and active is None:
                         active, started = kind, now
                         region = dict(edge_id="edge_0", reference_wall_point=route[0],
                                       polygon=[[route[0][0]-.1, route[0][1]],
@@ -187,6 +193,7 @@ class SocketWorker(QThread):
                                            start_edge_id="edge_0", current_edge_id="edge_0", start_region=region,
                                            completion_scope="remaining_open_route" if kind == "l" else "rectangle_route",
                                            coverage_complete=False, returning_to_start=False)
+                        tasks[kind].update(forward_boost_cutoff_reached=False, boost_edge_index=None)
                         tasks[kind]["expected_track"]["start_region"] = region
                         start_pose = dict(pose)
                         tasks[kind]["actual_track"].update(run_id=tasks[kind]["run_id"],
@@ -208,6 +215,12 @@ class SocketWorker(QThread):
                     progress = min((elapsed-3)/5, 1.)*tasks[active]["edge_count"]
                     index = min(int(progress), tasks[active]["edge_count"]-1)
                     a, b, fraction = route[index], route[index+1], progress-index
+                    task = tasks[active]
+                    if task.get("boost_edge_index") != index:
+                        task.update(boost_edge_index=index, forward_boost_cutoff_reached=False)
+                    task["map_front_clearance_m"] = math.dist(a, b)*(1-fraction)
+                    if task["map_front_clearance_m"] <= .8:
+                        task["forward_boost_cutoff_reached"] = True
                 pose = dict(x=a[0]+(b[0]-a[0])*fraction, y=a[1]+(b[1]-a[1])*fraction,
                             yaw=math.atan2(b[1]-a[1], b[0]-a[0]))
                 history = tasks[active]["actual_track"]
@@ -219,6 +232,15 @@ class SocketWorker(QThread):
                 elif now-started > 3:
                     tasks[active]["phase"] = "FOLLOW"
             for task in tasks.values():
+                editable = task["phase"] in ("IDLE", "CANCELLED", "STOPPED", "COMPLETE")
+                boost_active = (task["forward_boost_enabled"] and task["phase"] == "FOLLOW"
+                                and not task.get("forward_boost_cutoff_reached", False))
+                task.update(forward_boost_editable=editable,
+                    can_set_forward_boost=editable and active is None,
+                    forward_boost_active=boost_active,
+                    forward_boost_reason=("disabled" if not task["forward_boost_enabled"] else
+                        "active" if boost_active else "inactive_task" if editable else
+                        "endpoint_cutoff" if task.get("forward_boost_cutoff_reached") else "waiting_follow"))
                 blockers = []
                 if not ready:
                     blockers.append(dict(code="localization", message="等待定位稳定"))
