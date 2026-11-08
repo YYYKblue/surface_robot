@@ -17,11 +17,11 @@ pool_controller:
     # Map geometry (origin/axis/length/width and the boundary route) is not
     # configured here: the launch derives it from map:=<pbstream or map yaml>
     # and passes it in, so changing maps only means changing the map path.
-    # Confirmed stable left-brush band: centre-to-wall distance 31--35 cm.
+    # Configured left-brush control band: centre-to-wall distance 32--36 cm.
     wall_target_m: 0.33
-    # Fifth thruster: left above 35 cm, right below 31 cm, neutral in between.
-    side_on_distance_m: 0.35
-    side_off_distance_m: 0.31
+    # Fifth thruster: left above 36 cm, right below 32 cm, neutral in between.
+    side_on_distance_m: 0.36
+    side_off_distance_m: 0.32
     # Confirmed enclosing hull is 50 cm long by 45 cm wide.
     hull_half_length_m: 0.25
     hull_half_width_m: 0.225
@@ -41,7 +41,7 @@ pool_controller:
     boundary_order: clockwise
     # Used only by start_policy=specified (or an explicit set_edge request).
     default_edge_id: "edge_0"
-    # Wider than the 31--35 cm control band: map edge identity must survive
+    # Wider than the 32--36 cm control band: map edge identity must survive
     # rough initial placement before the fifth thruster closes the gap.
     edge_target_distance_tolerance_m: 0.20
     # Permit the same rough heading error used by map edge selection; the

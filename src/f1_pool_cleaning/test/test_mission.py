@@ -60,6 +60,8 @@ def test_default_parallel_brush_propulsion_keeps_main_motors_neutral():
 def test_shipped_profiles_use_fifty_percent_brush_only_propulsion(package, node):
     profile = Path(__file__).resolve().parents[2] / package / "config" / (package[3:] + ".yaml")
     parameters = yaml.safe_load(profile.read_text())[node]["ros__parameters"]
+    assert parameters["side_off_distance_m"] == .32
+    assert parameters["side_on_distance_m"] == .36
     m = started(synthetic_config(brush_percent=parameters["brush_percent"]))
     effort = update(m)
     assert effort.brush_percent == 50. and effort.direction == 0
@@ -68,8 +70,8 @@ def test_shipped_profiles_use_fifty_percent_brush_only_propulsion(package, node)
 def test_side_distance_correction_is_bidirectional_and_has_no_history():
     m = started()
     for i, (distance, expected) in enumerate([
-        (.35, 0), (.351, 50), (.35, 0), (.34, 0), (.31, 0),
-        (.309, -50), (.31, 0), (.34, 0), (.35, 0), (.351, 50)]):
+        (.36, 0), (.361, 50), (.36, 0), (.34, 0), (.32, 0),
+        (.319, -50), (.32, 0), (.34, 0), (.36, 0), (.361, 50)]):
         e = update(m, i * .05, distance=distance)
         assert e.side_left_percent == expected
         fields = command_fields(e, m.c)
@@ -88,8 +90,8 @@ def test_heading_band_brush_gate_and_direction(angle, direction):
 
 
 @pytest.mark.parametrize("distance,side,in_band", [
-    (.309, -50, False), (.31, 0, True), (.34, 0, True),
-    (.35, 0, True), (.351, 50, False)])
+    (.31, -50, False), (.319, -50, False), (.32, 0, True), (.34, 0, True),
+    (.35, 0, True), (.36, 0, True), (.361, 50, False)])
 @pytest.mark.parametrize("angle,turn,brush_aligned", [
     (-10.01, 4, False), (-10, 4, True), (-3.01, 4, True),
     (-3, 0, True), (0, 0, True), (3, 0, True),

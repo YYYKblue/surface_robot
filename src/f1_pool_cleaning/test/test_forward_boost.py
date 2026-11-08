@@ -69,7 +69,7 @@ def test_cutoff_revokes_on_pose_without_new_scan_and_never_extends_deadline(miss
     assert m.phase == "PAUSED" and m.last_effort is None
 
 
-@pytest.mark.parametrize("distance,angle", [(.30, 0.), (.36, 0.), (.33, .20)])
+@pytest.mark.parametrize("distance,angle", [(.319, 0.), (.361, 0.), (.33, .20)])
 def test_unstable_wall_or_heading_never_boosts(mission, distance, angle):
     e = mission.update(feedback(mission, 1.5, distance=distance, angle=angle), NOW)
     assert not e.forward_boost and e.direction != 1
