@@ -20,6 +20,7 @@ from f1_pool_cleaning.ros_support import stamp, stamp_ns, from_observation_messa
 
 from .config import Config
 from .geometry import PoolModel
+from .expected_track import cleaning_segments
 from .mission import Mission, Feedback, Pose, Effort, command_fields
 from .lease import Lease
 from .autonomous import AutonomousMission, ApproachConfig
@@ -585,15 +586,12 @@ class PoolController(Node):
         segments = []
         if self.edge_task_enabled:
             required = self.mission.required if self.automatic else {}
-            for edge in self.pool.edges:
-                if required and edge.id not in required:
-                    continue  # An open-chain run includes the selected edge and its suffix.
-                low, high = required.get(edge.id, (edge.clean_start_s_m, edge.clean_end_s_m))
-                points = [[edge.start[i] + edge.tangent[i]*(contact-self.config.brush_x_m)
-                           - edge.left_normal[i]*self.config.wall_target_m for i in (0, 1)]
-                          for contact in (low, high)]
-                segments.append(dict(edge_id=edge.id, points=points))
+            segments = cleaning_segments(self.pool, self.config, required)
         return dict(frame_id=self.config.map_frame, map_id=self.map_id,
+                    basis="boat_center_stop", front_stop_m=self.config.front_stop_m,
+                    wall_target_m=self.config.wall_target_m,
+                    wall_band_min_m=self.config.side_off_distance_m,
+                    wall_band_max_m=self.config.side_on_distance_m,
                     cleaning_segments=segments, navigation_path=[],
                     start_region=self.mission.start_region() if self.automatic else None)
 

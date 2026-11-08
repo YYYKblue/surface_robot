@@ -2,11 +2,11 @@
 import math
 
 try:
-    from PySide6.QtCore import QPointF, Qt, Signal
+    from PySide6.QtCore import QPointF, QRectF, Qt, Signal
     from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPolygonF
     from PySide6.QtWidgets import QWidget
 except ImportError:
-    from PyQt5.QtCore import QPointF, Qt, pyqtSignal as Signal
+    from PyQt5.QtCore import QPointF, QRectF, Qt, pyqtSignal as Signal
     from PyQt5.QtGui import QColor, QImage, QPainter, QPen, QPolygonF
     from PyQt5.QtWidgets import QWidget
 
@@ -80,6 +80,22 @@ class MapCanvas(QWidget):
                 or expected.get("map_id") != task.get("map_id")):
             return None
         return expected.get("start_region")
+
+    def _stop_markers(self):
+        expected = self.task_overlay.get("expected_track") or {}
+        distance = expected.get("front_stop_m")
+        if (not self.overlay_live or expected.get("basis") != "boat_center_stop"
+                or expected.get("frame_id") != (self.telemetry.get("map") or {}).get("frame_id")
+                or expected.get("map_id") != self.task_overlay.get("map_id")
+                or not isinstance(distance, (int, float)) or not math.isfinite(distance) or distance <= 0):
+            return []
+        markers = []
+        for segment in expected.get("cleaning_segments", []):
+            points = segment.get("points") or []
+            if (len(points) >= 2 and len(points[-1]) == 2
+                    and all(isinstance(v, (int, float)) and math.isfinite(v) for v in points[-1])):
+                markers.append((points[-1], distance))
+        return markers
 
     @staticmethod
     def _make_map_image(mapping):
@@ -228,6 +244,12 @@ class MapCanvas(QWidget):
                     painter.drawPolyline(polyline)
                 elif len(polyline) == 1:
                     painter.drawPoint(polyline[0])
+            painter.setPen(QPen(QColor("#b45b16"), 2))
+            painter.setBrush(QColor("#fff3df"))
+            for endpoint, distance in self._stop_markers():
+                point = self.map_to_screen(*endpoint)
+                painter.drawRect(QRectF(point.x()-4, point.y()-4, 8, 8))
+                painter.drawText(QPointF(point.x()+7, point.y()-7), f"{distance*100:g} cm")
             scan = self.telemetry.get("scan") or {}
             if scan.get("frame_id") == "map":
                 painter.setPen(QPen(QColor("#df8b35"), 2))
@@ -240,4 +262,4 @@ class MapCanvas(QWidget):
             if self.candidate:
                 self._arrow(painter, self.candidate, "#9553c6")
         painter.setPen(QPen(QColor("#637783"), 1))
-        painter.drawText(28, 22, "蓝虚线：清洗目标 · 紫框：起始范围 · 绿实线：历史轨迹 · 橙点：雷达")
+        painter.drawText(28, 22, "蓝虚线：中心目标 · 橙框：停车点 · 紫框：起始范围 · 绿线：历史轨迹 · 橙点：雷达")

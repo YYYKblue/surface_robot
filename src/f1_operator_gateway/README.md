@@ -159,7 +159,7 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
 
 每个 `tasks[kind]` 新增：
 
-- `expected_track: {frame_id, map_id, cleaning_segments: [{edge_id, points: [[x,y], ...]}], navigation_path: [], start_region: {...}}`：来自控制器的船体中心清洗目标段和起始范围；`navigation_path` 为兼容字段，新版保持空列表，未确定起始范围时 `start_region` 为 null。
+- `expected_track: {frame_id, map_id, basis, front_stop_m, wall_target_m, wall_band_min_m, wall_band_max_m, cleaning_segments: [{edge_id, points: [[x,y], ...]}], navigation_path: [], start_region: {...}}`：来自控制器的船体中心沿墙目标段和起始范围，网关原样透传。`basis=boat_center_stop` 表示段末端按 `front_stop_m` 计算的船中心停车点，默认 40 cm；横向目标 `wall_target_m=0.33`，开刷范围 `wall_band_min_m=0.32` 至 `wall_band_max_m=0.36`。旧消息缺少这些字段时 App 不猜测停车标记；`navigation_path` 为兼容字段，新版保持空列表，未确定起始范围时 `start_region` 为 null。
 - 任务状态顶层的 `start_edge_id/start_region/first_brush_contact/returning_to_start/remaining_edges/executed_edge_ids`：锁定起始墙、参考范围、首次有效开刷位置和执行进度，由网关透传。`completion_scope` 为 `rectangle_route` 或 `remaining_open_route`（旧版控制器使用 `remaining_l_route`，新版 App 仍兼容该值）；`coverage_complete/required_contact_intervals/remaining_contact_intervals` 独立报告覆盖情况，`COMPLETE` 不保证缺口为空。旧 `repair_pass/active_cleaning_interval` 已不由新控制器输出。
 - `route_chain_index/route_chain_count`：开放任务所选候选墙链的零基索引与候选总数；矩形任务为 null。候选链之间不自动转场。
 - `actual_track: {frame_id, map_id, run_id, segments: [[[x,y], ...], ...], point_count, truncated}`：网关从有效的 map→base_link TF 采样，分段避免连接定位缺失/跳变。

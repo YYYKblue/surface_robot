@@ -106,6 +106,9 @@ def test_mock_workflow_localization_start_completion_and_stale_gate(app, kind, e
         assert window.canvas.task_overlay["actual_track"]["point_count"] > 30
         assert len(window.canvas.task_overlay["expected_track"]["cleaning_segments"]) == edge_count
         assert not window.canvas.task_overlay["expected_track"]["navigation_path"]
+        assert len(window.canvas._stop_markers()) == edge_count
+        assert "32–36 cm" in window.track_status.text()
+        assert "40 cm 停车点" in window.track_status.text()
         assert "35.0 cm" in window.wall_distance.text()
         window.last_telemetry_at = time.monotonic()-2
         window._refresh_controls()
@@ -115,6 +118,8 @@ def test_mock_workflow_localization_start_completion_and_stale_gate(app, kind, e
         assert window.canvas.task_overlay["actual_track"]["point_count"] > 30
         assert all(not dashed for _, _, dashed in window.canvas._track_layers())
         assert "过期" in window.track_status.text()
+        assert not window.canvas._stop_markers()
+        assert "停车点" not in window.track_status.text()
         assert "无有效观测" in window.wall_distance.text()
     finally:
         window.close()
@@ -140,6 +145,27 @@ def test_track_layers_keep_l_open_and_reject_mismatched_frames_and_runs(app):
     task["expected_track"]["frame_id"] = "odom"
     canvas.set_task_overlay(task, live=True)
     assert not canvas._track_layers()
+
+
+def test_stop_markers_follow_received_endpoints_and_reject_stale_or_legacy_data(app):
+    canvas = MapCanvas()
+    canvas.set_telemetry(mapping(.7))
+    track = dict(map_id="map-a", frame_id="map", basis="boat_center_stop", front_stop_m=.4,
+                 cleaning_segments=[dict(points=[[-2., 3.], [-2., 4.]])])
+    task = dict(map_id="map-a", expected_track=track)
+    canvas.set_task_overlay(task, live=True)
+    assert canvas._stop_markers() == [([-2., 4.], .4)]
+    canvas.grab()
+    track.update(front_stop_m=.5, cleaning_segments=[dict(points=[[-2., 3.], [-2., 3.9]])])
+    assert canvas._stop_markers() == [([-2., 3.9], .5)]
+    for field, invalid in [("map_id", "other"), ("frame_id", "odom"),
+                           ("basis", None), ("front_stop_m", float("nan"))]:
+        previous = track[field]
+        track[field] = invalid
+        assert not canvas._stop_markers()
+        track[field] = previous
+    canvas.set_task_overlay(task, live=False)
+    assert not canvas._stop_markers()
 
 
 def test_start_region_is_drawn_only_for_fresh_matching_map(app):

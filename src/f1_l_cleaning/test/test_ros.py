@@ -150,6 +150,11 @@ def test_l_track_is_open_and_stop_service_is_isolated():
         track = node._expected_track()
         assert len(track["cleaning_segments"]) == 2
         assert all(len(segment["points"]) == 2 for segment in track["cleaning_segments"])
+        assert track["basis"] == "boat_center_stop"
+        assert track["front_stop_m"] == node.config.front_stop_m
+        for edge, segment in zip(node.pool.edges, track["cleaning_segments"]):
+            along = sum((segment["points"][-1][i]-edge.start[i])*edge.tangent[i] for i in (0, 1))
+            assert edge.length_m-along == pytest.approx(node.config.front_stop_m)
         services = {name for name, _ in node.get_service_names_and_types_by_node(node.get_name(), "/")}
         assert "/l_cleaning/stop" in services
         assert "/pool_cleaning/stop" not in services

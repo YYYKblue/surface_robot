@@ -59,7 +59,7 @@ flowchart TD
 
 矩形记录实际首次有效开刷位置，绕行后补齐其前段并重叠 10 cm；不搜索其他缺口的补洗路线。开放墙链从选中边的当前位置开始，只清后续部分，到链尾停止，不返回也不补洗；要执行全部边，应从首边入口附近开始。覆盖统计只记录连续有效开刷进度；路线完成不保证全墙已覆盖。
 
-Windows App 显示起始墙、参考点、紫色起始范围、当前动作和矩形补前段阶段。`expected_track.navigation_path` 为空。`completion_scope` 区分矩形路线与本次剩余开放墙链，`coverage_complete` 和 `remaining_contact_intervals` 分别报告覆盖结果。
+Windows App 显示起始墙、参考点、紫色起始范围、当前动作和矩形补前段阶段。蓝色虚线为名义距左墙 33 cm 的船中心目标线，起点由接触区间换算，终点直接使用墙长减 `front_stop_m`；橙色方框标出距墙端 40 cm 的停车点。图例显示 32–36 cm 开刷范围，参数均来自控制器 `expected_track`，不是 App 常量。`expected_track.navigation_path` 为空。`completion_scope` 区分矩形路线与本次剩余开放墙链，`coverage_complete` 和 `remaining_contact_intervals` 分别报告覆盖结果。
 
 ## 沿墙清洗与自动换边状态机
 

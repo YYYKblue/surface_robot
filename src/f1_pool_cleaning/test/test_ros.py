@@ -725,10 +725,16 @@ def test_expected_tracks_show_start_region_without_inventing_navigation(tmp_path
         track = node._expected_track()
         assert track["map_id"] == node.map_id and track["frame_id"] == "map"
         assert len(track["cleaning_segments"]) == 4
+        assert track["basis"] == "boat_center_stop"
+        assert track["front_stop_m"] == node.config.front_stop_m
+        assert (track["wall_band_min_m"], track["wall_band_max_m"]) == (.32, .36)
         for edge, segment in zip(node.pool.edges, track["cleaning_segments"]):
             expected = [edge.start[i]+edge.tangent[i]*(edge.clean_start_s_m-node.config.brush_x_m)
                         -edge.left_normal[i]*node.config.wall_target_m for i in (0, 1)]
             assert segment["points"][0] == pytest.approx(expected)
+            endpoint = segment["points"][-1]
+            along = sum((endpoint[i]-edge.start[i])*edge.tangent[i] for i in (0, 1))
+            assert edge.length_m-along == pytest.approx(node.config.front_stop_m)
         automatic_feedback(node)
         assert node._start(None, Trigger.Response()).success
         track = node._expected_track()

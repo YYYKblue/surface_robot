@@ -382,8 +382,19 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
             track = {}
         count = track.get("point_count", 0)
         suffix = "（已截断，仅显示最近轨迹）" if track.get("truncated") else ""
+        legend = ""
+        expected = overlay_task.get("expected_track") or {}
+        values = [expected.get(key) for key in
+                  ("wall_target_m", "wall_band_min_m", "wall_band_max_m", "front_stop_m")]
+        if (fresh and task_fresh and overlay_matches
+                and expected.get("basis") == "boat_center_stop"
+                and all(isinstance(v, (int, float)) and math.isfinite(v) and v > 0 for v in values)):
+            target, lower, upper, stop = [v*100 for v in values]
+            legend = (f"\n蓝色虚线：船中心目标距左墙 {target:g} cm（开刷范围 {lower:g}–{upper:g} cm）"
+                      f"；橙色方框：距墙端 {stop:g} cm 停车点")
         self.track_status.setText(f"{TASK_NAMES[kind]} · 本次任务历史轨迹：{count} 点{suffix}"
                                   + (" · 当前轨迹数据已过期" if not fresh or not task_fresh else "")
+                                  + legend
                                   if "task_tracks" in self.capabilities else "轨迹功能需要升级网关")
         if not loc.get("fresh"):
             text = "定位：状态未收到或已过期"

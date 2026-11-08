@@ -117,11 +117,20 @@ class SocketWorker(QThread):
                            forward_boost_enabled=False, forward_boost_active=False,
                            map_id="mock-map", edge_count=2 if kind == "l" else 4) for kind in ("l", "rectangle")}
         pose = dict(x=1.15, y=1., yaw=0.)
-        route = [[.45, 1.65], [2.75, 1.65], [2.75, .35], [.45, .35], [.45, 1.65]]
+        # Synthetic wall endpoints; target lines are independent centre segments.
+        route = [[0., 2.], [3.2, 2.], [3.2, 0.], [0., 0.], [0., 2.]]
+        segments = []
+        for i, (a, b) in enumerate(zip(route, route[1:])):
+            length = math.dist(a, b)
+            tx, ty = (b[0]-a[0])/length, (b[1]-a[1])/length
+            points = [[a[0]+tx*s+ty*.33, a[1]+ty*s-tx*.33]
+                      for s in (.20, length-.40)]
+            segments.append(dict(edge_id=str(i), points=points))
         for kind, task in tasks.items():
             task["expected_track"] = dict(frame_id="map", map_id="mock-map",
-                cleaning_segments=[dict(edge_id=str(i), points=route[i:i+2])
-                                   for i in range(task["edge_count"])], navigation_path=[])
+                basis="boat_center_stop", front_stop_m=.40, wall_target_m=.33,
+                wall_band_min_m=.32, wall_band_max_m=.36,
+                cleaning_segments=segments[:task["edge_count"]], navigation_path=[])
             task["actual_track"] = dict(frame_id="map", map_id="mock-map", run_id="",
                                         segments=[], point_count=0, truncated=False)
         start_pose = dict(pose)
@@ -184,11 +193,8 @@ class SocketWorker(QThread):
                             success, message = False, "只能在任务开始前设置提速"
                     elif action == "start" and ready and active is None:
                         active, started = kind, now
-                        region = dict(edge_id="edge_0", reference_wall_point=route[0],
-                                      polygon=[[route[0][0]-.1, route[0][1]],
-                                               [route[0][0]+.1, route[0][1]],
-                                               [route[0][0]+.1, route[0][1]-.85],
-                                               [route[0][0]-.1, route[0][1]-.85]])
+                        region = dict(edge_id="edge_0", reference_wall_point=[.2, 2.],
+                                      polygon=[[.1, 2.], [.3, 2.], [.3, 1.15], [.1, 1.15]])
                         tasks[kind].update(phase="APPROACH_START", run_id=uuid.uuid4().hex,
                                            start_edge_id="edge_0", current_edge_id="edge_0", start_region=region,
                                            completion_scope="remaining_open_route" if kind == "l" else "rectangle_route",
@@ -210,15 +216,16 @@ class SocketWorker(QThread):
             if active:
                 elapsed = now-started
                 if elapsed < 3:
-                    a, b, fraction = [start_pose["x"], start_pose["y"]], route[0], elapsed/3
+                    a, b, fraction = [start_pose["x"], start_pose["y"]], segments[0]["points"][0], elapsed/3
                 else:
                     progress = min((elapsed-3)/5, 1.)*tasks[active]["edge_count"]
                     index = min(int(progress), tasks[active]["edge_count"]-1)
-                    a, b, fraction = route[index], route[index+1], progress-index
+                    a, b = segments[index]["points"]
+                    fraction = progress-index
                     task = tasks[active]
                     if task.get("boost_edge_index") != index:
                         task.update(boost_edge_index=index, forward_boost_cutoff_reached=False)
-                    task["map_front_clearance_m"] = math.dist(a, b)*(1-fraction)
+                    task["map_front_clearance_m"] = math.dist(a, b)*(1-fraction)+.40
                     if task["map_front_clearance_m"] <= .8:
                         task["forward_boost_cutoff_reached"] = True
                 pose = dict(x=a[0]+(b[0]-a[0])*fraction, y=a[1]+(b[1]-a[1])*fraction,

@@ -378,7 +378,8 @@ ros2 launch f1_operator_gateway operator_bringup.launch.py \
 ### 当前版本升级核对（2026-11-08，`0c0e4e2`）
 
 - `l` 任务已扩展为开放多段墙链，App 显示“开放多边清洗”。同步两个清洗包、网关及整个 Windows App；使用 exe 时重新打包。先运行 `ros2 run f1_pool_cleaning map_profile <现场地图> --json` 核对墙链和边编号，原示例大 L 的两条边现为 `edge_3/edge_4`。默认最长链，其他候选通过 `l_config` 的 `route_chain_index` 选择。
-- 现场自定义 YAML 不会自动获得新默认值。核对 `wall_target_m=0.33`、墙距区间 `0.31–0.35` m、`brush_percent=50.0`、`side_percent=50.0` 和独立的 `transfer_side_percent=50.0`；感知配置的 `brush_max_compression_m=0.02`。沿墙主电机 FORWARD 辅助已移除，实船预期见[矩形验收步骤](src/f1_pool_cleaning/DEPLOY_TEST_NANO.md)。
+- 现场自定义 YAML 不会自动获得新默认值。核对 `wall_target_m=0.33`、墙距区间 `0.32–0.36` m、`front_stop_m=0.40`、`brush_percent=50.0`、`side_percent=50.0` 和独立的 `transfer_side_percent=50.0`；感知配置的 `brush_max_compression_m=0.02`。沿墙默认由滚刷推进，主电机提速需在启动前单独启用，实船预期见[矩形验收步骤](src/f1_pool_cleaning/DEPLOY_TEST_NANO.md)。
+- 本次轨迹显示更新需要同步两个清洗包和 Windows `operator_app`。Nano 重新构建并重新加载控制器后，检查状态中的 `front_stop_m=0.40`、`wall_band_min_m=0.32`、`wall_band_max_m=0.36`；`expected_track.basis=boat_center_stop`。App 应显示 33 cm 目标线、32–36 cm 开刷范围和 40 cm 橙色停车标记。本文更新不表示已执行远端部署。
 - 定位 Lua 当前为 `motion_filter.max_time_seconds=0.3`、`optimize_every_n_nodes=5`；更频繁优化不等于定位就绪，需观察 Nano 负载与定位状态，见[定位调优说明](src/f1_localization/README.md)。
 - 网关新增可补读的停止诊断历史，App 支持日志导出。更换工作空间内服务模板不会自动更新 `/etc/systemd/system/` 中已安装的副本；采用当前校时与恢复策略时，按下节重新安装模板并 `daemon-reload`。
 
