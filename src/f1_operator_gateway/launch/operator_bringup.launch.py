@@ -19,6 +19,15 @@ def nodes(context):
         path = Path(get_package_share_directory(package)) / "launch" / filename
         return GroupAction(actions=[IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(path)), launch_arguments=arguments.items())])
+    def controller_config(argument, package, filename):
+        configured = value(argument)
+        # Managed mode inherits empty launch arguments. DeclareLaunchArgument
+        # only supplies defaults for absent names, so resolve empty paths here.
+        path = (Path(configured).expanduser() if configured else
+                Path(get_package_share_directory(package)) / "config" / filename)
+        if not path.is_file():
+            raise ValueError(f"{argument} parameter file does not exist or is not a file: {path}")
+        return str(path)
     derived = profile(value("map"))
     unavailable = {}
     result = []
@@ -35,15 +44,16 @@ def nodes(context):
             **{key: value("output_enabled") for key in
                ("serial_enabled", "motion_enabled", "direction_confirmed", "allow_fifth_thruster")},
         }))
-    for kind, geometry, package, launch, config in (
-        ("rectangle", derived.rectangle, "f1_pool_cleaning", "pool_cleaning.launch.py", "rectangle_config"),
-        ("l", derived.route, "f1_l_cleaning", "l_cleaning.launch.py", "l_config"),
+    for kind, geometry, package, launch, config, default_config in (
+        ("rectangle", derived.rectangle, "f1_pool_cleaning", "pool_cleaning.launch.py",
+         "rectangle_config", "pool_cleaning.yaml"),
+        ("l", derived.route, "f1_l_cleaning", "l_cleaning.launch.py", "l_config", "l_cleaning.yaml"),
     ):
         if geometry is None:
             unavailable[kind] = derived.errors.get("route" if kind == "l" else "rectangle", "地图不支持该任务")
             continue
         result.append(include(package, launch, {
-            "map": value("map"), "config": value(config),
+            "map": value("map"), "config": controller_config(config, package, default_config),
             "scan_topic": value("scan_topic"), "output_enabled": value("output_enabled"),
             "localization_status_topic": "/f1_localization/localization_status",
         }))

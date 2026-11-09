@@ -26,6 +26,8 @@ ros2 launch f1_operator_gateway operator_system.launch.py \
 
 参数：`workspace_root` 必填绝对路径；`map_timezone` 默认 `Asia/Shanghai`；`mapping_resolution` 默认 `0.05` m；可配置 `scan_topic`、`publish_lidar_tf`、`bridge_config`、`rectangle_config`、`l_config`、`localization_config`。`maps/` 不能是符号链接。`workspace_root/maps/.operator-runtime.lock` 防止同工作空间重复运行管理实例。
 
+`rectangle_config`、`l_config` 未指定或为空时，加载对应清洗包安装目录中的默认 YAML；显式指定的配置路径必须是现有文件，否则地图启动失败并报告路径。该规则同时适用于 App 管理模式和直接 `operator_bringup` 启动，避免外层空参数使控制器跳过 YAML。`localization_config` 仍保留原有空值语义。
+
 Nano 的 `deploy/f1-operator.service` 在启动前通过 `wait-operator-clock.py --offline-after 20` 优先等待 NTP 同步；20 秒后仍未同步则检查离线本地时间，要求日期合理且重新连续稳定 5 秒。离线时间不保证日历准确，脚本不会设置系统时间，目标机应通过 RTC 或已有持久化恢复机制建立时间。时间持续不稳定或日期无效时仍等待，可用 `journalctl -u f1-operator.service -f` 查看原因。运行中时间故障先撤销控制并尽力发送中性输出，再关闭桥接，以退出码 75 触发整个受管 launch 退出；systemd 重新检查时间后恢复为无地图待机，不恢复任务。600 秒内最多启动 5 次，超过限额后需排除故障再 reset-failed/start。服务模板开启串口及运动许可；直接 launch 没有启动检查和 systemd 自动恢复。详见[部署说明](../../DEPLOY_NANO.md#app-建图选图与开机服务)。
 
 - 开始建图检查连续扫描的帧名、时间戳、角度元数据和有效回波。进入建图后使用现有手动操船；不以固定地图定位就绪作为建图条件。
