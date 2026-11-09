@@ -340,19 +340,31 @@ def test_task_telemetry_records_only_current_run_with_ready_localization():
     g.pose = pose_at(1.)
     g.status("l", phase="FOLLOW", run_id="run")
     snapshot = g._task_telemetry()
-    assert snapshot["tasks"]["l"]["actual_track"]["point_count"] == 1
-    assert snapshot["tasks"]["rectangle"]["actual_track"]["point_count"] == 0
+    assert "actual_track" not in snapshot["tasks"]["l"]
+    assert g.task_tracks["l"].snapshot()["point_count"] == 1
+    assert g.task_tracks["rectangle"].snapshot()["point_count"] == 0
     g.localization_received -= 1
     g.pose = pose_at(1.25, .1)
-    assert g._task_telemetry()["tasks"]["l"]["actual_track"]["point_count"] == 1
+    g._task_telemetry()
+    assert g.task_tracks["l"].snapshot()["point_count"] == 1
     g.ready()
     g.status("l", phase="FOLLOW", run_id="run")
     g.pose = pose_at(1.5, .2)
-    track = g._task_telemetry()["tasks"]["l"]["actual_track"]
+    g._task_telemetry()
+    track = g.task_tracks["l"].snapshot()
     assert track["segments"] == [[[0., 0.]], [[.2, 0.]]]
     g.status("l", phase="STOPPED", run_id="run")
     g.pose = pose_at(1.75, .3)
-    assert g._task_telemetry()["tasks"]["l"]["actual_track"] == track
+    g._task_telemetry()
+    assert g.task_tracks["l"].snapshot() == track
     # A source-stale packet cannot replace this run's history.
     g.status("l", run_id="old", stamp_ns=time.time_ns()-10**9)
-    assert g._task_telemetry()["tasks"]["l"]["actual_track"] == track
+    g._task_telemetry()
+    assert g.task_tracks["l"].snapshot() == track
+
+
+def test_task_view_omits_expected_track_and_duplicate_localization():
+    g = Gateway()
+    g.status("l", expected_track={"points": [1, 2]}, localization_snapshot={"state": "ready"})
+    view = g._task_telemetry()["tasks"]["l"]
+    assert "expected_track" not in view and "localization_snapshot" not in view

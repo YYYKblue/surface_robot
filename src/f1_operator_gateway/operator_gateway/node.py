@@ -24,6 +24,7 @@ from .task_control import TaskControl
 from .websocket_hub import WebSocketHub
 from .runtime import RuntimeControl
 from .diagnostics import DiagnosticHistory
+from .map_stream import LatestMapEncoder
 
 
 class OperatorGateway(RuntimeControl, TaskControl, Node):
@@ -35,6 +36,7 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         self.declare_parameter("port", 8765)
         self.declare_parameter("input_timeout_sec", .25)
         self.declare_parameter("telemetry_hz", 10.0)
+        self.declare_parameter("map_update_period_sec", 2.0)
         address = self.get_parameter("bind_address").value
         port = int(self.get_parameter("port").value)
         if not isinstance(address, str) or not address or any(c in address for c in ":/; \t\n"):
@@ -53,7 +55,9 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self._init_runtime()
         self.control_state = {}
-        self.diagnostic_history = DiagnosticHistory()
+        self.diagnostic_history = DiagnosticHistory(self._diagnostic_event)
+        self.telemetry_sequence = 0
+        self._last_tracks = None
         self.control_received = 0.
         self.manual_generation = 0
         self._manual_acquires = 0
@@ -61,7 +65,6 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         self.map_data = None
         self.map_signature = None
         self.map_revision = 0
-        self.scan = None
         self.pose = None
         self.active_client = None
         self.last_input = None
@@ -72,6 +75,7 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         self.bridge_sequence = 0
         self.hub = WebSocketHub(address, port, None)
         self.hub.start()
+        self.map_stream = LatestMapEncoder(float(self.get_parameter("map_update_period_sec").value))
         state_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         map_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -80,6 +84,7 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         self.create_subscription(LaserScan, self.get_parameter("scan_topic").value, self._scan, state_qos)
         self.tick_timer = self.create_timer(.02, self._tick)
         self.telemetry_timer = self.create_timer(1.0 / max(.5, float(self.get_parameter("telemetry_hz").value)), self._telemetry)
+        self.tracks_timer = self.create_timer(.5, self._publish_tracks)
         self.get_logger().info(f"f1 operator gateway listening on ws://{address}:{port}")
 
     def _control(self, message):
@@ -99,46 +104,35 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         if self.runtime_enabled and (not self.runtime_accept_map or
                 message.header.stamp.sec * 10**9 + message.header.stamp.nanosec < self.runtime_epoch_ns):
             return
-        info = message.info
-        data = [int(value) for value in message.data]
-        origin = info.origin
-        orientation = origin.orientation
-        signature = hash((message.header.frame_id, float(info.resolution), int(info.width), int(info.height),
-                          float(origin.position.x), float(origin.position.y), float(origin.position.z),
-                          float(orientation.x), float(orientation.y), float(orientation.z),
-                          float(orientation.w), tuple(data)))
-        if signature == self.map_signature:
+        self.map_stream.offer(message, frozen=(self.runtime_enabled and self.runtime["mode"] == "localization"))
+
+    def _publish_map(self):
+        mapping = self.map_stream.take()
+        if mapping is None or (self.runtime_enabled and not self.runtime_accept_map):
             return
-        self.map_signature = signature
         self.map_revision += 1
-        self.map_data = {
-            "frame_id": message.header.frame_id, "resolution": float(info.resolution), "width": int(info.width), "height": int(info.height),
-            "origin": {"x": float(origin.position.x), "y": float(origin.position.y),
-                       "yaw": math.atan2(2 * (orientation.w * orientation.z + orientation.x * orientation.y),
-                                         1 - 2 * (orientation.y * orientation.y + orientation.z * orientation.z))},
-            "data": data, "revision": self.map_revision,
-        }
-        # Keep the map payload nested like telemetry.  The Qt app also accepts
-        # the old flattened form so an app and gateway can be upgraded in
-        # either order.
-        self.hub.broadcast({"type": "map", "map": self.map_data})
+        runtime_session = self.runtime["session_id"] if self.runtime_enabled else ""
+        self.map_data = dict(mapping, revision=self.map_revision, runtime_session_id=runtime_session)
+        self.hub.broadcast(self._map_packet())
+
+    def _map_packet(self):
+        return dict(type="map", map=self.map_data,
+                    runtime_session_id=self.map_data.get("runtime_session_id", ""))
 
     def _scan(self, message):
         self._runtime_scan(message)
-        ranges = []
-        for value in message.ranges:
-            ranges.append(float(value) if math.isfinite(value) else None)
-        self.scan = {"frame_id": message.header.frame_id, "angle_min": float(message.angle_min), "angle_increment": float(message.angle_increment),
-                     "range_min": float(message.range_min), "range_max": float(message.range_max),
-                     "ranges": ranges, "stamp": {"sec": message.header.stamp.sec,
-                                                   "nanosec": message.header.stamp.nanosec}}
 
     def _tick(self):
+        now = time.monotonic()
+        previous = getattr(self, "_last_tick_at", now)
+        self._tick_gap_ms = max(getattr(self, "_tick_gap_ms", 0.), (now - previous) * 1000)
+        self._last_tick_at = now
         for event in self.hub.poll():
             self._handle_event(event)
         self._read_pose()
         self._task_tick()
         self._runtime_tick()
+        self._publish_map()
         if self.task_locks and (self.token or self.last_input is not None):
             self._stop_manual("automatic_task_active")
         if self.active_client and self.last_input_at is not None:
@@ -171,10 +165,13 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
             return
         if packet["op"] == "hello":
             self.hub.send(client_id, {"type": "hello", "protocol": "f1-operator-v1", "telemetry_hz": 10,
-                "client_id": client_id, "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks", "diagnostic_history", "forward_boost"]
+                "session_id": self.diagnostic_history.session,
+                "client_id": client_id, "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks", "diagnostic_history", "forward_boost", "compact_stream_v1", "indexed8_map"]
                     + (["mapping", "map_catalog"] if self.runtime_enabled else [])})
             if self.map_data:
-                self.hub.send(client_id, {"type": "map", "map": self.map_data})
+                self.hub.send(client_id, self._map_packet())
+            self.hub.send(client_id, {"type": "diagnostics", "diagnostics": self.diagnostic_history.view()})
+            self.hub.send(client_id, self._tracks_packet())
             return
         if packet["op"] in ("manual_input", "manual_stop", "task", "initial_pose", "mapping") and not (
                 packet["op"] == "mapping" and packet["action"] in ("list", "preview")):
@@ -335,40 +332,38 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         self.pose = {"x": float(t.x), "y": float(t.y), "yaw": float(yaw),
                      "stamp": {"sec": transform.header.stamp.sec, "nanosec": transform.header.stamp.nanosec}}
 
-    def _map_scan(self):
-        """Use the scan timestamp and its TF, including mounting translation/yaw."""
-        if not self.scan or (getattr(self, "runtime_enabled", False) and not self.runtime_accept_map):
-            return None
-        scan = self.scan
-        stamp = scan["stamp"]
-        ns = stamp["sec"] * 10**9 + stamp["nanosec"]
-        if getattr(self, "runtime_enabled", False) and ns < self.runtime_epoch_ns:
-            return None
-        if not 0 <= self.get_clock().now().nanoseconds - ns < 500_000_000:
-            return None
-        try:
-            transform = self.tf_buffer.lookup_transform("map", scan["frame_id"], Time(nanoseconds=ns))
-        except Exception:
-            return None
-        t, q = transform.transform.translation, transform.transform.rotation
-        yaw = math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))
-        points = []
-        for index, distance in enumerate(scan["ranges"]):
-            if distance is not None and scan["range_min"] <= distance <= scan["range_max"]:
-                angle = yaw + scan["angle_min"] + index * scan["angle_increment"]
-                points.append([t.x + distance*math.cos(angle), t.y + distance*math.sin(angle)])
-        return dict(frame_id="map", points=points, stamp=stamp)
+    def _diagnostic_event(self, history):
+        self.hub.broadcast({"type": "diagnostics", "diagnostics": history})
+
+    def _tracks_packet(self):
+        return dict(type="tracks", session_id=self.diagnostic_history.session,
+                    tasks={kind: track.snapshot() for kind, track in self.task_tracks.items()})
+
+    def _publish_tracks(self):
+        packet = self._tracks_packet()
+        if packet["tasks"] != self._last_tracks:
+            self._last_tracks = packet["tasks"]
+            self.hub.broadcast(packet)
 
     def _telemetry(self):
+        self.telemetry_sequence += 1
+        now = time.monotonic()
+        stream = dict(session=self.diagnostic_history.session, sequence=self.telemetry_sequence,
+                      generated_unix=time.time(), generated_monotonic=now,
+                      tick_gap_ms=round(getattr(self, "_tick_gap_ms", 0.), 2),
+                      control_age_ms=round(max(0., now - self.control_received) * 1000, 2))
+        self._tick_gap_ms = 0.
+        if hasattr(self.hub, "stats"):
+            stream["transport"] = self.hub.stats(include_clients=False)
         self.hub.broadcast({"type": "telemetry", "state": self.control_state,
-                            "diagnostics": self.diagnostic_history.view(),
+                            "stream": stream,
                             "control_fresh": time.monotonic() - self.control_received < .3,
-                            "pose": self.pose, "scan": self._map_scan(),
-                            "task": self.tasks.get("rectangle", {}),
+                            "pose": self.pose,
                             "active_client": self.active_client, "runtime": self._runtime_view(), **self._task_telemetry()})
 
     def destroy_node(self):
         self._stop_manual("gateway_shutdown")
+        self.map_stream.close()
         self._close_runtime()
         self.hub.close()
         return super().destroy_node()

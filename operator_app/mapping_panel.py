@@ -1,4 +1,6 @@
 """Mapping/catalogue controls; previews have a separate, pose-free canvas."""
+import time
+
 try:
     from PySide6.QtWidgets import (QComboBox, QDialog, QGridLayout, QLabel, QLineEdit,
                                   QMessageBox, QPushButton, QVBoxLayout)
@@ -160,7 +162,8 @@ class MappingPanel:
             layout.addWidget(QLabel("仅预览保存的地图；不显示当前机器人位姿或轨迹。"))
             canvas = MapCanvas()
             canvas.setToolTip("保存的栅格地图预览")
-            canvas.set_telemetry(dict(type="map", map=packet["preview"]))
+            canvas.set_telemetry(dict(type="map", map=packet["preview"],
+                                      _map_image=packet.get("_map_image")))
             layout.addWidget(canvas)
             self.preview_dialog.show()
         if packet.get("saved"):
@@ -174,7 +177,17 @@ class MappingPanel:
         runtime = packet.get("runtime") or {}
         session = runtime.get("session_id")
         if session is not None and session != self.runtime_session:
+            previous = self.runtime_session
+            self._retire_runtime_session(previous)
             self.runtime_session = session
+            self._runtime_changed_at = packet.get("_received_monotonic", time.monotonic())
+            # A map may finish decoding before or after its matching telemetry.
+            # Preserve matching/future maps, but never retain the previous session's map.
+            if (self._map_runtime_session != session
+                    and self._map_received_at <= self._runtime_changed_at
+                    and (previous is not None or self._map_runtime_session is not None)):
+                self.canvas.set_telemetry(dict(type="map", map=None, pose=None))
+                self._map_runtime_session = None
             self.completed_results.clear()
             self.initial_task_selected = False
             self.initial_pose = None

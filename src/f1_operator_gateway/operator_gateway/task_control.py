@@ -113,6 +113,9 @@ class TaskControl:
 
     def _task_view(self, kind, *, for_start=False):
         value = dict(self.tasks.get(kind, {}))
+        value.pop("expected_track", None)
+        value.pop("actual_track", None)
+        value.pop("localization_snapshot", None)
         fresh = self._source_fresh(value, self.task_received.get(kind, 0))
         blockers = []
         def add(code, message):
@@ -391,7 +394,6 @@ class TaskControl:
                     epoch=(loc.get("trajectory_id"), loc.get("initial_pose_stamp_ns")))
             else:
                 history.last_seen = history.last_recorded = None
-            task["actual_track"] = history.snapshot()
         return dict(tasks=tasks,
                     localization=loc, task_busy=self._tasks_busy(),
                     active_tasks=sorted(self.task_locks), operation_pending=bool(self.command_pending),

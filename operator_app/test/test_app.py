@@ -104,11 +104,8 @@ def test_mock_workflow_localization_start_completion_and_stale_gate(app, kind, e
         assert "完成时间" in window.result_label.text()
         assert len(window.seen_completions) == 1
         assert window.canvas.task_overlay["actual_track"]["point_count"] > 30
-        assert len(window.canvas.task_overlay["expected_track"]["cleaning_segments"]) == edge_count
-        assert not window.canvas.task_overlay["expected_track"]["navigation_path"]
-        assert len(window.canvas._stop_markers()) == edge_count
-        assert "32–36 cm" in window.track_status.text()
-        assert "40 cm 停车点" in window.track_status.text()
+        assert "expected_track" not in window.canvas.task_overlay
+        assert "停车点" not in window.track_status.text()
         assert "35.0 cm" in window.wall_distance.text()
         window.last_telemetry_at = time.monotonic()-2
         window._refresh_controls()
@@ -118,7 +115,6 @@ def test_mock_workflow_localization_start_completion_and_stale_gate(app, kind, e
         assert window.canvas.task_overlay["actual_track"]["point_count"] > 30
         assert all(not dashed for _, _, dashed in window.canvas._track_layers())
         assert "过期" in window.track_status.text()
-        assert not window.canvas._stop_markers()
         assert "停车点" not in window.track_status.text()
         assert "无有效观测" in window.wall_distance.text()
     finally:
@@ -135,7 +131,7 @@ def test_track_layers_keep_l_open_and_reject_mismatched_frames_and_runs(app):
         actual_track=dict(map_id="map-a", frame_id="map", run_id="run",
                           segments=[[[-2., 3.], [-2., 3.5]], [[-2., 4.], [-2.5, 4.]]]))
     canvas.set_task_overlay(task, live=True)
-    assert len(canvas._track_layers()) == 5
+    assert len(canvas._track_layers()) == 2
     assert all(len(points) == 2 for points, _, _ in canvas._track_layers())
     canvas.grab()  # Exercise painting with rotated origin and independent segments.
     canvas.set_task_overlay(task, live=False)
@@ -147,41 +143,22 @@ def test_track_layers_keep_l_open_and_reject_mismatched_frames_and_runs(app):
     assert not canvas._track_layers()
 
 
-def test_stop_markers_follow_received_endpoints_and_reject_stale_or_legacy_data(app):
+def test_canvas_ignores_legacy_scan_expected_and_start_region(app):
     canvas = MapCanvas()
     canvas.set_telemetry(mapping(.7))
-    track = dict(map_id="map-a", frame_id="map", basis="boat_center_stop", front_stop_m=.4,
-                 cleaning_segments=[dict(points=[[-2., 3.], [-2., 4.]])])
-    task = dict(map_id="map-a", expected_track=track)
-    canvas.set_task_overlay(task, live=True)
-    assert canvas._stop_markers() == [([-2., 4.], .4)]
-    canvas.grab()
-    track.update(front_stop_m=.5, cleaning_segments=[dict(points=[[-2., 3.], [-2., 3.9]])])
-    assert canvas._stop_markers() == [([-2., 3.9], .5)]
-    for field, invalid in [("map_id", "other"), ("frame_id", "odom"),
-                           ("basis", None), ("front_stop_m", float("nan"))]:
-        previous = track[field]
-        track[field] = invalid
-        assert not canvas._stop_markers()
-        track[field] = previous
-    canvas.set_task_overlay(task, live=False)
-    assert not canvas._stop_markers()
-
-
-def test_start_region_is_drawn_only_for_fresh_matching_map(app):
-    canvas = MapCanvas()
-    canvas.set_telemetry(mapping(math.pi/2))
-    region = dict(reference_wall_point=[-2., 3.5],
-                  polygon=[[-2., 3.4], [-2., 3.6], [-2.8, 3.6], [-2.8, 3.4]])
-    task = dict(map_id="map-a", expected_track=dict(map_id="map-a", frame_id="map", start_region=region))
-    canvas.set_task_overlay(task, live=True)
-    assert canvas._start_region() == region
-    canvas.grab()
-    canvas.set_task_overlay(task, live=False)
-    assert canvas._start_region() is None
-    task["expected_track"]["map_id"] = "map-b"
-    canvas.set_task_overlay(task, live=True)
-    assert canvas._start_region() is None
+    canvas.show()
+    app.processEvents()
+    baseline = canvas.grab().toImage()
+    canvas.set_telemetry(dict(scan=dict(frame_id="map", points=[[-2., 3.5]])))
+    canvas.set_task_overlay(dict(map_id="map-a", expected_track=dict(
+        map_id="map-a", frame_id="map", basis="boat_center_stop", front_stop_m=.4,
+        cleaning_segments=[dict(points=[[-2., 3.], [-2., 4.]])],
+        start_region=dict(reference_wall_point=[-2., 3.5],
+                          polygon=[[-2., 3.4], [-2., 3.6], [-2.8, 3.6], [-2.8, 3.4]]))), live=True)
+    assert not canvas._track_layers()
+    assert "scan" not in canvas.telemetry
+    assert canvas.grab().toImage() == baseline
+    canvas.close()
 
 
 @pytest.mark.parametrize("scope", ["remaining_open_route", "remaining_l_route"])
@@ -433,5 +410,242 @@ def test_diagnostics_old_gateway_and_delayed_send_timer(app, monkeypatch):
         assert "手动按钮已禁用" in window.log_view.toPlainText()
         assert "超过 800 ms" in window.log_view.toPlainText()
         assert "已过期" in window.diagnostic_summary.text()
+    finally:
+        window.close()
+
+
+@pytest.mark.parametrize("direction", ["FORWARD", "LEFT", "STOP", "RIGHT", "REVERSE"])
+def test_stale_manual_button_moves_focus_without_capturing_numeric_input(app, monkeypatch, direction):
+    monkeypatch.setattr(SocketWorker, "start", lambda self: None)
+    window = OperatorWindow("unused")
+    window.send_timer.stop()
+    window.state_timer.stop()
+    window.show()
+    window.activateWindow()
+    app.processEvents()
+    packet = dict(type="telemetry", state=dict(allow_fifth_thruster=True))
+    try:
+        window._message(packet)
+        window.drive_buttons[direction].setFocus()
+        app.processEvents()
+        assert app.focusWidget() is window.drive_buttons[direction]
+        window.last_telemetry_at = time.monotonic() - 2
+        window._refresh_controls()
+        app.processEvents()
+        assert app.focusWidget() is window
+        window._message(packet)
+        assert not window.manual_locked
+        # An intentional numeric edit still stops output and holds the lock.
+        window.brush_value.setFocus()
+        app.processEvents()
+        window._refresh_controls()
+        window._message(packet)
+        assert window.manual_locked
+        assert "输入框持有焦点" in window.mode_label.text()
+    finally:
+        window.close()
+
+
+def test_received_time_server_queue_and_sequence_guard_telemetry_freshness(app, monkeypatch):
+    monkeypatch.setattr(SocketWorker, "start", lambda self: None)
+    window = OperatorWindow("unused")
+    try:
+        old = time.monotonic() - 2
+        window._message(dict(type="telemetry", _received_monotonic=old,
+                             stream=dict(session="gateway", sequence=1), pose=dict(x=0, y=0, yaw=0)))
+        assert window.last_telemetry_at == old
+        assert window.manual_locked
+        assert window.canvas.telemetry["pose"] is None
+        received = time.monotonic()
+        window._message(dict(type="telemetry", _received_monotonic=received,
+                             stream=dict(session="gateway", sequence=2, server_queue_ms=900)))
+        assert window.last_telemetry_at == pytest.approx(received - .9)
+        assert window.manual_locked
+        window._message(dict(type="telemetry", stream=dict(session="gateway", sequence=3)))
+        fresh_time = window.last_telemetry_at
+        assert not window.manual_locked
+        window._message(dict(type="telemetry", _received_monotonic=old,
+                             stream=dict(session="gateway", sequence=4)))
+        window._message(dict(type="telemetry", stream=dict(session="gateway", sequence=2)))
+        window._message(dict(type="telemetry", _received_monotonic=float("nan")))
+        assert window.last_telemetry_at == fresh_time
+    finally:
+        window.close()
+
+
+def test_independent_tracks_match_map_run_and_gateway_session(app, monkeypatch):
+    monkeypatch.setattr(SocketWorker, "start", lambda self: None)
+    window = OperatorWindow("unused")
+    track = dict(map_id="map-a", run_id="run-a", frame_id="map", point_count=2,
+                 segments=[[[0., 0.], [1., 0.]]])
+    def telemetry(run="run-a", session="gateway-a", embedded=None):
+        task = dict(map_id="map-a", run_id=run, fresh=True)
+        if embedded is not None:
+            task["actual_track"] = embedded
+        return dict(type="telemetry", stream=dict(session=session),
+                    localization=dict(map_id="map-a", fresh=True), tasks=dict(rectangle=task))
+    try:
+        # Display snapshots may arrive before the corresponding fast state.
+        window._message(dict(type="tracks", session_id="gateway-a", tasks=dict(rectangle=track)))
+        window._message(telemetry())
+        assert window.telemetry["tasks"]["rectangle"]["actual_track"] is track
+        window._message(telemetry())
+        assert window.canvas.task_overlay["actual_track"] is track
+        window._message(telemetry(run="run-b"))
+        assert "actual_track" not in window.canvas.task_overlay
+        window._message(telemetry())
+        assert window.canvas.task_overlay["actual_track"] is track
+        window._message(telemetry(session="gateway-b"))
+        assert "actual_track" not in window.canvas.task_overlay
+        window._message(dict(type="tracks", session_id="gateway-a", tasks=dict(rectangle=track)))
+        assert not window._tracks
+        window._message(telemetry(session="gateway-b", embedded=track))
+        assert window.canvas.task_overlay["actual_track"] is track
+        window._message(telemetry(session="gateway-b"))
+        assert window.canvas.task_overlay["actual_track"] is track
+    finally:
+        window.close()
+
+
+def test_incoming_batch_refreshes_controls_once_after_latest_state(app, monkeypatch):
+    monkeypatch.setattr(SocketWorker, "start", lambda self: None)
+    window = OperatorWindow("unused")
+    try:
+        old = time.monotonic() - 2
+        packets = [dict(type="telemetry", _received_monotonic=old),
+                   dict(type="map", map=mapping()["map"]), dict(type="telemetry")]
+        monkeypatch.setattr(window.worker, "take_incoming", lambda: packets, raising=False)
+        refresh = window._refresh_controls
+        refreshes = []
+        def counted(*args):
+            if not window._processing_incoming:
+                refreshes.append(True)
+            refresh(*args)
+        monkeypatch.setattr(window, "_refresh_controls", counted)
+        window._message(dict(type="incoming_ready"))
+        assert refreshes == [True]
+        assert not window.manual_locked
+        assert window.canvas.map_image is not None
+    finally:
+        window.close()
+
+
+def test_prepared_map_and_actual_track_screen_caches(app, monkeypatch):
+    canvas = MapCanvas()
+    packet = mapping()
+    prepared = canvas._make_map_image(packet["map"])
+    del packet["map"]["data"]
+    packet["_map_image"] = prepared
+    def no_gui_decode(_):
+        raise AssertionError("Prepared maps must not be decoded again on the GUI thread")
+    monkeypatch.setattr(canvas, "_make_map_image", no_gui_decode)
+    canvas.set_telemetry(packet)
+    assert canvas.map_image is prepared
+    canvas.set_task_overlay(dict(map_id="a", run_id="r", actual_track=dict(
+        map_id="a", run_id="r", frame_id="map", segments=[[[-2., 3.], [-2., 4.]]])), live=True)
+    transform = canvas.map_to_screen
+    transformed = []
+    def counted(x, y):
+        transformed.append((x, y))
+        return transform(x, y)
+    monkeypatch.setattr(canvas, "map_to_screen", counted)
+    canvas._screen_tracks()
+    canvas._screen_tracks()
+    assert len(transformed) == 2
+    canvas.resize(1000, 700)
+    canvas._screen_tracks()
+    assert len(transformed) == 4
+    canvas.show()
+    app.processEvents()
+    canvas.grab()
+    cached = canvas._scaled_image
+    canvas.grab()
+    assert canvas._scaled_image is cached
+    canvas.close()
+
+
+def test_separate_diagnostics_history_does_not_refresh_telemetry(app, monkeypatch):
+    monkeypatch.setattr(SocketWorker, "start", lambda self: None)
+    window = OperatorWindow("unused")
+    packet = dict(type="diagnostics", diagnostics=dict(session="gateway", events=[dict(
+        id=1, source="gateway", reason="input_timeout", time_unix=time.time(), details={})]))
+    try:
+        window._message(packet)
+        window._message(packet)
+        assert window.log_view.toPlainText().count("input_timeout") == 1
+        assert window.last_telemetry_at == 0.
+        assert "等待遥测" == window.diagnostic_summary.text()
+    finally:
+        window.close()
+
+
+def test_runtime_map_session_rejects_late_decode_and_preserves_matching_early_map(app, monkeypatch):
+    monkeypatch.setattr(SocketWorker, "start", lambda self: None)
+    window = OperatorWindow("unused")
+    base = time.monotonic() - .2
+    def state(session, offset):
+        return dict(type="telemetry", runtime=dict(session_id=session),
+                    _received_monotonic=base + offset / 100., pose=dict(x=1., y=1., yaw=0.))
+    def map_packet(session, offset, revision):
+        packet = mapping()
+        packet.update(runtime_session_id=session, _received_monotonic=base + offset / 100.)
+        packet["map"].update(runtime_session_id=session, revision=revision)
+        return packet
+    try:
+        window._message(state("a", 1))
+        window._message(map_packet("a", 2, 1))
+        assert window.canvas.map_image is not None
+        window._message(state("b", 4))
+        assert window.canvas.map_image is None
+        # Received before the switch, decoded after it: cannot restore old map.
+        window._message(map_packet("a", 3, 2))
+        assert window.canvas.map_image is None
+        window._message(map_packet("b", 5, 3))
+        image_b = window.canvas.map_image
+        assert image_b is not None
+        # Current-session retransmission after reconnect is accepted.
+        window._message(map_packet("b", 6, 4))
+        assert window.canvas.map_revision == 4
+        # A next-session map may finish before its first fast telemetry.
+        window._message(map_packet("c", 7, 5))
+        image_c = window.canvas.map_image
+        assert image_c is not None
+        assert window.canvas.telemetry["pose"] is None
+        window._message(state("c", 8))
+        assert window.canvas.map_image is image_c
+        assert window.canvas.telemetry["pose"] == dict(x=1., y=1., yaw=0.)
+        # A delayed old reset packet must not clear the new map either.
+        window._message(dict(type="map", map=None, runtime_session_id="b",
+                             _received_monotonic=base + .09))
+        assert window.canvas.map_image is image_c
+        window._message(dict(type="map", map=None, runtime_session_id="c",
+                             _received_monotonic=base + .091))
+        assert window.canvas.map_image is None
+        # Legacy map/reset packets without runtime metadata are still accepted.
+        window._message(mapping())
+        assert window.canvas.map_image is not None
+        window._message(dict(type="map", map=None))
+        assert window.canvas.map_image is None
+    finally:
+        window.close()
+
+
+def test_first_runtime_state_rejects_unknown_old_map_and_accepts_nested_session(app, monkeypatch):
+    monkeypatch.setattr(SocketWorker, "start", lambda self: None)
+    window = OperatorWindow("unused")
+    base = time.monotonic() - 10.
+    try:
+        window._message(dict(type="telemetry", runtime=dict(session_id="new"),
+                             _received_monotonic=base + 2))
+        old = mapping()
+        old["map"]["runtime_session_id"] = "old-unseen"
+        old["_received_monotonic"] = base + 1
+        window._message(old)
+        assert window.canvas.map_image is None
+        current = mapping()
+        current["map"]["runtime_session_id"] = "new"
+        current["_received_monotonic"] = base + 1.5
+        window._message(current)
+        assert window.canvas.map_image is not None
     finally:
         window.close()

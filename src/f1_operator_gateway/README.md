@@ -111,7 +111,7 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
 |---|---|
 | `/f1/actuator_command`、`acquire_control`、`release_control` | 手动控制与单租约 |
 | `/f1/control_state` | 控制源、通信、执行器许可 |
-| `/map`、TF、`/pavo2_scan` | 地图、船体位姿、按扫描时间转换的地图雷达点 |
+| `/map`、TF、`/pavo2_scan` | 显示底图、船体位姿及扫描健康检查；不再生成 App 雷达点 |
 | `/pool_cleaning/status`、`/l_cleaning/status` | 两种任务的独立状态 |
 | 两组任务的 `start/pause/stop/cancel` | 任务操作 |
 | 两组任务的 `set_forward_boost`（`std_srvs/srv/SetBool`） | 启动前设置主电机前进辅助 |
@@ -140,7 +140,7 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
 
 `enabled` 必须是布尔值，`request_id` 必填；沿用任务操作的串行、去重和权限控制。网关检查新鲜任务状态、地图/任务类型及服务，仅 `IDLE/CANCELLED/STOPPED/COMPLETE` 可修改，控制器再次校验，暂停不放行。服务成功后还等待请求发出之后、开关一致的新鲜状态；超时表示结果待确认，不自动重发。设置确认前不能开始任务。遥测透传控制器的 `forward_boost_*` 字段，并提供 `can_set_forward_boost` 与 `forward_boost_setting_error`。开关由控制器持有，App 重连不重置或重发，重载控制器默认关闭。
 
-`diagnostic_history` 能力表示遥测含 `diagnostics: {session, events}`：网关保留最近 50 条桥状态变化和手动停止事件，事件带单调递增 `id`、`time_unix`、`source`、`reason`、`details`。手动停止记录清除前的输入年龄及超时阈值，桥事件记录 CTRL/ACK 年龄和最近撤销原因，不包含控制 token。App 按 session/id 去重，重连可补读；进程重启不保留旧历史。旧客户端可忽略此新增字段。
+`diagnostic_history` 能力对应独立 `{"type":"diagnostics","diagnostics":{"session":"...","events":[]}}` 消息。网关保留最近 50 条桥状态变化和手动停止事件，hello 时补发历史，之后只发送新增事件。事件带单调递增 `id`、`time_unix`、`source`、`reason`、`details`；App 按 session/id 去重。手动停止记录清除前的输入年龄及超时阈值，桥事件记录 CTRL/ACK 年龄和最近撤销原因，不包含控制 token。进程重启不保留旧历史。新版 App 仍可读取旧遥测内嵌的 diagnostics。
 
 ```json
 {"op":"task","task_type":"l","action":"start","request_id":"唯一请求编号"}
@@ -151,7 +151,13 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
 
 `reply` 回传 `request_id`、`success`、`message`，可能带 `pending=true`（尚未确认）。网关缓存每客户端最近的请求结果，重复编号不重复执行；App 不自动重试操作。
 
-`telemetry` 包含 `state/pose/scan/tasks/localization/active_tasks/task_busy/operation_pending/can_set_initial_pose/active_client`。`tasks` 分别保存 `rectangle/l` 及其新鲜度和启动条件；`scan` 是 `frame_id=map` 的点列表，缺少对应时间 TF 或扫描过期时为 null。保留 `task` 字段作为矩形旧版状态兼容入口。
+`telemetry` 默认 10 Hz，包含 `state/pose/tasks/localization/active_tasks/task_busy/operation_pending/can_set_initial_pose/active_client/stream`。`tasks` 分别保存 `rectangle/l` 的状态、新鲜度和启动条件。2026-11-09 起不再上报 scan、expected_track、旧版重复 task、任务内重复 localization_snapshot、actual_track 和每帧诊断历史。ROS 雷达、控制器的目标计算与覆盖判据不受显示裁剪影响。
+
+`stream` 提供网关 session、递增 sequence、generated_unix、generated_monotonic、server_queue_ms、tick_gap_ms、control_age_ms 及 transport 队列统计。单调时钟只在本机计算间隔，不能与 Windows 单调时钟直接相减。App 用真实收包时刻、GUI 等待时间及 server_queue_ms 判断遥测新鲜度；网络传输时延仍需单独测量。hello 的 session_id 和 tracks 的 session_id 均是网关会话，与 runtime.session_id 的建图/定位会话不同。
+
+`map` 的几何字段保持 width/height/resolution/origin/frame_id/revision；显示数据采用 `encoding="indexed8_zlib"`、`data_zlib_base64`。解码为每格一个索引字节：0 未知、1 空闲、2 占用；行序沿用 ROS 栅格，App 显示时翻转 Y。只压缩显示颜色，不改变 ROS 原始地图或位姿坐标。后台编码仅保留一个待处理地图和一个最新结果，`map_update_period_sec` 默认 2 秒；受管 localization 模式首次有效地图后冻结，重新加载地图时重置，mapping 模式低频处理最新地图。地图 revision 仅主线程提交结果后更新；新连接 hello 补发缓存地图。地图及清空消息携带 `runtime_session_id`，App 据此拒绝上次建图/定位会话迟到的图片，避免地图和位姿错配；非受管入口该字段为空。保存地图 preview 仍使用限制尺寸的旧 data 数组格式。
+
+每客户端仅有一个发送任务，telemetry/tracks/map 各一份最新待发消息，在途消息最多一份；操作回复、hello、diagnostics 使用上限 32 的可靠 FIFO。可靠消息优先，核心遥测与轨迹/地图公平交替；溢出或单次发送超过 2 秒明确关闭连接，防止无限累积。跨线程唤醒也合并。新协议需同步升级 Windows App；`compact_stream_v1/indexed8_map` 标识这组能力，旧 App 无法完整显示压缩地图和独立轨迹。
 
 ## 轨迹与距离遥测（2026-10-31）
 
@@ -159,13 +165,11 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
 
 每个 `tasks[kind]` 新增：
 
-- `expected_track: {frame_id, map_id, basis, front_stop_m, wall_target_m, wall_band_min_m, wall_band_max_m, cleaning_segments: [{edge_id, points: [[x,y], ...]}], navigation_path: [], start_region: {...}}`：来自控制器的船体中心沿墙目标段和起始范围，网关原样透传。`basis=boat_center_stop` 表示段末端按 `front_stop_m` 计算的船中心停车点，默认 40 cm；横向目标 `wall_target_m=0.33`，开刷范围 `wall_band_min_m=0.32` 至 `wall_band_max_m=0.36`。旧消息缺少这些字段时 App 不猜测停车标记；`navigation_path` 为兼容字段，新版保持空列表，未确定起始范围时 `start_region` 为 null。
 - 任务状态顶层的 `start_edge_id/start_region/first_brush_contact/returning_to_start/remaining_edges/executed_edge_ids`：锁定起始墙、参考范围、首次有效开刷位置和执行进度，由网关透传。`completion_scope` 为 `rectangle_route` 或 `remaining_open_route`（旧版控制器使用 `remaining_l_route`，新版 App 仍兼容该值）；`coverage_complete/required_contact_intervals/remaining_contact_intervals` 独立报告覆盖情况，`COMPLETE` 不保证缺口为空。旧 `repair_pass/active_cleaning_interval` 已不由新控制器输出。
 - `route_chain_index/route_chain_count`：开放任务所选候选墙链的零基索引与候选总数；矩形任务为 null。候选链之间不自动转场。
-- `actual_track: {frame_id, map_id, run_id, segments: [[[x,y], ...], ...], point_count, truncated}`：网关从有效的 map→base_link TF 采样，分段避免连接定位缺失/跳变。
 - `center_wall_distance_m`、`wall_fresh`、`wall_age_sec`：有效左墙线到 base_link 原点的垂直距离及源数据新鲜度；距离不可用时为 null。
 
-历史按任务类型、地图、run_id 隔离；约 5 Hz 上限、3 cm 位移阈值，最多 2000 点。定位失效、重定位、时间回退、超过 0.6 秒采样缺口或超过 0.35 m 跳变时分段；任务停止/取消/完成后不继续记录手动运动。网关持续运行期间保留最近一次任务，支持 App 重连；网关重启丢失缓存。新任务或地图身份变化重置，点数上限达到后丢弃最早数据并设置 truncated。该轨迹用于观察，不作为覆盖完成判据。
+实际轨迹由独立 `{"type":"tracks","session_id":"网关会话","tasks":{"rectangle":{},"l":{}}}` 消息发送，各任务值为 `{frame_id,map_id,run_id,segments,point_count,truncated}`。每 0.5 秒检查一次，内容变化才发送；hello 补发完整最新轨迹。历史按任务类型、地图、run_id 隔离；约 5 Hz 采样上限、3 cm 位移阈值，最多 2000 点。定位失效、重定位、时间回退、超过 0.6 秒采样缺口或超过 0.35 m 跳变时分段；任务停止/取消/完成后不继续记录手动运动。网关持续运行期间保留最近一次任务，支持 App 重连；网关重启丢失缓存。新任务或地图身份变化重置，点数上限达到后丢弃最早数据并设置 truncated。该轨迹用于观察，不作为覆盖完成判据。App 不再显示预期轨迹、起始范围和停车标记。
 
 ## 验证
 

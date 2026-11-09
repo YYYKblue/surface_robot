@@ -1,15 +1,18 @@
 """Real SLAM -> write_state -> raster export -> app map selection, synthetic scans only."""
 import asyncio
+import base64
 from concurrent.futures import ThreadPoolExecutor
 import json
 import math
 from pathlib import Path
 import time
+import zlib
 
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy, ReliabilityPolicy
+from nav_msgs.msg import OccupancyGrid
 from sensor_msgs.msg import LaserScan
 import websockets
 
@@ -21,6 +24,11 @@ def test_real_mapping_save_reconnect_and_load_without_hardware(tmp_path):
                      '-p', 'workspace_root:=' + str(tmp_path), '-p', 'localization_prefix:=/f1_localization'])
     gateway = OperatorGateway()
     peer = Node('operator_synthetic_lidar')
+    free_cells = [0]
+    peer.create_subscription(OccupancyGrid, '/map',
+        lambda grid: free_cells.__setitem__(0, sum(0 <= v < 20 for v in grid.data)),
+        QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                   durability=DurabilityPolicy.TRANSIENT_LOCAL))
     publisher = peer.create_publisher(LaserScan, '/pavo2_scan', qos_profile_sensor_data)
     scan = LaserScan()
     scan.header.frame_id = 'pavo2s_frame'
@@ -69,8 +77,18 @@ def test_real_mapping_save_reconnect_and_load_without_hardware(tmp_path):
             assert not ready['can_set_initial_pose']
             # First grid can contain only weak/unknown probabilities. Accumulate
             # repeated rays before expecting an export usable for localization.
-            await until(ws, lambda p: p.get('type') == 'map' and
-                        sum(0 <= v < 20 for v in (p.get('map') or {}).get('data', [])) > 100)
+            def usable_map(packet):
+                mapping = packet.get('map') or {}
+                if packet.get('type') != 'map' or not mapping:
+                    return False
+                assert mapping['encoding'] == 'indexed8_zlib'
+                pixels = zlib.decompress(base64.b64decode(mapping['data_zlib_base64']))
+                assert len(pixels) == mapping['width'] * mapping['height']
+                assert packet['runtime_session_id'] == session
+                # Export readiness still comes from full-resolution ROS values;
+                # the display palette deliberately does not carry probabilities.
+                return pixels.count(1) > 100 and free_cells[0] > 100
+            await until(ws, usable_map)
             await send(ws, dict(op='task', action='start', task_type='rectangle', request_id='blocked'))
             assert not (await until(ws, lambda p: p.get('request_id') == 'blocked'))['success']
         # Disconnect stops manual intent but keeps the SLAM session alive.

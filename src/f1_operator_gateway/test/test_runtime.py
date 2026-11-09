@@ -79,6 +79,19 @@ def test_busy_and_stale_scan_prevent_mapping_and_manual_is_interlocked(node):
     assert node.runtime_pending is None and not node.sent[-1]['success']
 
 
+def test_runtime_reset_invalidates_background_map_and_track_snapshot(node):
+    resets = []
+    node.map_stream = SimpleNamespace(reset=lambda: resets.append(True))
+    node._last_tracks = {"l": "previous run"}
+    node.runtime["session_id"] = "runtime-new-session"
+    node._runtime_reset()
+    assert resets == [True]
+    assert node.map_data is None and node._last_tracks is None
+    assert node.sent[-1]["type"] == "map" and node.sent[-1]["map"] is None
+    assert node.sent[-1]["runtime_session_id"] == "runtime-new-session"
+    assert "session_id" not in node.sent[-1]
+
+
 def test_external_cartographer_conflict_never_starts_or_kills_process(node, monkeypatch):
     monkeypatch.setattr('operator_gateway.runtime.ManagedProcess', lambda *args: pytest.fail('must not launch'))
     node.names = ['cartographer_node']

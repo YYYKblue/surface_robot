@@ -93,11 +93,11 @@ flowchart LR
 
 原路径规划模块 `navigation.py` 已删除。简单靠近不执行栅格、船体/刷盘包络或扫描碰撞检查，也不检查所选墙的路径可达性；定位管理器仍检查扫描新鲜度与地图一致性，沿墙阶段仍要求有效墙观测。40 cm 停车阈值和 `STOPPED` 均不表示通过速度测量确认船体已经静止。
 
-Windows App 的目标轨迹由清洗控制器生成、网关透传。`expected_track.basis=boat_center_stop` 表示蓝色船中心目标线的末端直接取 `墙长 - front_stop_m`（默认 40 cm），App 显示橙色停车点和距离；侧向目标保持 33 cm，图例注明 32–36 cm 开刷范围。启动前后、闭合路线与开放墙链使用共享计算；刷头接触覆盖区间仍独立统计。遥测过期时隐藏目标线及停车标记，保留历史实走轨迹。
+Windows App 仅绘制底图、实时船体位姿和实际任务轨迹。网关不再转换或上报雷达显示点，也裁剪 expected_track；控制器内部的目标计算、33 cm 目标墙距、32–36 cm 开刷范围、40 cm 停车参数及覆盖统计保持原有语义。核心遥测默认 10 Hz，实际轨迹独立最多 2 Hz 更新；受管定位底图首次加载后冻结，建图底图默认最多每 2 秒后台压缩更新一次。收发两端按类型保留最新快照，App 后台解码地图，遥测过期时隐藏实时位姿并保留历史实走轨迹。
 
 ## 6. 诊断数据的保存范围
 
-网关 `diagnostics.py` 在内存中保留最近 50 条桥状态变化及手动停止事件，随 `telemetry.diagnostics` 发布；App 按 `session/id` 去重并最多保留 2000 条，支持复制和导出。网关重启会清空网关历史，App 退出会丢失未导出的本地日志。受管模式子进程的持久日志另存于 `workspace_root/log/operator_runtime/<session_id>.log`，与这两类诊断历史不同。详见[App 日志说明](../operator_app/README.md#诊断日志)。
+网关 `diagnostics.py` 在内存中保留最近 50 条桥状态变化及手动停止事件，以独立 diagnostics 消息发送新增事件，hello 补发历史；App 按 `session/id` 去重并最多保留 2000 条，支持复制和导出。网关重启会清空网关历史，App 退出会丢失未导出的本地日志。受管模式子进程的持久日志另存于 `workspace_root/log/operator_runtime/<session_id>.log`，与这两类诊断历史不同。详见[App 日志说明](../operator_app/README.md#诊断日志)。
 
 ## 7. 验证和维护入口
 

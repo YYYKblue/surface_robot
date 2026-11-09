@@ -115,9 +115,8 @@ class DiagnosticPanel:
     def _write_diagnostics(self, filename):
         Path(filename).write_text(self.log_view.toPlainText() + "\n", encoding="utf-8-sig")
 
-    def _diagnostic_telemetry(self, packet):
-        state = packet.get("state", {})
-        history = packet.get("diagnostics") or {}
+    def _diagnostic_history(self, history):
+        """Consume event history independently from fast state telemetry."""
         session = history.get("session")
         if session:
             if session not in self._gateway_cursors:
@@ -134,10 +133,24 @@ class DiagnosticPanel:
                               event["reason"], event.get("details"), event.get("time_unix"))
                     cursor = event["id"]
             self._gateway_cursors[session] = cursor
-        else:
+
+    def _diagnostic_telemetry(self, packet):
+        state = packet.get("state", {})
+        history = packet.get("diagnostics") or {}
+        if history.get("session"):
+            self._diagnostic_history(history)
+        elif "diagnostic_history" not in self.capabilities:
             keys = ("state", "source", "owner", "motion_authorized", "reason", "last_stop_reason")
             self._log_change("bridge", tuple(state.get(k) for k in keys), "串口桥/接收时刻",
                              state.get("reason", "桥状态更新"), {k: state.get(k) for k in keys})
+        received = packet.get("_received_monotonic")
+        if isinstance(received, (int, float)) and received > 0:
+            ui_queue_ms = max(0., (time.monotonic() - received) * 1000)
+            self._log_change("ui_delay", ui_queue_ms >= 200, "App",
+                             "遥测界面处理延迟" if ui_queue_ms >= 200 else "遥测界面处理及时",
+                             {"ui_queue_ms": round(ui_queue_ms, 1),
+                              "transport": packet.get("_transport", {}),
+                              "stream": packet.get("stream", {})})
         fresh = packet.get("control_fresh")
         self._log_change("control_fresh", fresh, "网关",
                          "桥状态新鲜度变化", {"control_fresh": fresh})

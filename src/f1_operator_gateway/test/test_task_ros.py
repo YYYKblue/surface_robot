@@ -50,6 +50,7 @@ def test_websocket_manual_timeout_history_is_available_after_reconnect():
             assert event["details"]["input_age_ms"] >= 250
             assert event["details"]["had_lease"] is False
         async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+            await ws.send(json.dumps(dict(op="hello", client="diagnostics-reconnect")))
             replay = await until(ws, lambda p: bool(p.get("diagnostics", {}).get("events")))
             assert replay["diagnostics"]["session"] == history["session"]
             assert event in replay["diagnostics"]["events"]

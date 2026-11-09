@@ -41,6 +41,16 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self._pressed_keys = set()
         self.last_telemetry_at = 0.
         self.telemetry = {}
+        self._processing_incoming = False
+        self._gateway_session = None
+        self._retired_gateway_sessions = []
+        self._telemetry_sequence = None
+        self._last_received_at = 0.
+        self._tracks = {}
+        self._map_runtime_session = None
+        self._map_received_at = 0.
+        self._runtime_changed_at = 0.
+        self._retired_runtime_sessions = []
         self.client_id = None
         self.capabilities = set()
         self.pending_requests = {}
@@ -276,6 +286,8 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self._refresh_controls()
 
     def _refresh_controls(self, *args):
+        if self._processing_incoming:
+            return
         if not hasattr(self, "task_buttons"):
             return
         fresh = bool(self.last_telemetry_at) and time.monotonic()-self.last_telemetry_at < .8
@@ -310,6 +322,11 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         if locked and not self.manual_locked:
             self._clear_manual()
         self.manual_locked = locked
+        # Qt otherwise moves focus from a disabled button into the next spinbox,
+        # turning a temporary stale-data lock into a persistent text-input lock.
+        disabling = list(self.drive_buttons.values()) + [self.brush_button, self.thrust_button]
+        if locked and QApplication.focusWidget() in disabling:
+            self.setFocus(Qt.OtherFocusReason)
         for button in self.drive_buttons.values():
             button.setEnabled(not locked)
         self.brush_button.setEnabled(not locked)
@@ -369,7 +386,8 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         # Retain last known history on disconnect, without reusing it for controls.
         overlay_task = self.telemetry.get("tasks", {}).get(kind, {})
         overlay_map = self.telemetry.get("localization", {}).get("map_id")
-        overlay_matches = bool(overlay_map and overlay_map == overlay_task.get("map_id"))
+        overlay_matches = bool(overlay_map and overlay_map == overlay_task.get("map_id")
+                               and self._map_matches_runtime())
         self.canvas.set_task_overlay(overlay_task if overlay_matches else {}, live=fresh and task_fresh)
         distance = task.get("center_wall_distance_m")
         valid_wall = (fresh and task_fresh and same_map and task.get("wall_fresh") is True
@@ -382,19 +400,8 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
             track = {}
         count = track.get("point_count", 0)
         suffix = "（已截断，仅显示最近轨迹）" if track.get("truncated") else ""
-        legend = ""
-        expected = overlay_task.get("expected_track") or {}
-        values = [expected.get(key) for key in
-                  ("wall_target_m", "wall_band_min_m", "wall_band_max_m", "front_stop_m")]
-        if (fresh and task_fresh and overlay_matches
-                and expected.get("basis") == "boat_center_stop"
-                and all(isinstance(v, (int, float)) and math.isfinite(v) and v > 0 for v in values)):
-            target, lower, upper, stop = [v*100 for v in values]
-            legend = (f"\n蓝色虚线：船中心目标距左墙 {target:g} cm（开刷范围 {lower:g}–{upper:g} cm）"
-                      f"；橙色方框：距墙端 {stop:g} cm 停车点")
         self.track_status.setText(f"{TASK_NAMES[kind]} · 本次任务历史轨迹：{count} 点{suffix}"
                                   + (" · 当前轨迹数据已过期" if not fresh or not task_fresh else "")
-                                  + legend
                                   if "task_tracks" in self.capabilities else "轨迹功能需要升级网关")
         if not loc.get("fresh"):
             text = "定位：状态未收到或已过期"
@@ -415,7 +422,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         condition = blocker_text(blockers) or "启动条件已满足"
         if not fresh:
             condition = "连接中断或遥测过期，禁止开始任务"
-            self.canvas.set_telemetry({"pose": None, "scan": None})
+            self.canvas.set_telemetry({"pose": None})
         elif not supported:
             condition = "请升级 Nano 网关以使用清洗任务与初始位姿功能"
         elif not operator:
@@ -436,7 +443,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
             region = task.get("start_region") or {}
             point = region.get("reference_wall_point")
             if point and len(point) == 2:
-                details += f"\n起始参考点：({point[0]:.2f}, {point[1]:.2f}) m；紫框为到达范围"
+                details += f"\n起始参考点：({point[0]:.2f}, {point[1]:.2f}) m"
             if task.get("returning_to_start"):
                 details += "\n正在补齐起始边前半段"
             if task.get("completion_scope") in ("remaining_open_route", "remaining_l_route"):
@@ -512,6 +519,78 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
                 return
         self.direction = "STOP"
 
+    def _accept_gateway_session(self, session):
+        if not session or session == self._gateway_session:
+            return True
+        if session in self._retired_gateway_sessions:
+            return False
+        if self._gateway_session:
+            self._retired_gateway_sessions.append(self._gateway_session)
+            self._retired_gateway_sessions = self._retired_gateway_sessions[-8:]
+        self._gateway_session = session
+        self._telemetry_sequence = None
+        self._last_received_at = self.last_telemetry_at = 0.
+        self._tracks.clear()
+        self._retired_runtime_sessions.clear()
+        self._runtime_changed_at = 0.
+        self.telemetry = {}
+        self.canvas.set_task_overlay({}, live=False)
+        self.canvas.set_telemetry({"pose": None})
+        self._clear_manual()
+        return True
+
+    def _retire_runtime_session(self, session):
+        if session and session not in self._retired_runtime_sessions:
+            self._retired_runtime_sessions.append(session)
+            self._retired_runtime_sessions = self._retired_runtime_sessions[-16:]
+
+    def _map_matches_runtime(self):
+        return (not self._map_runtime_session or not self.runtime_session
+                or self._map_runtime_session == self.runtime_session)
+
+    def _accept_map_packet(self, packet):
+        mapping = packet.get("map") or {}
+        session = packet.get("runtime_session_id") or mapping.get("runtime_session_id")
+        received = packet.get("_received_monotonic", time.monotonic())
+        if (not isinstance(received, (int, float)) or not math.isfinite(received)
+                or received <= 0):
+            return False
+        if (session in self._retired_runtime_sessions
+                or received < self._map_received_at
+                or (session and session != self.runtime_session
+                    and received < self._runtime_changed_at)):
+            return False
+        if session and session != self._map_runtime_session:
+            self._retire_runtime_session(self._map_runtime_session)
+        self._map_runtime_session = session
+        self._map_received_at = received
+        if not self._map_matches_runtime():
+            self.canvas.set_task_overlay({}, live=False)
+            self.canvas.set_telemetry({"pose": None})
+        return True
+
+    def _attach_tracks(self, packet, *, record_embedded=True):
+        result = dict(packet)
+        tasks = {}
+        for kind, value in packet.get("tasks", {}).items():
+            task = dict(value)
+            task.pop("expected_track", None)
+            embedded = task.get("actual_track")
+            if record_embedded and isinstance(embedded, dict):
+                self._tracks[kind] = embedded
+            track = self._tracks.get(kind)
+            if (track and track.get("map_id") == task.get("map_id")
+                    and track.get("run_id") == task.get("run_id")):
+                task["actual_track"] = track
+            elif (not isinstance(embedded, dict)
+                  or embedded.get("map_id") != task.get("map_id")
+                  or embedded.get("run_id") != task.get("run_id")):
+                task.pop("actual_track", None)
+            tasks[kind] = task
+        result["tasks"] = tasks
+        result.pop("scan", None)
+        return result
+
     def eventFilter(self, obj, event):
         if event.type() == QEvent.FocusIn and isinstance(obj, (QLineEdit, QAbstractSpinBox)) and hasattr(self, "brush_button"):
             self._stop("text_input")
@@ -535,7 +614,30 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
                 return True
         return super().eventFilter(obj, event)
     def _message(self, packet):
+        if packet.get("type") == "incoming_ready":
+            self._processing_incoming = True
+            try:
+                for incoming in self.worker.take_incoming():
+                    self._message(incoming)
+            finally:
+                self._processing_incoming = False
+                self._refresh_controls()
+            return
+        if packet.get("type") == "diagnostics":
+            self._diagnostic_history(packet.get("diagnostics") or {})
+            return
+        if packet.get("type") == "tracks":
+            if not self._accept_gateway_session(packet.get("session_id")):
+                return
+            for kind, track in packet.get("tasks", {}).items():
+                if kind in ("rectangle", "l") and isinstance(track, dict):
+                    self._tracks[kind] = track
+            self.telemetry = self._attach_tracks(self.telemetry, record_embedded=False)
+            self._refresh_controls()
+            return
         if packet.get("type") == "hello":
+            if not self._accept_gateway_session(packet.get("session_id")):
+                return
             self.client_id = packet.get("client_id")
             self.capabilities = set(packet.get("capabilities", []))
             self._log("连接", "网关握手完成", {"diagnostic_history": "diagnostic_history" in self.capabilities})
@@ -544,13 +646,35 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
             if "map_catalog" in self.capabilities:
                 self._send_request("mapping", action="list")
         elif packet.get("type") == "map":
+            if not self._accept_map_packet(packet):
+                return
             self.canvas.set_telemetry(packet)
         elif packet.get("type") == "telemetry":
+            stream = packet.get("stream") or {}
+            if not self._accept_gateway_session(stream.get("session")):
+                return
+            now = time.monotonic()
+            received = packet.get("_received_monotonic", now)
+            if (not isinstance(received, (int, float)) or not math.isfinite(received)
+                    or not 0 < received <= now or received < self._last_received_at):
+                return
+            sequence = stream.get("sequence")
+            if (isinstance(sequence, int) and self._telemetry_sequence is not None
+                    and sequence <= self._telemetry_sequence):
+                return
+            server_queue_ms = stream.get("server_queue_ms", 0.)
+            if (not isinstance(server_queue_ms, (int, float))
+                    or not math.isfinite(server_queue_ms) or server_queue_ms < 0):
+                return
+            if isinstance(sequence, int):
+                self._telemetry_sequence = sequence
+            self._last_received_at = received
+            packet = self._attach_tracks(packet)
             self._diagnostic_telemetry(packet)
             self.telemetry = packet
-            self.last_telemetry_at = time.monotonic()
+            self.last_telemetry_at = received - server_queue_ms / 1000.
             self._mapping_telemetry(packet)
-            self.canvas.set_telemetry(packet)
+            self.canvas.set_telemetry(packet if self._map_matches_runtime() else {"pose": None})
             state = packet.get("state", {})
             self.status_bar.setText(f"设备：{state.get('state','—')} · 来源：{state.get('source','—')} · {state.get('reason','')}")
             active = packet.get("active_tasks", [])

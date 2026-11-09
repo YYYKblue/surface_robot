@@ -217,6 +217,6 @@ Qt App 经网关分别连接矩形与 L 的任务接口。顶部“停止手动�
 
 `/pool_cleaning/stop`（Trigger）进入 `STOPPED`，关闭全部任务输出并释放租约，保留覆盖记录与当前边快照；`cancel` 额外清除当前边关联。都不会自动续跑，自动任务再次 start 会重置进度并生成新 run_id。
 
-状态 JSON 的 `expected_track` 提供 map 坐标系的 `cleaning_segments` 和 `start_region`（参考点及到达范围四边形）；`navigation_path` 保留为空数组以兼容客户端。目标线起点由接触起点减去 `brush_x_m` 换算，终点直接取 `墙长 - front_stop_m`；两端均向水侧偏移 `wall_target_m`。默认目标墙距 33 cm、开刷范围 32–36 cm、船中心距墙端 40 cm 停车。各边独立绘制，开放墙链仅显示本次后续任务段。`expected_track` 同时下发 `basis=boat_center_stop`、`front_stop_m`、`wall_target_m`、`wall_band_min_m`、`wall_band_max_m`，供 App 绘制橙色停车方框、距离标注及参数图例。启动前后均使用相同停车终点；覆盖统计仍使用刷头接触区间，不以目标线代替覆盖判定。
+ROS 状态 JSON 的 `expected_track` 提供 map 坐标系的 `cleaning_segments` 和 `start_region`（参考点及到达范围四边形）；`navigation_path` 保留为空数组。目标线起点由接触起点减去 `brush_x_m` 换算，终点直接取 `墙长 - front_stop_m`；两端均向水侧偏移 `wall_target_m`。默认目标墙距 33 cm、开刷范围 32–36 cm、船中心距墙端 40 cm 停车。各边独立，开放墙链只包含本次后续任务段。`expected_track` 保留 `basis=boat_center_stop` 及距离参数用于 ROS 诊断；2026-11-09 起网关不再向 App 转发，画布仅显示实际轨迹。启动前后均使用相同停车终点；覆盖统计仍使用刷头接触区间，不以目标线代替覆盖判定。
 
 `center_wall_distance_m` 使用左墙观测的垂直距离，并同时检查源时间与接收时间是否小于 wall_max_age_sec；无效/过期时为 null。兼容字段 wall_distance_m、left_wall_distance_cm 使用同样有效性条件，wall_valid 不再对过期观测保持 true。历史轨迹由网关采集，详见[App 操作说明](../../operator_app/README.md)。

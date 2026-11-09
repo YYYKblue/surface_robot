@@ -91,13 +91,16 @@ class RuntimeControl:
         self.runtime_accept_map = False
         self.map_data = self.map_signature = self.pose = None
         self.map_revision += 1
+        if hasattr(self, "map_stream"):
+            self.map_stream.reset()
+        self._last_tracks = None
         self.tf_buffer.clear()
         self.tasks, self.task_received = {}, {}
         self.localization, self.localization_received = {}, 0.
         self.initial_pose_stamp = None
         self.task_tracks = {kind: TaskTrack() for kind in self.task_tracks}
         # Callers have confirmed no active/uncertain task before a mode switch.
-        self.hub.broadcast(dict(type="map", map=None, session_id=self.runtime["session_id"]))
+        self.hub.broadcast(dict(type="map", map=None, runtime_session_id=self.runtime["session_id"]))
 
     def _runtime_conflicts(self):
         names = self.get_node_names()

@@ -5,16 +5,20 @@ import uuid
 
 
 class DiagnosticHistory:
-    def __init__(self):
+    def __init__(self, on_record=None):
         self.session = uuid.uuid4().hex
         self.events = deque(maxlen=50)
         self.sequence = 0
         self.bridge_signature = None
+        self.on_record = on_record
 
     def record(self, origin, reason, **details):
         self.sequence += 1
-        self.events.append(dict(id=self.sequence, time_unix=time.time(),
-                                source=origin, reason=reason, details=details))
+        event = dict(id=self.sequence, time_unix=time.time(),
+                     source=origin, reason=reason, details=details)
+        self.events.append(event)
+        if self.on_record is not None:
+            self.on_record(dict(session=self.session, events=[event]))
 
     def bridge(self, state):
         keys = ("connection_id", "state", "source", "owner", "motion_authorized",

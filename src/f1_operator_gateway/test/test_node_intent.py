@@ -10,6 +10,9 @@ class FakeHub:
     def send(self, client_id, packet):
         self.sent.append((client_id, packet))
 
+    def broadcast(self, packet):
+        self.sent.append((None, packet))
+
 
 def gateway(allow_fifth):
     node = OperatorGateway.__new__(OperatorGateway)
@@ -56,30 +59,14 @@ def test_running_task_rejects_manual_intent():
     assert not node.hub.sent[-1][1]["success"]
 
 
-def test_scan_transform_uses_sensor_frame_timestamp_translation_and_rotation():
-    import math
-    from types import SimpleNamespace
-    from geometry_msgs.msg import TransformStamped
+def test_scan_only_updates_runtime_health_without_building_app_point_cloud():
     node = gateway(True)
-    node.scan = dict(frame_id="laser", stamp=dict(sec=1, nanosec=0),
-                     angle_min=0., angle_increment=.1, range_min=.05, range_max=10., ranges=[1.])
-    node.get_clock = lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=1_100_000_000))
-    transform = TransformStamped()
-    transform.transform.translation.x = 2.
-    transform.transform.translation.y = 3.
-    transform.transform.rotation.z = math.sin(math.pi/4)
-    transform.transform.rotation.w = math.cos(math.pi/4)
-    looked_up = []
-    def lookup(target, frame, stamp):
-        looked_up.append((target, frame, stamp.nanoseconds))
-        return transform
-    node.tf_buffer = SimpleNamespace(lookup_transform=lookup)
-    result = node._map_scan()
-    assert looked_up == [("map", "laser", 1_000_000_000)]
-    import pytest
-    assert result["points"][0] == pytest.approx([2., 4.])
-    node.get_clock = lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=2_000_000_000))
-    assert node._map_scan() is None
+    seen = []
+    node._runtime_scan = seen.append
+    message = object()
+    node._scan(message)
+    assert seen == [message]
+    assert not hasattr(node, "scan")
 
 
 def test_late_manual_acquire_is_released_after_switch_to_task():
@@ -149,3 +136,93 @@ def test_bridge_history_preserves_short_lived_stop_and_is_bounded():
     for _ in range(100):
         history.record("gateway", "input_timeout")
     assert len(history.events) == 50 and history.sequence == 103
+
+
+def stream_gateway():
+    import time
+    from operator_gateway.tracks import TaskTrack
+    node = gateway(True)
+    node.runtime_enabled = False
+    node.diagnostic_history = DiagnosticHistory(node._diagnostic_event)
+    node.telemetry_sequence = 0
+    node.control_received = time.monotonic()
+    node.pose = dict(x=1., y=2., yaw=0.)
+    node.active_client = None
+    node._task_telemetry = lambda: {"tasks": {"l": {"phase": "IDLE"}}}
+    node.task_tracks = {"l": TaskTrack()}
+    node._last_tracks = None
+    node.map_data = dict(revision=7, encoding="indexed8_zlib", data_zlib_base64="encoded",
+                         runtime_session_id="runtime-map-session")
+    return node
+
+
+def test_core_telemetry_omits_visual_bulk_and_has_monotonic_stream_sequence():
+    node = stream_gateway()
+    node._telemetry()
+    node._telemetry()
+    packets = [packet for _, packet in node.hub.sent]
+    assert [packet["stream"]["sequence"] for packet in packets] == [1, 2]
+    for packet in packets:
+        assert not {"scan", "task", "diagnostics", "map"} & packet.keys()
+        assert packet["stream"]["session"] == node.diagnostic_history.session
+        assert packet["stream"]["generated_unix"] > 0
+        assert packet["stream"]["generated_monotonic"] > 0
+
+
+def test_diagnostics_send_each_new_event_and_hello_replays_history_map_and_tracks():
+    import json
+    node = stream_gateway()
+    node.diagnostic_history.record("gateway", "first")
+    node.diagnostic_history.record("gateway", "second")
+    emitted = [packet for _, packet in node.hub.sent]
+    assert [len(p["diagnostics"]["events"]) for p in emitted] == [1, 1]
+    assert [p["diagnostics"]["events"][0]["id"] for p in emitted] == [1, 2]
+    node.hub.sent.clear()
+    node._handle_event(("packet", "new-client", json.dumps(dict(op="hello", client="test"))))
+    packets = {packet["type"]: packet for _, packet in node.hub.sent}
+    assert packets["map"]["map"] is node.map_data
+    assert packets["map"]["runtime_session_id"] == "runtime-map-session"
+    assert {"compact_stream_v1", "indexed8_map"} <= set(packets["hello"]["capabilities"])
+    assert [e["id"] for e in packets["diagnostics"]["diagnostics"]["events"]] == [1, 2]
+    assert packets["tracks"]["session_id"] == packets["hello"]["session_id"] == node.diagnostic_history.session
+
+
+def test_tracks_only_broadcast_changed_snapshots():
+    node = stream_gateway()
+    node._publish_tracks()
+    node._publish_tracks()
+    assert len(node.hub.sent) == 1
+    node.task_tracks["l"].update("map", "run", dict(x=1., y=2., stamp=dict(sec=1)), recording=True)
+    node._publish_tracks()
+    assert len(node.hub.sent) == 2
+    assert node.hub.sent[-1][1]["tasks"]["l"]["point_count"] == 1
+
+
+def test_map_callback_defers_all_grid_work_and_commits_revision_with_ready_result():
+    from types import SimpleNamespace
+    node = stream_gateway()
+    node.runtime_enabled = True
+    node.runtime = {"mode": "localization", "session_id": "runtime-new-session"}
+    node.runtime_accept_map = True
+    node.runtime_epoch_ns = 1_000_000_000
+    node.map_revision = 7
+    offered = []
+    result = dict(width=2, height=1, encoding="indexed8_zlib", data_zlib_base64="encoded")
+    pending = [None, result]
+    node.map_stream = SimpleNamespace(offer=lambda message, **kw: offered.append((message, kw)),
+                                     take=lambda: pending.pop(0))
+    # No info/data attributes: the callback must only queue a reference.
+    message = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace(sec=2, nanosec=0)))
+    previous = node.map_data
+    node._map(message)
+    assert offered == [(message, {"frozen": True})]
+    node._publish_map()
+    assert node.map_data is previous and node.map_revision == 7
+    node._publish_map()
+    assert node.map_revision == node.map_data["revision"] == 8
+    assert node.hub.sent[-1][1]["map"] is node.map_data
+    assert node.hub.sent[-1][1]["runtime_session_id"] == node.map_data["runtime_session_id"] == "runtime-new-session"
+    node.map_stream.take = lambda: result
+    node.runtime_accept_map = False
+    node._publish_map()
+    assert node.map_revision == 8  # Never commit a late result while stopping.

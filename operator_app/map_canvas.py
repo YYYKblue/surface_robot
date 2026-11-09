@@ -2,11 +2,11 @@
 import math
 
 try:
-    from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+    from PySide6.QtCore import QPointF, Qt, Signal, QTimer
     from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPolygonF
     from PySide6.QtWidgets import QWidget
 except ImportError:
-    from PyQt5.QtCore import QPointF, QRectF, Qt, pyqtSignal as Signal
+    from PyQt5.QtCore import QPointF, Qt, QTimer, pyqtSignal as Signal
     from PyQt5.QtGui import QColor, QImage, QPainter, QPen, QPolygonF
     from PyQt5.QtWidgets import QWidget
 
@@ -23,6 +23,14 @@ class MapCanvas(QWidget):
         self.overlay_live = False
         self.map_image = None
         self.map_revision = None
+        self._scaled_image = None
+        self._scaled_key = None
+        self._track_cache_key = None
+        self._track_cache_owner = None
+        self._screen_track_cache = []
+        self._paint_timer = QTimer(self)
+        self._paint_timer.setSingleShot(True)
+        self._paint_timer.timeout.connect(self.update)
         self.picking = False
         self.drag_start = None
         self.candidate = None
@@ -36,66 +44,74 @@ class MapCanvas(QWidget):
                        if key in packet}
         if mapping is not None:
             revision = mapping.get("revision")
-            if revision != self.map_revision or self.map_image is None:
-                self.map_image = self._make_map_image(mapping)
+            prepared = packet.get("_map_image")
+            if revision != self.map_revision or self.map_image is None or prepared is not None:
+                self.map_image = prepared if prepared is not None else self._make_map_image(mapping)
                 self.map_revision = revision
+                self._scaled_key = self._track_cache_key = None
                 self.candidate = self.drag_start = None
+                self.telemetry["map"] = mapping
                 self.map_changed.emit()
             self.telemetry["map"] = mapping
         elif "map" in packet:
             self.map_image = None
             self.map_revision = None
+            self._scaled_image = None
+            self._scaled_key = self._track_cache_key = None
             self.telemetry.pop("map", None)
             self.candidate = self.drag_start = None
             self.map_changed.emit()
-        # None explicitly invalidates old TF/scans instead of displaying them forever.
-        self.telemetry.update({key: value for key, value in packet.items() if key != "map"})
-        self.update()
+        # Do not retain legacy scan/expected data in the display.
+        if "pose" in packet:
+            self.telemetry["pose"] = packet["pose"]
+        self._request_update()
+
+    def _request_update(self):
+        # Display updates are coalesced; manual control keeps its own timer.
+        if not self._paint_timer.isActive():
+            self._paint_timer.start(33)
 
     def set_task_overlay(self, task, *, live):
+        previous = self.task_overlay
+        changed = (previous.get("actual_track") is not task.get("actual_track")
+                   or previous.get("map_id") != task.get("map_id")
+                   or previous.get("run_id") != task.get("run_id"))
         self.task_overlay, self.overlay_live = task, live
-        self.update()
+        if changed:
+            self._track_cache_key = None
+            self._request_update()
 
     def _track_layers(self):
-        """Return independent polylines, never close L routes or bridge gaps."""
+        """Actual history only; gaps and distinct runs are never joined."""
         task = self.task_overlay
         frame = (self.telemetry.get("map") or {}).get("frame_id")
-        expected = task.get("expected_track") or {}
         actual = task.get("actual_track") or {}
-        layers = []
-        if (self.overlay_live and expected.get("frame_id") == frame
-                and expected.get("map_id") == task.get("map_id")):
-            layers += [(segment.get("points", []), "#2866cc", True)
-                       for segment in expected.get("cleaning_segments", [])]
-            layers.append((expected.get("navigation_path", []), "#9c49b5", True))
         if (actual.get("frame_id") == frame and actual.get("map_id") == task.get("map_id")
                 and actual.get("run_id") == task.get("run_id")):
-            layers += [(segment, "#00877e", False) for segment in actual.get("segments", [])]
-        return layers
+            return [(segment, "#00877e", False) for segment in actual.get("segments", [])]
+        return []
 
-    def _start_region(self):
-        task = self.task_overlay
-        expected = task.get("expected_track") or {}
-        if (not self.overlay_live or expected.get("frame_id") != (self.telemetry.get("map") or {}).get("frame_id")
-                or expected.get("map_id") != task.get("map_id")):
-            return None
-        return expected.get("start_region")
-
-    def _stop_markers(self):
-        expected = self.task_overlay.get("expected_track") or {}
-        distance = expected.get("front_stop_m")
-        if (not self.overlay_live or expected.get("basis") != "boat_center_stop"
-                or expected.get("frame_id") != (self.telemetry.get("map") or {}).get("frame_id")
-                or expected.get("map_id") != self.task_overlay.get("map_id")
-                or not isinstance(distance, (int, float)) or not math.isfinite(distance) or distance <= 0):
-            return []
-        markers = []
-        for segment in expected.get("cleaning_segments", []):
-            points = segment.get("points") or []
-            if (len(points) >= 2 and len(points[-1]) == 2
-                    and all(isinstance(v, (int, float)) and math.isfinite(v) for v in points[-1])):
-                markers.append((points[-1], distance))
-        return markers
+    def _screen_tracks(self):
+        actual = self.task_overlay.get("actual_track")
+        key = (id(actual), self.map_revision, self.width(), self.height(),
+               self.task_overlay.get("map_id"), self.task_overlay.get("run_id"))
+        if key != self._track_cache_key:
+            polylines = []
+            for points, _, _ in self._track_layers():
+                polyline = QPolygonF()
+                for point in points:
+                    if len(point) == 2 and all(math.isfinite(v) for v in point):
+                        polyline.append(self.map_to_screen(*point))
+                    else:
+                        if len(polyline):
+                            polylines.append(polyline)
+                        polyline = QPolygonF()
+                if len(polyline):
+                    polylines.append(polyline)
+            self._track_cache_key = key
+            self._track_cache_owner = actual
+            self._screen_track_cache = polylines
+        return self._screen_track_cache
 
     @staticmethod
     def _make_map_image(mapping):
@@ -208,58 +224,23 @@ class MapCanvas(QWidget):
         geometry = self._geometry()
         if geometry and self.map_image is not None:
             scale, ox, oy, width, height = geometry
-            target = self.map_image.scaled(round(width*scale), round(height*scale),
-                                           Qt.IgnoreAspectRatio, Qt.FastTransformation)
-            painter.drawImage(round(ox), round(oy-height*scale), target)
-            region = self._start_region()
-            if region:
-                points = region.get("polygon", [])
-                if (len(points) == 4 and all(len(p) == 2 and all(math.isfinite(v) for v in p)
-                                             for p in points)):
-                    painter.setPen(QPen(QColor("#9c49b5"), 2, Qt.DashLine))
-                    painter.setBrush(QColor(156, 73, 181, 30))
-                    painter.drawPolygon(QPolygonF([self.map_to_screen(*p) for p in points]))
-                reference = region.get("reference_wall_point")
-                if reference and len(reference) == 2 and all(math.isfinite(v) for v in reference):
-                    point = self.map_to_screen(*reference)
-                    painter.setPen(QPen(QColor("#9c49b5"), 3))
-                    painter.drawLine(QPointF(point.x()-5, point.y()), QPointF(point.x()+5, point.y()))
-                    painter.drawLine(QPointF(point.x(), point.y()-5), QPointF(point.x(), point.y()+5))
+            scaled_key = (self.map_image.cacheKey(), round(width*scale), round(height*scale))
+            if scaled_key != self._scaled_key:
+                self._scaled_image = self.map_image.scaled(scaled_key[1], scaled_key[2],
+                                                          Qt.IgnoreAspectRatio, Qt.FastTransformation)
+                self._scaled_key = scaled_key
+            painter.drawImage(round(ox), round(oy-height*scale), self._scaled_image)
             painter.setBrush(Qt.NoBrush)
-            for points, color, dashed in self._track_layers():
-                pen = QPen(QColor(color), 2 if dashed else 3)
-                if dashed:
-                    pen.setStyle(Qt.DashLine)
-                painter.setPen(pen)
-                # Invalid coordinates break a line rather than connecting over them.
-                polyline = QPolygonF()
-                for point in points:
-                    if len(point) == 2 and all(math.isfinite(v) for v in point):
-                        polyline.append(self.map_to_screen(*point))
-                    else:
-                        if len(polyline) > 1:
-                            painter.drawPolyline(polyline)
-                        polyline = QPolygonF()
+            painter.setPen(QPen(QColor("#00877e"), 3))
+            for polyline in self._screen_tracks():
                 if len(polyline) > 1:
                     painter.drawPolyline(polyline)
                 elif len(polyline) == 1:
                     painter.drawPoint(polyline[0])
-            painter.setPen(QPen(QColor("#b45b16"), 2))
-            painter.setBrush(QColor("#fff3df"))
-            for endpoint, distance in self._stop_markers():
-                point = self.map_to_screen(*endpoint)
-                painter.drawRect(QRectF(point.x()-4, point.y()-4, 8, 8))
-                painter.drawText(QPointF(point.x()+7, point.y()-7), f"{distance*100:g} cm")
-            scan = self.telemetry.get("scan") or {}
-            if scan.get("frame_id") == "map":
-                painter.setPen(QPen(QColor("#df8b35"), 2))
-                for x, y in scan.get("points", []):
-                    if math.isfinite(x) and math.isfinite(y):
-                        painter.drawPoint(self.map_to_screen(x, y))
             pose = self.telemetry.get("pose")
             if pose:
                 self._arrow(painter, pose, "#00877e")
             if self.candidate:
                 self._arrow(painter, self.candidate, "#9553c6")
         painter.setPen(QPen(QColor("#637783"), 1))
-        painter.drawText(28, 22, "蓝虚线：中心目标 · 橙框：停车点 · 紫框：起始范围 · 绿线：历史轨迹 · 橙点：雷达")
+        painter.drawText(28, 22, "绿色箭头：机器人位置 · 绿线：实际轨迹")
