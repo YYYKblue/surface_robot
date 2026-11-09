@@ -1,6 +1,6 @@
 # f1_pool_cleaning：泳池沿边清洗
 
-文档核对：2026-11-08，源码基线 `0c0e4e2`。本页说明矩形四边任务及共享清洗实现；开放多段直墙任务由 [`f1_l_cleaning`](../f1_l_cleaning/README.md) 配置和适配，使用 `/l_cleaning/*` 接口。
+文档核对：2026-11-09，配置加载修复基线 `9db6798`。本页说明矩形四边任务及共享清洗实现；开放多段直墙任务由 [`f1_l_cleaning`](../f1_l_cleaning/README.md) 配置和适配，使用 `/l_cleaning/*` 接口。
 
 2026-11-08：共享换边增加左转分支：前行出墙端 → 左移至下一边入口 → 左转 → 重新关联墙；原右转动作不变。多段墙链提取见 `open_route.py`，本次未增加相邻转角或船体空间检查。
 
@@ -115,6 +115,24 @@ ros2 service call /pool_cleaning/set_forward_boost std_srvs/srv/SetBool '{data: 
 `f1_interfaces`、`f1_nano_bridge`、`f1_mapping_bringup` 继续独立。
 旧包升级须先按 [迁移说明](MIGRATION.md) 清理旧源码/安装产物并更新自定义参数文件中的节点名。
 实测尺寸与历史雷达视场记录见 [MEASUREMENTS.md](MEASUREMENTS.md)。
+
+## 配置加载与启动预检
+
+标准地图自动任务中，`/pool_controller` 与 `/l_controller` 均应使用 `use_map_tf=true`、`require_localization_ready=true`，按 `map_frame=map`、`base_frame=base_link` 读取 TF，状态中的 `pose_source` 应为 `tf`。两包默认 YAML 都配置了这两个开关；矩形 `pool_cleaning.launch.py` 还以默认值为 `true` 的同名 launch 参数显式传入，开放入口则依赖其 YAML。
+
+| 启动入口 | 控制器配置参数 |
+|---|---|
+| 独立 `pool_bringup.launch.py` / `pool_cleaning.launch.py` | `config:=/绝对路径/配置.yaml`，节点键为 `pool_controller` |
+| 独立 `l_bringup.launch.py` / `l_cleaning.launch.py` | `config:=/绝对路径/配置.yaml`，节点键为 `l_controller` |
+| 网关组合 `operator_bringup.launch.py` / 受管 `operator_mode.launch.py` | `rectangle_config:=...`、`l_config:=...`，分别传给对应控制器 |
+
+网关入口的 `rectangle_config`、`l_config` 未指定或为空时，`operator_bringup` 会解析为对应包安装目录下的默认 `config/pool_cleaning.yaml`、`config/l_cleaning.yaml`；显式路径不存在或指向目录时直接报错。该修复防止外层空参数令控制器跳过整份 YAML；独立入口的参数仍是 `config`，不要混用。`use_map_tf`、`require_localization_ready`、地图及控制阈值等为只读参数，不能用 `ros2 param set` 修改运行中的配置；修改后需重新加载地图或重启对应控制器。
+
+两个任务共用 `PoolController._start_blockers()`，但分别维护 TF 缓存、接收时间和任务状态。预检检查当前任务阶段、时钟、定位状态、位姿接收及源时间有效性；开启实际输出时还检查 bridge 与租约服务。默认 `pose_max_age_sec=0.25`，位姿源时间年龄必须在 `[0, 250 ms)`，距离最近一次接收时间戳前进的新位姿也必须小于 250 ms。重复读取旧 TF 不会刷新接收计时。因此，共享定位显示就绪或矩形 `can_start=true`，都不能代替对 `/l_cleaning/status` 的检查。
+
+带地图自动任务的启动预检不要求有效左墙观测；到达起始范围后才获取墙线。`can_start=true` 表示当前预检通过，实际 `start` 仍会再次预检，并选择起始墙、校验有效起始区间，实际输出还需成功获取租约。矩形与开放路线的候选墙不同，所以预检通过不保证实际启动请求一定成功。
+
+若标准地图任务显示 `pose_source=map_pose`，应先核对配置是否加载及对应 `map_pose` 话题是否有发布者；这与已经选择 TF、但位姿数据过期是不同问题。排查命令、此次配置漏加载故障原因与验证记录见[定位正常但开放任务不能启动](../../DEPLOY_NANO.md#定位正常但开放任务不能启动)。
 
 ## 构建与离线验证
 

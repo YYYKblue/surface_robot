@@ -1,6 +1,6 @@
 # f1_l_cleaning：开放多段直墙清洗
 
-更新：2026-11-08，源码基线 `0c0e4e2`。本包从原“大 L 两段墙”扩展为有方向的开放墙链，支持单条直墙及多次左转、右转。保留包名、`l_controller`、`l_bringup.launch.py`、`/l_cleaning/*` 和协议任务类型 `l`；App 显示“开放多边清洗”。定位与硬件输出继续复用共享组件，默认预览、等待显式 start。
+文档核对：2026-11-09，配置加载修复基线 `9db6798`。本包从原“大 L 两段墙”扩展为有方向的开放墙链，支持单条直墙及多次左转、右转。保留包名、`l_controller`、`l_bringup.launch.py`、`/l_cleaning/*` 和协议任务类型 `l`；App 显示“开放多边清洗”。定位与硬件输出继续复用共享组件，默认预览、等待显式 start。
 
 ## 路线与地图
 
@@ -30,6 +30,16 @@ ros2 run f1_pool_cleaning map_profile "$PWD/maps/lidar_20261026_170703.yaml" --r
 配置文件中的 `route_chain_index` 选择墙链，修改后重启；它是控制器 YAML 参数，不是直接传入 launch 的参数。`route_xy: [x0, y0, x1, y1, ...]` 可覆盖已成功推导的路线，接受两个以上有限点，保持顺序，不自动反向或闭合。调用方必须保证墙在左、水在右；保留重复点、自交、掉头重叠和原有有效清洗区间校验。不能使用 `boundary_xy`，手填路线仍不能绕过地图推导失败。
 
 使用自定义配置时，复制 `config/l_cleaning.yaml` 并修改 `l_controller.ros__parameters.route_chain_index`。独立 `l_bringup.launch.py` / `l_cleaning.launch.py` 通过 `config:=/绝对路径/配置.yaml` 加载；网关组合或受管入口使用 `l_config:=/绝对路径/配置.yaml`。
+
+## 配置加载与启动条件
+
+标准地图自动任务应加载 `config/l_cleaning.yaml` 中的 `use_map_tf: true`、`require_localization_ready: true`，从 `map → base_link` TF 获取位姿，状态报告 `pose_source=tf`。开放任务依靠 YAML 设置这两个开关；矩形入口还会通过 launch 参数显式设置。因此，矩形可启动不能证明开放任务的 YAML 已加载。
+
+网关 `operator_bringup.launch.py` 组合入口及 `operator_mode.launch.py` 受管入口中，`l_config` 未指定或为空时，由 `operator_bringup` 解析为 `f1_l_cleaning` 安装目录的默认 `config/l_cleaning.yaml`；`rectangle_config` 同理。显式配置路径不存在或指向目录时直接报错。此空值回退规则属于网关入口，独立入口仍使用上述 `config` 参数。`use_map_tf`、`require_localization_ready`、`route_chain_index` 和控制阈值等为只读参数，不能用 `ros2 param set` 热修；修改配置后需重新加载地图或重启对应控制器。
+
+`LController` 继承矩形的 `PoolController`，共用启动预检和位姿有效性检查，但两个节点各自维护 TF 缓存、接收时间和任务状态，分别发布 `/l_cleaning/status`、`/pool_cleaning/status`。默认要求位姿源时间年龄及距最近一次接收时间戳前进的新位姿的时间均小于 250 ms；重复读取旧 TF 不刷新接收计时。地图上有船体箭头、共享定位显示就绪，不代表两个控制器都已收到有效位姿。若开放状态显示 `pose_source=map_pose`，应核对参数加载和 `/l_cleaning/map_pose` 发布者，不能直接判断为 TF 上报慢。
+
+`can_start=true` 仅表示当前预检通过。实际 `start` 还会重新检查数据、选择起始墙并检查有效起始区间；开放路线与矩形的候选墙不同，仍可能在此阶段拒绝启动。带地图自动任务启动前不要求已获得左墙观测，到达起始范围后再获取墙线。排查命令、此次故障原因与验证记录见[定位正常但开放任务不能启动](../../DEPLOY_NANO.md#定位正常但开放任务不能启动)。
 
 ## 沿墙与换边动作
 
@@ -90,7 +100,7 @@ ros2 service call /l_cleaning/pause std_srvs/srv/Trigger '{}'
 ros2 service call /l_cleaning/cancel std_srvs/srv/Trigger '{}'
 ```
 
-需要指定首边时，launch 加 `start_policy:=specified default_edge_id:=edge_0`。默认只预览；实际输出仍需 `output_enabled:=true` 及 bridge 的对应许可。本次开发未连接硬件或下发实船动作。
+需要指定首边时，launch 加 `start_policy:=specified default_edge_id:=edge_0`。默认只预览；实际输出仍需 `output_enabled:=true` 及 bridge 的对应许可。
 
 复用已有节点时用 `start_localization:=false` / `start_bridge:=false`；仅清洗入口为 `l_cleaning.launch.py`，也需同一地图。只有一套 bridge、定位和地图发布链。网关组合入口继续兼容 `task_type=l`，独立 bringup 的网关定位前缀为 `/l_cleaning`，组合入口共享 `/f1_localization`。
 

@@ -1,6 +1,6 @@
 # Nano 从零部署 surface_ws
 
-更新：2026-10-31。适用于 Nano 首次部署或已有 `surface_ws` 升级。当前包含 PAVO2 驱动、建图与定位、硬件桥、两种清洗任务及 Qt App 网关。PC 与 Nano 分别构建；本文命令由操作者在目标设备执行。本次雷达封装没有在 Nano 编译、部署或切换服务。已有旧清洗包升级见[清洗包迁移说明](src/f1_pool_cleaning/MIGRATION.md)，雷达旧服务迁移见第 8 节。
+更新：2026-11-09。适用于 Nano 首次部署或已有 `surface_ws` 升级。当前包含 PAVO2 驱动、建图与定位、硬件桥、两种清洗任务及 Qt App 网关。PC 与 Nano 分别构建；下面每节标明执行设备。2026-11-09 控制器配置加载修复已部署到 Nano 并验证，见[故障排查](#定位正常但开放任务不能启动)。这项修复不涉及雷达驱动迁移；雷达旧服务迁移见第 8 节，旧清洗包升级见[清洗包迁移说明](src/f1_pool_cleaning/MIGRATION.md)。
 
 | 项目 | 统一约定 |
 | --- | --- |
@@ -15,7 +15,7 @@
 | 大 L 清洗功能包 | `f1_l_cleaning` |
 | 操作员网关 | `f1_operator_gateway` |
 
-下面每节标明命令在哪台设备执行。PC 和 Nano 分别编译，不传 PC 的生成目录。本说明没有自动连接或修改 Nano。
+PC 和 Nano 分别编译，不传 PC 的生成目录。部署状态以各项验证记录为准，文档中的操作命令不表示全部步骤均已在目标设备执行。
 
 ## 1. Nano：检查系统与 ROS
 
@@ -375,16 +375,76 @@ ros2 launch f1_operator_gateway operator_bringup.launch.py \
 
 该入口默认预览，不会自动 start。已有完整 bringup 时不要再运行它；仅启动网关即可，已有 L 定位使用 `localization_prefix:=/l_cleaning`。两类任务接口不再重映射。完整操作与验收边界见[网关](src/f1_operator_gateway/README.md)和 [App](operator_app/README.md)文档。
 
-### 当前版本升级核对（2026-11-08，`0c0e4e2`）
+### 当前版本升级核对（2026-11-09，`9db6798`）
 
 - `l` 任务已扩展为开放多段墙链，App 显示“开放多边清洗”。同步两个清洗包、网关及整个 Windows App；使用 exe 时重新打包。先运行 `ros2 run f1_pool_cleaning map_profile <现场地图> --json` 核对墙链和边编号，原示例大 L 的两条边现为 `edge_3/edge_4`。默认最长链，其他候选通过 `l_config` 的 `route_chain_index` 选择。
 - 现场自定义 YAML 不会自动获得新默认值。核对 `wall_target_m=0.33`、墙距区间 `0.32–0.36` m、`front_stop_m=0.40`、`brush_percent=50.0`、`side_percent=50.0` 和独立的 `transfer_side_percent=50.0`；感知配置的 `brush_max_compression_m=0.02`。沿墙默认由滚刷推进，主电机提速需在启动前单独启用，实船预期见[矩形验收步骤](src/f1_pool_cleaning/DEPLOY_TEST_NANO.md)。
 - 2026-11-09 显示链路更新需要同步 Nano 网关和整个 Windows `operator_app`，exe 重新打包。App 只显示底图、实时位姿与实际轨迹，网关停止上报显示用雷达点和预期轨迹；地图改为后台压缩，受管定位底图首次加载后冻结，建图默认最多每 2 秒更新一次。实际轨迹与诊断使用独立消息，旧 App 不兼容新版压缩地图。控制器仍使用 `front_stop_m=0.40`、`wall_band_min_m=0.32`、`wall_band_max_m=0.36`；本文更新不表示已执行远端部署。
 - 定位 Lua 当前为 `motion_filter.max_time_seconds=0.3`、`optimize_every_n_nodes=5`；更频繁优化不等于定位就绪，需观察 Nano 负载与定位状态，见[定位调优说明](src/f1_localization/README.md)。
 - 网关新增可补读的停止诊断历史，App 支持日志导出。更换工作空间内服务模板不会自动更新 `/etc/systemd/system/` 中已安装的副本；采用当前校时与恢复策略时，按下节重新安装模板并 `daemon-reload`。
+- 控制器配置加载修复位于 `f1_operator_gateway/launch/operator_bringup.launch.py`。受管模式和直接组合启动均在传入清洗 launch 前解析默认 YAML；无效的显式路径会报错。升级后核对两个控制器的实际参数，不能只看源码 YAML 或 App 的定位提示，详见下节。
 
 发生手动停止或连接异常时，关闭 App 前导出“诊断日志”，并保留同一时段的 `journalctl -u f1-operator.service`。App 内存日志、网关最近 50 条事件、`log/operator_runtime/` 模式子进程日志分别记录不同层次，不会相互替代；时间含义与保留范围见[App 诊断说明](operator_app/README.md#诊断日志)。
 
+
+## 定位正常但开放任务不能启动
+
+App 的“定位已稳定”“雷达正常、位姿正常”来自共享定位状态；“开始清洗”还取决于所选任务的 `can_start`。矩形与开放任务复用同一套控制器启动检查，但由两个独立节点接收 TF、维护位姿缓存和发布任务状态。切换下拉框只切换查看的任务，不会把矩形控制器的位姿传给开放控制器。
+
+标准固定地图配置应为：
+
+| 检查项 | 矩形任务 | 开放多边任务 |
+|---|---|---|
+| 控制器 | `/pool_controller` | `/l_controller` |
+| 状态话题 | `/pool_cleaning/status` | `/l_cleaning/status` |
+| `use_map_tf` | `true` | `true` |
+| `require_localization_ready` | `true` | `true` |
+| 位姿来源 | `map → base_link` TF，状态为 `pose_source=tf` | 同左 |
+
+先确认当前地图支持哪类任务：受管状态 `runtime.task_kinds` 只列出已支持并启动的类型。如果开放任务原因是 `no open wall route; supported boundaries are closed or degenerate`，则地图未提取出有效开放墙链，管理器不会启动 `/l_controller`。这种情况下没有该节点或参数服务是预期行为，应核对地图几何，与下面的 YAML 漏加载故障不同。
+
+两控制器默认 `pose_max_age_sec=0.25`，分别检查位姿源时间戳和距本节点最近一次接收时间戳前进的新位姿的时间；重复读取旧 TF 不刷新接收计时。共享定位默认允许的位姿年龄为 0.5 秒。因此短时更新停顿也可能出现定位尚正常、任务不可启动，但不能仅凭中文提示认定是延迟。
+
+在 **Nano 终端**只读检查当前实例，环境应与开机服务一致：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/nvidia/surface_ws/install/local_setup.bash
+export ROS_DOMAIN_ID=33
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+ros2 param get /pool_controller use_map_tf
+ros2 param get /pool_controller require_localization_ready
+ros2 param get /l_controller use_map_tf
+ros2 param get /l_controller require_localization_ready
+ros2 topic echo /pool_cleaning/status --once
+ros2 topic echo /l_cleaning/status --once
+```
+
+关注状态 JSON 的 `can_start`、`start_blockers`、`pose_source` 和 `phase`。App 悬停启动条件文字可查看原始原因，常见原因含义如下：
+
+| 原始原因 | 含义 |
+|---|---|
+| `pose receive stream stopped` | 控制器没有收到有效位姿，或距最近一次收到时间戳前进的新位姿已超时 |
+| `fresh fixed-map base_link pose required` | 控制器当前没有位姿对象 |
+| `pose stale or future stamped` | 已有位姿，但源时间戳无效、过旧或超前 |
+
+App 将多种 `pose` 原因合并为“位姿数据未就绪”，应结合原始原因区分。预检还包括任务阶段、控制权、定位就绪等条件；自动选墙模式不以墙观测作为 `can_start` 前置条件，真正调用 `start` 时还会选墙和检查可用起始区间。按钮可点击不代表几何选墙或完整清洗一定成功。
+
+### 2026-11-09 空配置路径故障与修复
+
+已确认的故障链为：`operator_mode.launch.py` 的 `rectangle_config`、`l_config` 默认空字符串被嵌套 launch 继承，内层 `DeclareLaunchArgument` 不会用默认路径覆盖已有空值。旧代码将空值继续作为 `config` 传给清洗节点，日志出现 `Parameter file path is not a file: .`，两个清洗 YAML 均被跳过。矩形 launch 另行覆盖了 TF 和定位就绪参数，因而掩盖了问题；开放控制器则使用代码默认的 `false`，等待无人发布的 `/l_cleaning/map_pose`，不能消费已经正常存在的 TF。这次持续不能启动的原因是配置没有加载，不是单纯上报慢。
+
+修复后的 `operator_bringup.launch.py` 在构造当前地图支持的清洗任务前解析配置：
+
+- `rectangle_config` 未指定或为空：使用 `f1_pool_cleaning` 安装目录的 `config/pool_cleaning.yaml`。
+- `l_config` 未指定或为空：使用 `f1_l_cleaning` 安装目录的 `config/l_cleaning.yaml`。
+- 显式非空路径必须是文件，否则报出参数名和路径并中止该次地图启动；保留有效的自定义 YAML。
+
+这条规则适用于受管模式和直接 `operator_bringup`；独立清洗入口的参数名仍是 `config`。`localization_config` 的空值语义没有改变。源码 YAML 内容正确，不代表安装目录及运行实例已使用它，可用 `ros2 pkg prefix f1_pool_cleaning`、`ros2 pkg prefix f1_l_cleaning` 找到当前环境选中的安装前缀，再检查 `share/<包名>/config/`。
+
+`use_map_tf` 与 `require_localization_ready` 是只读参数，不能用 `ros2 param set` 临时修复。部署启动文件或参数改动后，需要在任务停止时通过 App 重新加载地图并按新会话设置初始位姿，或重启对应启动进程，随后重新查询实际参数。仅同步文档、或源文件已与正在运行的修复版本一致时，无需重启当前正常会话。不要通过关闭定位检查或放宽 250 ms 门限掩盖配置缺失。
+
+日志分别查看 `journalctl -u f1-operator.service -n 100 --no-pager` 和工作空间 `log/operator_runtime/<session_id>.log`。本次修复的测试、Nano 参数核验、备份和操作者反馈见[网关验证记录](src/f1_operator_gateway/README.md#控制器配置加载修复验证2026-11-09)。
 
 ## App 建图选图与开机服务
 

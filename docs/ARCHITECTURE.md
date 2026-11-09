@@ -1,6 +1,6 @@
 # 项目架构与代码导读
 
-核对日期：2026-11-08，源码基线 `0c0e4e2`。本文依据当前源码、launch、YAML 与测试整理。操作入口见[根 README](../README.md)，目标机安装见[部署指南](../DEPLOY_NANO.md)。历史验证记录只说明当时的测试结果，不能用来证明当前实船状态。
+核对日期：2026-11-09，源码基线 `9db6798`。本文依据当前源码、launch、YAML 与测试整理。操作入口见[根 README](../README.md)，目标机安装见[部署指南](../DEPLOY_NANO.md)。历史验证记录只说明当时的测试结果，不能用来证明当前实船状态。
 
 ## 1. 项目组成与依赖
 
@@ -59,6 +59,8 @@ flowchart LR
 
 受管入口通过 `runtime.py`、`managed_process.py` 和 `operator_mode.launch.py` 管理“待机／建图／固定地图定位与清洗”。建图和定位互斥，加载地图后重新发布初始位姿。地图导出由 `map_store.py` 保存同名 `.pbstream/.yaml/.pgm`，临时快照和日志的恢复规则见[网关说明](../src/f1_operator_gateway/README.md#地图文件与恢复)。
 
+App 加载地图的启动链为 `operator_system.launch.py → runtime.py → operator_mode.launch.py → operator_bringup.launch.py`，最后启动共享定位及地图支持的清洗控制器；bridge 和网关沿用常驻实例。矩形 `/pool_controller` 与开放多边 `/l_controller` 是独立进程，各自读取 TF、检查反馈并上报任务状态；App 切换任务类型只是选择对应的任务状态和操作接口。
+
 同一机器人仅启动一套 bridge 和地图/定位发布链。默认 launch 的 `output_enabled=false`；`pool_nano` 快捷脚本默认传 `true`，仓库 `f1-operator.service` 模板也设置 `F1_OUTPUT_ENABLED=true`。预览时要在使用的入口明确核对该值。所有入口均等待操作请求，不会仅因启动就自动清洗。
 
 服务模板通过 `wait-operator-clock.py --offline-after 20` 先等 NTP；未同步时再要求合理本地日期和新的 5 秒稳定窗口。运行中桥接检测时钟故障后撤销租约、尽力发中性帧并以 75 退出；受管 launch 关闭，systemd 重新检查时间后启动至无地图待机。该恢复不沿用旧命令或任务，直接 launch 没有 systemd 自动恢复。完整条件与限流见[服务部署](../DEPLOY_NANO.md#app-建图选图与开机服务)。
@@ -72,6 +74,10 @@ flowchart LR
 5. `edge_task_enabled=true` 且传入地图时使用 `AutonomousMission`；无地图的旧任务/测试模式使用 `Mission`，必须自行提供完整几何，不能照搬默认 launch 省略地图。
 
 默认配置不保存历史地图尺寸或 L 坐标。更换地图时更新路径并核对现场 YAML 是否残留旧覆盖；地图几何与船体、刷盘、墙距策略是不同配置来源。控制器主要参数为只读，修改后需要重启对应节点。
+
+`operator_bringup.launch.py` 对将要启动的控制器显式解析配置：`rectangle_config` / `l_config` 为空时，分别使用已安装包中的 `config/pool_cleaning.yaml` / `config/l_cleaning.yaml`；非空路径必须是现存文件，目录或不存在的路径直接报错。此规则适用于 App 受管链和直接启动 `operator_bringup`；`localization_config` 的空值规则未变。2026-11-09 修复了受管父入口的空参数被子 launch 继承、抑制默认路径而跳过控制器 YAML 的问题，不再依赖内层 `DeclareLaunchArgument` 对空值补默认值。
+
+标准两份控制器 YAML 均设置 `use_map_tf=true`、`require_localization_ready=true`，从 `map → base_link` 获取位姿并等待定位就绪。共享定位状态通过不等于两个控制器均可启动：各自还要求位姿源时间戳有效、不在未来，源数据年龄和距最近一次接收新位姿的时间均小于默认 `pose_max_age_sec=0.25` 秒，以及任务阶段、时钟、控制权等条件满足。因此两个任务的 `can_start` 可以不同。定位显示正常但某一任务被禁用时，应查该任务的 `start_blockers` 和实际运行参数，见[定位正常但开放任务不能启动](../DEPLOY_NANO.md#定位正常但开放任务不能启动)。此修复只纠正配置加载，不改变选墙与运动逻辑。
 
 ## 5. 自动任务和停止语义
 

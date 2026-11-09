@@ -1,6 +1,6 @@
 # f1_operator_gateway
 
-更新：2026-11-08，源码基线 `0c0e4e2`。Windows Qt App 的 Nano 侧 WebSocket 入口，提供手动控制、双任务操作、初始位姿、状态转发，以及受管建图、地图保存与选择。模块职责与入口对比见[架构导读](../../docs/ARCHITECTURE.md)。
+更新：2026-11-09，源码基线 `9db6798`。Windows Qt App 的 Nano 侧 WebSocket 入口，提供手动控制、双任务操作、初始位姿、状态转发，以及受管建图、地图保存与选择。模块职责与入口对比见[架构导读](../../docs/ARCHITECTURE.md)。
 
 ## 构建
 
@@ -26,7 +26,7 @@ ros2 launch f1_operator_gateway operator_system.launch.py \
 
 参数：`workspace_root` 必填绝对路径；`map_timezone` 默认 `Asia/Shanghai`；`mapping_resolution` 默认 `0.05` m；可配置 `scan_topic`、`publish_lidar_tf`、`bridge_config`、`rectangle_config`、`l_config`、`localization_config`。`maps/` 不能是符号链接。`workspace_root/maps/.operator-runtime.lock` 防止同工作空间重复运行管理实例。
 
-`rectangle_config`、`l_config` 未指定或为空时，加载对应清洗包安装目录中的默认 YAML；显式指定的配置路径必须是现有文件，否则地图启动失败并报告路径。该规则同时适用于 App 管理模式和直接 `operator_bringup` 启动，避免外层空参数使控制器跳过 YAML。`localization_config` 仍保留原有空值语义。
+`rectangle_config`、`l_config` 未指定或为空时，分别加载 `f1_pool_cleaning/config/pool_cleaning.yaml`、`f1_l_cleaning/config/l_cleaning.yaml`（均从 ROS 选中的包安装目录解析）。对当前地图支持的任务，显式配置路径必须是现有文件，否则地图启动失败并报告参数名和路径。该规则同时适用于 App 管理模式和直接 `operator_bringup` 启动，避免外层空参数使控制器跳过 YAML。`localization_config` 仍保留原有空值语义。标准清洗 YAML 中 `use_map_tf` 和 `require_localization_ready` 均为 `true`；运行时核查及本次故障原因见[部署排查](../../DEPLOY_NANO.md#定位正常但开放任务不能启动)。
 
 Nano 的 `deploy/f1-operator.service` 在启动前通过 `wait-operator-clock.py --offline-after 20` 优先等待 NTP 同步；20 秒后仍未同步则检查离线本地时间，要求日期合理且重新连续稳定 5 秒。离线时间不保证日历准确，脚本不会设置系统时间，目标机应通过 RTC 或已有持久化恢复机制建立时间。时间持续不稳定或日期无效时仍等待，可用 `journalctl -u f1-operator.service -f` 查看原因。运行中时间故障先撤销控制并尽力发送中性输出，再关闭桥接，以退出码 75 触发整个受管 launch 退出；systemd 重新检查时间后恢复为无地图待机，不恢复任务。600 秒内最多启动 5 次，超过限额后需排除故障再 reset-failed/start。服务模板开启串口及运动许可；直接 launch 没有启动检查和 systemd 自动恢复。详见[部署说明](../../DEPLOY_NANO.md#app-建图选图与开机服务)。
 
@@ -214,3 +214,22 @@ colcon test-result --verbose
 - Qt 共 11 个用例，覆盖建图/保存/列表/选图/独立预览、文字输入不触发驾驶、断线重连不重放旧命令及已有清洗流程。Linux offscreen 检查界面布局。
 - 未进行 Windows 原生打包或实船建图精度、Wi-Fi 延迟与运动验收。首次实机部署需要同步 App 与 Nano 后端，并使用新的受管入口。
 - 修改完成后尝试检查 Nano 雷达：`192.168.1.188:22` 重试后可连通，但 `nvidia` 的现有 SSH 认证失败；未读取目标机服务配置或扫描数据，也未修改/重启目标机服务。雷达开机自启与实时扫描状态仍待可用登录方式后核验。
+
+### 控制器配置加载修复验证（2026-11-09）
+
+本次修复对应源码 `9db6798`。修复前已在 Nano 确认 `/l_controller` 的 `use_map_tf=false`、`require_localization_ready=false`，启动日志提示参数文件 `.` 无效；本地用真实嵌套 launch 上下文复现了空参数覆盖默认配置路径的问题。
+
+- 新增 `test/test_launch_config.py` 并注册到 CMake 测试：本地 8 项通过，覆盖受管/直接组合入口、默认 YAML、TF 与定位就绪参数、自定义 YAML 保留、缺失路径和目录拒绝。用修复前代码运行同组测试为 5 失败、3 通过。该组只解析 launch 和参数，不启动 ROS 节点或硬件。
+- 本地既有 `test/test_bringup.py` 两项集成测试通过，使用隔离域和 localhost DDS，硬件输出关闭。开发机缺少的 `websockets` 从 Nano 复制到 `/tmp/nano-launch-config-repair/test-deps` 后通过 `PYTHONPATH` 使用，未修改系统 Python。Nano 同样运行新增配置测试，8 项通过。这些是修复时的结果，本轮文档更新未重复运行。
+- 已备份并同步启动修复、测试注册和测试文件到 `/home/nvidia/surface_ws`。修复部署备份为 `backups/launch-config-fix-20261109-519932b1/`，包含变更清单及 `validation_before.json`、`validation_after.json`、`final_parameters.json`。
+- 在任务空闲、桥无控制者且输出中性时，通过网关重新加载同一张 `20261108_190209` 地图，并恢复重载前的实时初始位姿；主服务和串口桥未重启。两个控制器实际加载了各自 YAML，`use_map_tf=true`、`require_localization_ready=true`、`pose_source=tf`；矩形 39 项、开放任务 41 项 YAML 参数核对一致，仅 `output_enabled` 按服务配置显式覆盖。
+- 重载后连续 31 帧遥测（超过 3 秒）中，两任务均为 `IDLE`、`can_start=true`、`start_blockers=[]`，定位就绪。该次运行日志为 `log/operator_runtime/f16b7ba7c78149fc955fc446d04889c9.log`，未再出现参数文件路径警告。验证过程未发送清洗启动或运动指令。
+- 修复后操作者反馈“目前测试正常”。该反馈确认现场使用恢复正常；未提供具体任务次数、全程轨迹或覆盖报告，不据此扩展为完整清洗、换边及避障验收。
+
+复查启动配置解析可在已构建并加载 ROS 环境的工作空间执行：
+
+```bash
+python3 -m pytest -q src/f1_operator_gateway/test/test_launch_config.py
+```
+
+同日文档同步前再次只读核查，现场已切换到地图 `1109new`、会话 `d0d98cc294e546868600eccb7fd3e883`。该地图只支持矩形任务，矩形控制器两个定位参数均为 `true`，定位就绪，连续 10 帧遥测中矩形任务为 `CANCELLED` 且 `can_start=true`。开放任务未运行的原因是地图没有有效开放墙链，不是配置故障复发；此次同步保留该现场会话，不为重现旧验证而重新加载地图。
