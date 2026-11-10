@@ -20,6 +20,10 @@ except ImportError:
 class SocketWorker(QThread):
     message = Signal(dict)
     status = Signal(str)
+    manual_expired = Signal()
+
+    MANUAL_PERIOD = .05
+    MANUAL_TTL = .25
 
     def __init__(self, url, *, mock=False, parent=None):
         super().__init__(parent)
@@ -29,6 +33,17 @@ class SocketWorker(QThread):
         self.latest_manual = None
         self.latest_manual_at = 0.
         self.manual_generation = 0
+        self.manual_intent = None
+        self.manual_intent_at = 0.
+        self.manual_next_at = 0.
+        self._manual_intent_expired = False
+        self._manual_session_enabled = False
+        self.connection_generation = 0
+        self._connected = False
+        self._active_socket = None
+        self._sender_stopped = None
+        self._wire_manual_sequence = 0
+        self.send_wake = threading.Event()
         self.queue_lock = threading.Lock()
         self.stop_requested = threading.Event()
         self.incoming_lock = threading.Lock()
@@ -40,45 +55,116 @@ class SocketWorker(QThread):
         self.map_runtime_session = None
         self.map_decoder = MapDecoder(self._queue_incoming, self.status.emit)
 
+    def _cancel_manual_locked(self):
+        self.latest_manual = self.manual_intent = None
+        self.manual_generation += 1
+
+    def clear_manual_intent(self):
+        """Invalidate both pending and extracted movement; keep an expiry latched."""
+        with self.queue_lock:
+            self._cancel_manual_locked()
+        self.send_wake.set()
+
+    @property
+    def manual_intent_expired(self):
+        with self.queue_lock:
+            return self._manual_intent_expired
+
+    def acknowledge_manual_expiry(self):
+        """GUI calls this only after clearing keys, direction and auxiliaries."""
+        with self.queue_lock:
+            self._cancel_manual_locked()
+            self._manual_intent_expired = False
+
+    def activate_manual_session(self, generation):
+        """Only a hello consumed by the GUI can enable this connection's intent."""
+        with self.queue_lock:
+            if (not self._connected or type(generation) is not int
+                    or generation != self.connection_generation):
+                return False
+            self._cancel_manual_locked()
+            self._manual_session_enabled = True
+            return True
+
+    def _expire_manual_locked(self, now):
+        if self.manual_intent is None or now - self.manual_intent_at < self.MANUAL_TTL:
+            return False
+        self._cancel_manual_locked()
+        self._manual_intent_expired = True
+        self.urgent_stop = dict(op="manual_stop", reason="gui_input_expired")
+        return True
+
+    def update_manual_intent(self, packet):
+        """Refresh GUI intent, not the send cadence. A stalled GUI cannot rearm it."""
+        now = time.monotonic()
+        packet = dict(packet)
+        packet.pop("seq", None)  # The sender owns increasing on-wire input sequences.
+        with self.queue_lock:
+            expired = self._expire_manual_locked(now)
+            accepted = (self._connected and self._manual_session_enabled
+                        and not self._manual_intent_expired and not self.stop_requested.is_set())
+            if accepted:
+                if packet != self.manual_intent:
+                    self._cancel_manual_locked()
+                    self.manual_next_at = now
+                self.manual_intent = packet
+                self.manual_intent_at = now
+        if expired:
+            self.manual_expired.emit()
+        self.send_wake.set()
+        return accepted
+
     def send_packet(self, packet):
+        rejected = False
         with self.queue_lock:
             if packet.get("op") == "manual_stop":
-                # A full operation queue must never reject the manual stop or
-                # leave an older movement intent eligible for transmission.
-                self.urgent_stop = packet
-                self.latest_manual = None
-                self.manual_generation += 1
+                # Stop has reserved capacity and invalidates extracted movement.
+                self.urgent_stop = dict(packet)
+                self._cancel_manual_locked()
             elif packet.get("op") == "manual_input":
-                self.latest_manual = packet
+                # One-shot compatibility path; GUI uses update_manual_intent.
+                self._cancel_manual_locked()
+                self.latest_manual = dict(packet)
                 self.latest_manual_at = time.monotonic()
             else:
                 if len(self.commands) >= 32:
-                    self.status.emit("操作队列已满，请等待响应")
-                    return False
-                self.commands.append(packet)
-                # Never replay manual intent queued before a discrete operation.
-                self.latest_manual = None
-                self.manual_generation += 1
+                    rejected = True
+                else:
+                    self.commands.append(dict(packet))
+                    self._cancel_manual_locked()
+        if rejected:
+            # GUI slots can immediately cancel intent and reacquire queue_lock.
+            self.status.emit("操作队列已满，请等待响应")
+            return False
+        self.send_wake.set()
         return True
 
     def _take_outgoing(self, *, timed=False):
+        now = time.monotonic()
         with self.queue_lock:
+            expired = self._expire_manual_locked(now)
             packets = [(self.urgent_stop, None, None)] if self.urgent_stop is not None else []
             self.urgent_stop = None
             packets.extend((packet, None, None) for packet in self.commands)
             self.commands.clear()
             if self.latest_manual is not None:
-                # A stalled receiver must not revive an old movement intent.
-                if time.monotonic() - self.latest_manual_at < .25:
+                if now - self.latest_manual_at < self.MANUAL_TTL:
                     packets.append((self.latest_manual, self.latest_manual_at, self.manual_generation))
                 self.latest_manual = None
-            return packets if timed else [packet for packet, _, _ in packets]
+            if self.manual_intent is not None and now >= self.manual_next_at:
+                packets.append((dict(self.manual_intent), self.manual_intent_at, self.manual_generation))
+                # Never catch up missed ticks by bursting old commands.
+                self.manual_next_at = now + self.MANUAL_PERIOD
+        if expired:
+            self.manual_expired.emit()
+        return packets if timed else [packet for packet, _, _ in packets]
 
     def _receive(self, packet, *, received_at=None, wire_bytes=None, parse_ms=None):
         """Keep large Python objects out of Qt's queued signal delivery."""
         if not isinstance(packet, dict):
             raise ValueError("网关消息必须是对象")
         packet = dict(packet)
+        packet["_connection_generation"] = self.connection_generation
         packet["_received_monotonic"] = time.monotonic() if received_at is None else received_at
         packet["_transport"] = dict(wire_bytes=wire_bytes, parse_ms=parse_ms)
         with self.incoming_lock:
@@ -149,14 +235,137 @@ class SocketWorker(QThread):
             # Replies already received remain deliverable after disconnect.
             # A posted Qt wakeup stays armed until take_incoming consumes it.
 
+    def _begin_connection(self, ws):
+        with self.queue_lock:
+            self.connection_generation += 1
+            self._connected = True
+            self._active_socket = ws
+            self._manual_session_enabled = False
+            self._manual_intent_expired = False
+            self.commands.clear()
+            self.urgent_stop = None
+            self._cancel_manual_locked()
+            return self.connection_generation
+
+    def _end_connection(self):
+        with self.queue_lock:
+            self._connected = False
+            self._active_socket = None
+            self._sender_stopped = None
+            self._manual_session_enabled = False
+            self._manual_intent_expired = False
+            self.commands.clear()
+            self.urgent_stop = None
+            self._cancel_manual_locked()
+
+    @staticmethod
+    def _abort_socket(ws):
+        # shutdown wakes a recv waiting for the rest of a slow/partial frame.
+        if ws is None:
+            return
+        try:
+            ws.abort()
+        except (AttributeError, OSError):
+            try:
+                import socket
+                ws.sock.shutdown(socket.SHUT_RDWR)
+            except (AttributeError, OSError):
+                pass
+
     def close(self):
         self.stop_requested.set()
+        self.send_wake.set()
+        with self.queue_lock:
+            ws, stopped = self._active_socket, self._sender_stopped
+        # Give the sole sender a short chance to send the queued explicit stop.
+        # Then interrupt even a sender/receiver stuck in a partial socket call.
+        if stopped is None or not stopped.wait(.1):
+            self._abort_socket(ws)
         self.map_decoder.close()
+
+    def _sender_wait(self):
+        with self.queue_lock:
+            if self.urgent_stop is not None or self.commands or self.latest_manual is not None:
+                return 0.
+            if self.manual_intent is None:
+                return self.MANUAL_PERIOD
+            due = min(self.manual_next_at, self.manual_intent_at + self.MANUAL_TTL)
+        return max(0., min(self.MANUAL_PERIOD, due - time.monotonic()))
+
+    def _sender_loop(self, ws, done, errors):
+        try:
+            while not done.is_set():
+                self.send_wake.clear()
+                if self.stop_requested.is_set():
+                    self._flush_urgent_stop(ws)
+                    self._send_now(ws, dict(op="manual_stop", reason="app_closed"))
+                    return
+                self._flush(ws)
+                self.send_wake.wait(self._sender_wait())
+        except Exception as error:
+            errors.append(error)
+        finally:
+            done.set()
+            self._abort_socket(ws)
+
+    def _run_connection(self, ws, websocket):
+        done = threading.Event()
+        stopped = threading.Event()
+        errors = []
+        with self.queue_lock:
+            self._sender_stopped = stopped
+
+        def send():
+            try:
+                self._sender_loop(ws, done, errors)
+            finally:
+                stopped.set()
+
+        sender = threading.Thread(target=send, name="operator-send", daemon=True)
+        sender.start()
+        try:
+            while not self.stop_requested.is_set() and not done.is_set():
+                try:
+                    raw = ws.recv()
+                except websocket.WebSocketTimeoutException:
+                    continue
+                if not raw:
+                    raise ConnectionError("网关已关闭连接")
+                received_at = time.monotonic()
+                try:
+                    packet = json.loads(raw)
+                    parse_ms = round((time.monotonic() - received_at) * 1000, 2)
+                    self._receive(packet, received_at=received_at,
+                                  wire_bytes=len(raw.encode("utf-8") if isinstance(raw, str) else raw),
+                                  parse_ms=parse_ms)
+                except (TypeError, ValueError):
+                    self.status.emit("网关发送了无效数据")
+            if errors:
+                raise errors[0]
+        except Exception:
+            if errors:
+                raise errors[0]
+            raise
+        finally:
+            if self.stop_requested.is_set() and not done.is_set():
+                # The receiver may notice close before the sender wakes. Let the
+                # sender attempt the explicit stop before aborting its socket.
+                self.send_wake.set()
+                stopped.wait(.1)
+            done.set()
+            self.send_wake.set()
+            self._abort_socket(ws)
+            # Abort bounds the network call. No sender survives into a reconnect.
+            sender.join()
 
     def run(self):
         if self.mock:
+            self._begin_connection(None)
             self.status.emit("模拟模式")
-            self._mock_loop()
+            try:
+                self._mock_loop()
+            finally:
+                self._end_connection()
             return
         try:
             import websocket
@@ -168,38 +377,20 @@ class SocketWorker(QThread):
             try:
                 ws = websocket.create_connection(self.url, timeout=.5, enable_multithread=True)
                 ws.settimeout(.05)
-                self.status.emit("已连接")
+                self._begin_connection(ws)
+                if self.stop_requested.is_set():
+                    break
+                # Handshake precedes the sole application sender's lifetime.
                 self._send_now(ws, {"op": "hello", "client": "f1-operator-qt", "version": 1})
-                while not self.stop_requested.is_set():
-                    self._flush(ws)
-                    try:
-                        raw = ws.recv()
-                    except websocket.WebSocketTimeoutException:
-                        continue
-                    if not raw:
-                        raise ConnectionError("网关已关闭连接")
-                    received_at = time.monotonic()
-                    try:
-                        packet = json.loads(raw)
-                        parse_ms = round((time.monotonic() - received_at) * 1000, 2)
-                        self._receive(packet, received_at=received_at,
-                                      wire_bytes=len(raw.encode("utf-8") if isinstance(raw, str) else raw),
-                                      parse_ms=parse_ms)
-                    except (TypeError, ValueError):
-                        self.status.emit("网关发送了无效数据")
+                self.status.emit("已连接")
+                self._run_connection(ws, websocket)
             except Exception as error:
                 self._reset_incoming()
-                self.status.emit("连接失败：" + str(error) + "；正在重连")
+                if not self.stop_requested.is_set():
+                    self.status.emit("连接失败：" + str(error) + "；正在重连")
             finally:
-                with self.queue_lock:
-                    self.commands.clear()
-                    self.urgent_stop = None
-                    self.latest_manual = None
+                self._end_connection()
                 if ws is not None:
-                    try:
-                        self._send_now(ws, {"op": "manual_stop", "reason": "app_closed"})
-                    except Exception:
-                        pass
                     ws.close(timeout=.2)
             self.stop_requested.wait(.7)
 
@@ -209,7 +400,7 @@ class SocketWorker(QThread):
             if generated is not None:
                 with self.queue_lock:
                     invalidated = generation != self.manual_generation
-                if invalidated or time.monotonic() - generated >= .25:
+                if invalidated or time.monotonic() - generated >= self.MANUAL_TTL:
                     continue
             self._send_now(ws, packet)
         self._flush_urgent_stop(ws)
@@ -222,8 +413,11 @@ class SocketWorker(QThread):
         if packet is not None:
             self._send_now(ws, packet)
 
-    @staticmethod
-    def _send_now(ws, packet):
+    def _send_now(self, ws, packet):
+        if packet.get("op") == "manual_input":
+            with self.queue_lock:
+                self._wire_manual_sequence += 1
+                packet = dict(packet, seq=self._wire_manual_sequence)
         ws.send(json.dumps(packet, ensure_ascii=False, separators=(",", ":")))
 
     def _mock_loop(self):

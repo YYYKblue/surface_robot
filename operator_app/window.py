@@ -39,6 +39,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.brush, self.thrust = False, False
         self.brush_percent, self.thrust_percent = 25, 25
         self._pressed_keys = set()
+        self._clearing_manual = False
         self.last_telemetry_at = 0.
         self.telemetry = {}
         self._processing_incoming = False
@@ -66,8 +67,10 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self._build()
         self.worker.message.connect(self._message)
         self.worker.status.connect(self._status)
+        self.worker.manual_expired.connect(self._manual_intent_expired)
         self.worker.start()
         self.send_timer = QTimer(self)
+        # GUI intent/liveness only; the transport owns the 20 Hz wire cadence.
         self.send_timer.timeout.connect(self._send_input)
         self.send_timer.start(50)
         self.state_timer = QTimer(self)
@@ -139,7 +142,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
             self.speed_buttons[value] = button
             if value == 25: button.setChecked(True)
         box.addLayout(speeds)
-        box.addWidget(QLabel("驱动轮组")); self.mode_combo = QComboBox(); self.mode_combo.addItems(["前轮", "四轮", "后轮"]); self.mode_combo.currentTextChanged.connect(lambda x: setattr(self, "mode", {"前轮":"FRONT", "四轮":"BOTH", "后轮":"BACK"}[x])); box.addWidget(self.mode_combo)
+        box.addWidget(QLabel("驱动轮组")); self.mode_combo = QComboBox(); self.mode_combo.addItems(["前轮", "四轮", "后轮"]); self.mode_combo.currentTextChanged.connect(self._set_mode); box.addWidget(self.mode_combo)
         grid = QGridLayout(); self.drive_buttons = {}
         for row, col, label, direction in ((0,1,"↑ W","FORWARD"),(1,0,"← A","LEFT"),(1,1,"停","STOP"),(1,2,"D →","RIGHT"),(2,1,"↓ S","REVERSE")):
             button = QPushButton(label); self.drive_buttons[direction] = button; grid.addWidget(button,row,col); button.pressed.connect(lambda d=direction: self._set_direction(d)); button.released.connect(lambda: self._set_direction("STOP"))
@@ -151,7 +154,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.brush_button.setCheckable(True)
         self.brush_button.toggled.connect(self._toggle_brush)
         self.brush_value = self._make_aux_input()
-        self.brush_value.valueChanged.connect(lambda value: setattr(self, "brush_percent", value))
+        self.brush_value.valueChanged.connect(lambda value: self._set_aux_percent("brush", value))
         brush_row.addWidget(self.brush_button, 1); brush_row.addWidget(self.brush_value)
         box.addLayout(brush_row)
         thrust_row = QHBoxLayout()
@@ -159,7 +162,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.thrust_button.setCheckable(True)
         self.thrust_button.toggled.connect(self._toggle_thrust)
         self.thrust_value = self._make_aux_input()
-        self.thrust_value.valueChanged.connect(lambda value: setattr(self, "thrust_percent", value))
+        self.thrust_value.valueChanged.connect(lambda value: self._set_aux_percent("thrust", value))
         thrust_row.addWidget(self.thrust_button, 1); thrust_row.addWidget(self.thrust_value)
         box.addLayout(thrust_row)
 
@@ -175,10 +178,12 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
     def _toggle_brush(self, enabled):
         self.brush = enabled
         self.brush_button.setText("滚刷：开启" if enabled else "滚刷：关闭")
+        self._submit_manual_intent()
 
     def _toggle_thrust(self, enabled):
         self.thrust = enabled
         self.thrust_button.setText("第五电推：开启" if enabled else "第五电推：关闭")
+        self._submit_manual_intent()
 
     def _build_task(self, parent):
         box = QVBoxLayout(parent); box.setContentsMargins(4, 8, 4, 8)
@@ -319,9 +324,12 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
                                 else "手动控制 · 网关自动管理会话")
         if not fresh:
             self.diagnostic_summary.setText("遥测未收到或已过期；先前桥状态不能代表当前状态")
-        if locked and not self.manual_locked:
-            self._clear_manual()
+        was_locked = self.manual_locked
         self.manual_locked = locked
+        if locked:
+            self.worker.clear_manual_intent()
+        if locked and not was_locked:
+            self._clear_manual()
         # Qt otherwise moves focus from a disabled button into the next spinbox,
         # turning a temporary stale-data lock into a persistent text-input lock.
         disabling = list(self.drive_buttons.values()) + [self.brush_button, self.thrust_button]
@@ -461,9 +469,20 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.speed = value
         for speed, button in self.speed_buttons.items():
             button.setChecked(speed == value)
+        self._submit_manual_intent()
+
+    def _set_mode(self, text):
+        self.mode = {"前轮": "FRONT", "四轮": "BOTH", "后轮": "BACK"}[text]
+        self._submit_manual_intent()
+
+    def _set_aux_percent(self, kind, value):
+        setattr(self, kind + "_percent", value)
+        self._submit_manual_intent()
+
     def _set_direction(self, direction):
         if not self.manual_locked:
             self.direction = direction
+            self._submit_manual_intent()
     def _packet(self, op, **fields):
         self.seq += 1; return {"op": op, "seq": self.seq, **fields}
     def _send_input(self):
@@ -471,23 +490,53 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         if self._last_send_tick is not None:
             gap_ms = (now - self._last_send_tick) * 1000
             self._log_change("send_delay", gap_ms >= 200, "App",
-                             "手动发送定时器延迟" if gap_ms >= 200 else "手动发送定时器正常",
+                             "手动意图刷新定时器延迟" if gap_ms >= 200 else "手动意图刷新定时器正常",
                              {"interval_ms": round(gap_ms, 1), "expected_ms": 50})
         self._last_send_tick = now
-        if self.manual_locked:
+        self._submit_manual_intent()
+
+    def _submit_manual_intent(self):
+        # All Qt state is read on the GUI thread. The sender only sees a copy.
+        if self._clearing_manual:
             return
-        self.worker.send_packet(self._packet("manual_input", direction=self.direction,
-                                            speed_percent=self.speed, mode=self.mode,
-                                            brush_enabled=self.brush,
-                                            brush_percent=self.brush_percent if self.brush else 0,
-                                            thrust_enabled=self.thrust,
-                                            thrust_percent=self.thrust_percent if self.thrust else 0))
+        fresh = bool(self.last_telemetry_at) and time.monotonic() - self.last_telemetry_at < .8
+        if self.manual_locked or not fresh:
+            # Clear the GUI copy too: a telemetry recovery arriving before the
+            # 100 ms controls timer must not restore a previously held action.
+            self._clear_manual()
+            return
+        accepted = self.worker.update_manual_intent(dict(
+            op="manual_input", direction=self.direction,
+            speed_percent=self.speed, mode=self.mode,
+            brush_enabled=self.brush,
+            brush_percent=self.brush_percent if self.brush else 0,
+            thrust_enabled=self.thrust,
+            thrust_percent=self.thrust_percent if self.thrust else 0))
+        if not accepted:
+            if self.worker.manual_intent_expired:
+                self._manual_intent_expired()
+            else:
+                # A reconnect must not retain a held action awaiting handshake.
+                self._clear_manual()
+
+    def _manual_intent_expired(self):
+        # A queued signal from a retired connection may arrive after reconnect.
+        if not self.worker.manual_intent_expired:
+            return
+        self._stop("gui_input_expired")
+        self.worker.acknowledge_manual_expiry()
+
     def _clear_manual(self):
-        self.direction = "STOP"
-        self._pressed_keys.clear()
-        self.brush_button.setChecked(False)
-        self.thrust_button.setChecked(False)
-        self.brush = self.thrust = False
+        self.worker.clear_manual_intent()
+        self._clearing_manual = True
+        try:
+            self.direction = "STOP"
+            self._pressed_keys.clear()
+            self.brush_button.setChecked(False)
+            self.thrust_button.setChecked(False)
+            self.brush = self.thrust = False
+        finally:
+            self._clearing_manual = False
 
     def _stop(self, reason):
         self._log("App", reason, {"direction": self.direction, "brush": self.brush, "thrust": self.thrust})
@@ -513,11 +562,12 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self._refresh_controls()
 
     def _refresh_key_direction(self):
+        self.direction = "STOP"
         for key in (Qt.Key_W, Qt.Key_S, Qt.Key_A, Qt.Key_D):
             if key in self._pressed_keys:
                 self.direction = self._key_directions[key]
-                return
-        self.direction = "STOP"
+                break
+        self._submit_manual_intent()
 
     def _accept_gateway_session(self, session):
         if not session or session == self._gateway_session:
@@ -592,6 +642,8 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         return result
 
     def eventFilter(self, obj, event):
+        if event.type() == QEvent.TouchCancel and hasattr(self, "brush_button"):
+            self._stop("touch_cancelled")
         if event.type() == QEvent.FocusIn and isinstance(obj, (QLineEdit, QAbstractSpinBox)) and hasattr(self, "brush_button"):
             self._stop("text_input")
         if event.type() == QEvent.WindowDeactivate and obj is self:
@@ -601,6 +653,9 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
                 return super().eventFilter(obj, event)
             key = event.key()
             if key in self._key_directions:
+                # Queued auto-repeat events must not revive an expired hold.
+                if event.isAutoRepeat():
+                    return True
                 if self.manual_locked:
                     return True
                 if event.type() == QEvent.KeyPress:
@@ -614,6 +669,10 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
                 return True
         return super().eventFilter(obj, event)
     def _message(self, packet):
+        generation = packet.get("_connection_generation")
+        if (packet.get("type") in ("hello", "telemetry", "tracks", "map")
+                and generation is not None and generation != self.worker.connection_generation):
+            return
         if packet.get("type") == "incoming_ready":
             self._processing_incoming = True
             try:
@@ -636,8 +695,15 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
             self._refresh_controls()
             return
         if packet.get("type") == "hello":
+            if packet.get("session_id") in self._retired_gateway_sessions:
+                return
+            self._clear_manual()
+            activated = self.worker.activate_manual_session(generation)
+            if generation is not None and not activated:
+                return
             if not self._accept_gateway_session(packet.get("session_id")):
                 return
+            self.last_telemetry_at = 0.
             self.client_id = packet.get("client_id")
             self.capabilities = set(packet.get("capabilities", []))
             self._log("连接", "网关握手完成", {"diagnostic_history": "diagnostic_history" in self.capabilities})

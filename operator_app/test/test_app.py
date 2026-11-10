@@ -404,7 +404,7 @@ def test_diagnostics_old_gateway_and_delayed_send_timer(app, monkeypatch):
         assert window.log_view.toPlainText().count("(CTRL timeout)") == 1
         window._last_send_tick = time.monotonic() - .35
         window._send_input()
-        assert "手动发送定时器延迟" in window.log_view.toPlainText()
+        assert "手动意图刷新定时器延迟" in window.log_view.toPlainText()
         window.last_telemetry_at = time.monotonic() - 1
         window._refresh_controls()
         assert "手动按钮已禁用" in window.log_view.toPlainText()

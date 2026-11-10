@@ -20,6 +20,8 @@ REASONS = {
     "text_input": "输入框获得焦点，停止手动输出",
     "window_deactivated": "窗口失去激活，停止手动输出",
     "window_closed": "App 窗口关闭",
+    "gui_input_expired": "界面操作意图超过 250 ms 未更新，已停止手动输出",
+    "diagnostics_export": "导出日志前停止手动输出",
     "button": "点击停止手动输出",
     "keyboard": "按空格停止手动输出",
     "automatic_task_active": "自动任务占用控制",
@@ -99,6 +101,9 @@ class DiagnosticPanel:
         self._log_dialog.raise_()
 
     def _export_diagnostics(self):
+        # Native save dialogs may block GUI timers. Revoke held output before
+        # entering the dialog; the independent sender can deliver this stop.
+        self._stop("diagnostics_export")
         filename, _ = QFileDialog.getSaveFileName(
             self, "导出诊断日志", datetime.now().strftime("F1-diagnostics-%Y%m%d-%H%M%S.txt"),
             "文本日志 (*.txt)")
