@@ -23,7 +23,12 @@ class Lease:
         self.subscription = node.create_subscription(ControlState, "/f1/control_state", self._bridge, 5)
 
     def _bridge(self, msg):
+        previous = self.bridge
         self.bridge, self.received = msg, time.monotonic()
+        if self.node.mission.pause_context and (
+                not msg.connected or msg.source != "NANO" or not msg.armed or msg.result != "OK"
+                or (previous and (msg.connection_id, msg.epoch) != (previous.connection_id, previous.epoch))):
+            self.node._halt("bridge changed during pause; cancel required")
         if self.token or self.pending is not None:
             error = self.error(acquiring=self.pending is not None)
             if error:
@@ -53,7 +58,7 @@ class Lease:
             return "bridge revoked lease"
         return ""
 
-    def begin(self):
+    def begin(self, resuming=False):
         error = self.error(acquiring=True)
         if error or not self.acquire.service_is_ready():
             return False, error or "bridge acquire service unavailable"
@@ -61,17 +66,20 @@ class Lease:
         self.generation += 1
         generation = self.generation
         connection, epoch = self.bridge.connection_id, self.bridge.epoch
-        self.node.mission.halt("waiting for bridge lease", "ACQUIRING")
+        if resuming:
+            self.node.mission.phase = "ACQUIRING"
+        else:
+            self.node.mission.halt("waiting for bridge lease", "ACQUIRING")
         self.pending_at = time.monotonic()
         self.pending = self.acquire.call_async(AcquireControl.Request(owner=self.owner))
-        self.pending.add_done_callback(lambda f: self._acquired(f, generation, connection, epoch))
+        self.pending.add_done_callback(lambda f: self._acquired(f, generation, connection, epoch, resuming))
         return True, "acquire requested; inspect status for actual start"
 
     def _release(self, token):
         if token and self.release.service_is_ready():
             self.release.call_async(ReleaseControl.Request(token=token))
 
-    def _acquired(self, future, generation, connection, epoch):
+    def _acquired(self, future, generation, connection, epoch, resuming=False):
         try:
             reply = future.result()
         except Exception as error:
@@ -92,12 +100,17 @@ class Lease:
         error = (self.node._localization_error() or self.node._stream_error()
                  or ("clock fault latched" if self.node.clock_fault else ""))
         # Revalidate observations after async acquisition; never reuse pre-lease effort.
-        self.node.mission.halt("lease acquired", "IDLE")
+        if not resuming:
+            self.node.mission.halt("lease acquired", "IDLE")
+        elif self.node._pause_identity() != getattr(self.node, "paused_identity", None):
+            error = "localization/perception changed during resume"
         # Explicit start already required a valid wall. If a fresh fit is lost
         # during acquisition, enter bounded neutral recovery instead of latching
         # PAUSED before the first actuator command.
         if error:
             ok, reason = False, error
+        elif resuming:
+            ok, reason = self.node.mission.resume(self.node._feedback(), now)
         elif hasattr(self.node.mission, "resume_after_acquire"):
             # Keep the ray-selected wall and its reference point locked across
             # async acquisition, even if the boat drifted before the reply.

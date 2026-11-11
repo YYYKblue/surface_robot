@@ -170,3 +170,31 @@ def test_load_invalid_map_keeps_existing_mode_and_discard_requires_confirmation(
     assert not node.sent[-1]['success']
     node._runtime_request('app', request('load', name='missing', request_id='load2'))
     assert not node.sent[-1]['success'] and node.runtime['mode'] == 'mapping'
+
+
+def test_delete_guard_and_success(node):
+    triplet(node.map_store.root, 'old')
+    node.runtime['current_map'] = 'old'
+    node._runtime_request('app', request('delete', name='old', confirm=True))
+    assert not node.sent[-1]['success'] and node.map_store.path('old').exists()
+    node.runtime['current_map'] = ''
+    node._runtime_request('app', request('delete', request_id='missing-confirm', name='old'))
+    assert not node.sent[-1]['success']
+    node._runtime_request('app', request('delete', request_id='confirmed', name='old', confirm=True))
+    tick_until(node, lambda: node.runtime_pending is None)
+    assert node.sent[-1]['success'] and not node.map_store.path('old').exists()
+
+
+def test_unload_clears_runtime_only_after_child_and_graph_exit(node):
+    node.runtime.update(mode='localization', phase='LOCALIZATION', current_map='old', task_kinds=[])
+    calls = []
+    node.runtime_process = SimpleNamespace(stop=lambda: calls.append('stop'), alive=lambda: True)
+    node.names = ['pool_controller']
+    node._runtime_request('app', request('unload'))
+    tick_until(node, lambda: node.runtime_pending['stage'] == 'clear_graph')
+    node._runtime_tick()
+    assert node.runtime_pending and calls == ['stop']
+    node.names = []
+    tick_until(node, lambda: node.runtime_pending is None)
+    assert node.runtime['mode'] == 'idle' and not node.runtime['current_map']
+    assert node.map_data is None and node.pose is None and not node.tasks

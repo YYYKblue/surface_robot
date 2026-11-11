@@ -52,14 +52,15 @@ class MappingPanel:
         self.selected_map_info.setWordWrap(True); box.addWidget(self.selected_map_info)
         catalogue_actions = QGridLayout()
         for index, (label, action) in enumerate((("刷新地图列表", "list"), ("预览所选地图", "preview"),
-                                                ("使用此地图", "load"), ("重试快照导出", "retry_export"))):
+                                                ("使用此地图", "load"), ("重试快照导出", "retry_export"),
+                                                ("卸载地图／返回待机", "unload"), ("删除所选地图", "delete"))):
             button = QPushButton(label)
             button.setEnabled(False)
             button.clicked.connect(lambda checked=False, a=action: self._mapping_action(a))
             self.mapping_buttons[action] = button
             catalogue_actions.addWidget(button, index // 2, index % 2)
         box.addLayout(catalogue_actions)
-        note = QLabel("建图时使用手动控制探索。切换地图前先结束建图或停止清洗；加载后重新设置初始位姿。")
+        note = QLabel("建图时使用手动控制探索。切换地图前先结束建图或取消清洗；加载后重新设置初始位姿。")
         note.setWordWrap(True); box.addWidget(note)
         box.addStretch()
 
@@ -75,8 +76,18 @@ class MappingPanel:
         fields = dict(action=action)
         if action in ("save", "save_end"):
             fields["name"] = self.map_name.text().strip()
-        if action in ("preview", "load", "retry_export"):
+        if action in ("preview", "load", "retry_export", "delete"):
             fields["name"] = (self.saved_maps.currentData() or {})["name"]
+        if action == "delete":
+            entry = self.saved_maps.currentData() or {}
+            fields["snapshot_id"] = entry.get("snapshot_id", "")
+            self._stop("confirm_delete_map")
+            answer = QMessageBox.question(self, "删除所选地图",
+                "确认删除“" + fields["name"] + ("”的待导出快照？" if fields["snapshot_id"] else "”及其地图文件？"),
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                return
+            fields["confirm"] = True
         if action == "discard":
             self._stop("confirm_discard_mapping")
             answer = QMessageBox.question(self, "放弃本次建图", "退出当前建图并放弃尚未保存的内容？此前保存的地图会保留。",
@@ -110,6 +121,12 @@ class MappingPanel:
                 enabled = enabled and mode == "mapping"
             elif action in ("load", "preview"):
                 enabled = enabled and entry.get("valid", False) and (action != "load" or mode != "mapping")
+            elif action == "delete":
+                enabled = (enabled and "map_delete" in self.capabilities and bool(entry.get("name"))
+                           and entry["name"] != runtime.get("current_map")
+                           and (not entry.get("recoverable") or bool(entry.get("snapshot_id"))))
+            elif action == "unload":
+                enabled = enabled and "map_unload" in self.capabilities and mode in ("localization", "error")
             elif action == "retry_export":
                 enabled = enabled and entry.get("recoverable", False)
             button.setEnabled(bool(enabled))
@@ -166,6 +183,13 @@ class MappingPanel:
                                       _map_image=packet.get("_map_image")))
             layout.addWidget(canvas)
             self.preview_dialog.show()
+        if packet.get("deleted"):
+            if self.preview_dialog:
+                self.preview_dialog.close()
+                self.preview_dialog = None
+            self.displayed_saved_name = self.select_saved_name = None
+            self.mapping_result.setText(packet.get("message", "地图已删除"))
+            self._send_request("mapping", action="list")
         if packet.get("saved"):
             saved = packet["saved"]
             self.displayed_saved_name = saved["name"]

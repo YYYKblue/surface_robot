@@ -159,7 +159,7 @@ def test_l_track_is_open_and_stop_service_is_isolated():
         assert "/l_cleaning/stop" in services
         assert "/pool_cleaning/stop" not in services
         assert node._stop_task(None, Trigger.Response()).success
-        assert node.mission.phase == "STOPPED" and not node.mission.active
+        assert node.mission.phase == "CANCELLED" and not node.mission.active
     finally:
         node.destroy_node()
 
@@ -183,6 +183,6 @@ def test_multiedge_adapter_disables_wall_target_during_left_transfer(phase, monk
         node._publish_edge_target()
         assert published and not published[-1].valid
         assert node._stop_task(None, Trigger.Response()).success
-        assert node.mission.phase == 'STOPPED' and not node.mission.active
+        assert node.mission.phase == 'CANCELLED' and not node.mission.active
     finally:
         node.destroy_node()

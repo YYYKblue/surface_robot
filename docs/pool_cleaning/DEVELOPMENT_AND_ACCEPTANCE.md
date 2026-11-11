@@ -120,11 +120,11 @@ IDLE
   → 本次路线执行结束：COMPLETE（覆盖缺口单独报告）
 ```
 
-硬件模式在开始靠近前还包含租约获取阶段 `ACQUIRING`，取得租约后保持已锁定的墙和参考点。异常进入 `PAUSED`，用户停止/取消分别为 `STOPPED/CANCELLED`；当前没有 `ABORTED` 或 `FOLLOW_EDGE` 状态。
+硬件模式在开始靠近前还包含租约获取阶段 `ACQUIRING`，取得租约后保持已锁定的墙和参考点。异常进入 `PAUSED`，旧停止接口与取消均为 `CANCELLED`；当前没有 `ABORTED` 或 `FOLLOW_EDGE` 状态。
 
 定位过期/跳变、所需反馈过期、租约失效、RC 接管和时钟故障会关闭输出；转移超时仅在配置启用时适用。靠近阶段只用位姿反馈执行旋转、前后移动和侧移，不做路径搜索、地图足迹或雷达环境碰撞检查。启动前不要求贴墙，进入起始范围后才重新获取有效目标墙；定位管理器的扫描就绪门控仍保留。
 
-`PAUSED` 不因数据恢复自动继续，需检查原因、cancel 后再 start。`STOPPED/CANCELLED/COMPLETE` 可直接开始新的自动任务，重置进度和 `run_id`；不支持断点续跑。
+`PAUSED` 不因数据恢复自动继续；人工暂停可显式 resume 延续原任务，故障停机需检查原因、cancel 后再 start。`STOPPED/CANCELLED/COMPLETE` 可直接开始新的自动任务，重置进度和 `run_id`。地图删除／卸载及暂停期间的互斥规则见[功能说明](../TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
 
 ## 4. 开发与验收阶段
 

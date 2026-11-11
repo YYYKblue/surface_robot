@@ -86,3 +86,22 @@ def test_forward_boost_requires_boolean_and_request_identity(enabled):
             decode(json.dumps(dict(packet, enabled=invalid)))
     with pytest.raises(ValueError):
         decode(json.dumps(dict(packet, request_id="")))
+
+
+def test_resume_requires_current_run_identity():
+    packet = dict(op='task', action='resume', task_type='l', request_id='resume-1')
+    with pytest.raises(ValueError):
+        decode(json.dumps(packet))
+    packet['run_id'] = 'run-1'
+    assert decode(json.dumps(packet)) == packet
+
+
+def test_map_delete_and_unload_protocol():
+    packet = dict(op='mapping', action='delete', name='地图', request_id='delete', confirm=True)
+    assert decode(json.dumps(packet))['confirm'] is True
+    for name in ('../escape', '/tmp/map', ''):
+        with pytest.raises(ValueError):
+            decode(json.dumps(dict(packet, name=name)))
+    with pytest.raises(ValueError):
+        decode(json.dumps(dict(packet, snapshot_id='../escape')))
+    assert decode(json.dumps(dict(op='mapping', action='unload', request_id='unload')))['action'] == 'unload'

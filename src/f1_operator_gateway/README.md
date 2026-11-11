@@ -1,5 +1,7 @@
 # f1_operator_gateway
 
+人工暂停续跑、取消及地图删除／卸载的接口和使用边界见[功能说明](../../docs/TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
+
 更新：2026-11-11。Windows Qt App 的 Nano 侧 WebSocket 入口，提供手动控制、双任务操作、初始位姿、状态转发，以及受管建图、地图保存与选择。模块职责与入口对比见[架构导读](../../docs/ARCHITECTURE.md)。
 
 ## 构建
@@ -103,7 +105,7 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
   bind_address:=0.0.0.0 localization_prefix:=/l_cleaning
 ```
 
-**不再重映射 `/pool_cleaning/status/start/pause/stop/cancel` 到 L 接口。** 网关同时管理两种任务，旧重映射命令会混淆任务类型。`localization_prefix` 只选择共享定位管理器的接口；若手动组合两个控制器，应给它们设置相同的 `localization_status_topic`。
+**不再重映射 `/pool_cleaning/status/start/pause/resume/stop/cancel` 到 L 接口。** 网关同时管理两种任务，旧重映射命令会混淆任务类型。`localization_prefix` 只选择共享定位管理器的接口；若手动组合两个控制器，应给它们设置相同的 `localization_status_topic`。
 
 原有矩形与 L bringup 独立使用仍兼容各自的定位前缀。
 
@@ -115,7 +117,7 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
 | `/f1/control_state` | 控制源、通信、执行器许可 |
 | `/map`、TF、`/pavo2_scan` | 显示底图、船体位姿及扫描健康检查；不再生成 App 雷达点 |
 | `/pool_cleaning/status`、`/l_cleaning/status` | 两种任务的独立状态 |
-| 两组任务的 `start/pause/stop/cancel` | 任务操作 |
+| 两组任务的 `start/pause/resume/stop/cancel` | 任务操作 |
 | 两组任务的 `set_forward_boost`（`std_srvs/srv/SetBool`） | 启动前设置主电机前进辅助 |
 | `${localization_prefix}/set_initial_pose` | 提交 map 坐标系初始位姿 |
 | `${localization_prefix}/localization_status` | 定位诊断、稳定窗口与就绪状态 |
@@ -173,7 +175,7 @@ CTRL/ACK 的累计年龄会加上 `max(ROS 当前时间−桥状态源时间戳,
 {"op":"initial_pose","x":1.2,"y":3.4,"yaw":1.57,"map_revision":1,"request_id":"另一请求编号"}
 ```
 
-`task_type` 为 `rectangle/l`；`action` 为 `start/pause/stop/cancel`。位姿使用米、弧度，yaw 在 [-π, π]；`map_revision` 必须匹配当前地图。网关生成 ROS 时间戳、平面四元数和默认协方差。
+`task_type` 为 `rectangle/l`；`action` 为 `start/pause/resume/stop/cancel`。位姿使用米、弧度，yaw 在 [-π, π]；`map_revision` 必须匹配当前地图。网关生成 ROS 时间戳、平面四元数和默认协方差。
 
 `reply` 回传 `request_id`、`success`、`message`，可能带 `pending=true`（尚未确认）。网关缓存每客户端最近的请求结果，重复编号不重复执行；App 不自动重试操作。
 
@@ -187,7 +189,7 @@ CTRL/ACK 的累计年龄会加上 `max(ROS 当前时间−桥状态源时间戳,
 
 ## 轨迹与距离遥测（2026-10-31）
 
-`hello.capabilities` 新增 `task_stop`、`task_tracks`。任务 `stop` 调用对应控制器的 Trigger `/stop`，进入 `STOPPED`，保留任务进度；`cancel` 另外清除当前边关联。两者均关闭输出、释放租约，不支持断点续跑；显式 start 创建新 run_id。开始服务尚未返回时的停止也参与既有串行操作机制。
+`hello.capabilities` 包含 `task_stop`、`task_resume`、`task_tracks`。`pause` 保留人工暂停断点；`resume` 延续同一 run_id，通过恢复序号及新鲜状态确认结果。旧 `stop` 与 `cancel` 均取消任务、清除断点；显式 start 创建新 run_id。开始服务尚未返回时的停止也参与既有串行操作机制。
 
 每个 `tasks[kind]` 新增：
 

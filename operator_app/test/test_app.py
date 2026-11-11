@@ -185,33 +185,41 @@ def test_remaining_l_completion_never_claims_full_route_coverage(app, monkeypatc
         window.close()
 
 
-def test_stop_cancel_and_wall_distance_follow_robot_state(app, monkeypatch):
+def test_pause_resume_cancel_follow_robot_state(app, monkeypatch):
     monkeypatch.setattr(SocketWorker, "start", lambda self: None)
     window = OperatorWindow("unused")
     try:
         window._message(dict(type="hello", client_id="test", capabilities=[
-            "task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks"]))
+            "task_selection", "initial_pose", "start_conditions", "task_resume", "task_tracks"]))
         window._message(mapping())
+        task = dict(map_id="map-a", fresh=True, phase="FOLLOW", run_id="run", wall_valid=True,
+                    wall_fresh=True, center_wall_distance_m=.342)
         state = dict(type="telemetry", active_client="test", task_busy=True, active_tasks=["l"],
-                     localization=dict(map_id="map-a", fresh=True), tasks=dict(l=dict(
-                         map_id="map-a", fresh=True, phase="FOLLOW", run_id="run", wall_valid=True,
-                         wall_fresh=True, center_wall_distance_m=.342)))
+                     localization=dict(map_id="map-a", fresh=True), tasks=dict(l=task))
         window._message(state)
-        assert window.task_buttons["stop"].isEnabled()
+        assert "stop" not in window.task_buttons
         assert "34.2 cm" in window.wall_distance.text()
-        window._task("stop")
+        window._task("pause")
         sent = window.worker._take_outgoing()[-1]
-        assert sent["action"] == "stop" and sent["task_type"] == "l"
-        assert not window.task_buttons["cancel"].isEnabled()
+        assert sent["action"] == "pause"
+        assert window.task_buttons["pause"].text() == "暂停任务"
         window._message(dict(type="reply", request_id=sent["request_id"], success=True))
-        state.update(task_busy=False, active_tasks=[])
-        state["tasks"]["l"].update(phase="STOPPED", wall_fresh=False)
+        task.update(phase="PAUSED", pause_kind="user", can_resume=True, wall_fresh=False)
         window._message(state)
-        assert not window.task_buttons["stop"].isEnabled()
-        assert window.task_buttons["cancel"].isEnabled()
+        assert window.task_buttons["pause"].text() == "继续任务"
+        assert window.task_buttons["pause"].isEnabled()
         assert "无有效观测" in window.wall_distance.text()
+        window._task("pause")
+        sent = window.worker._take_outgoing()[-1]
+        assert sent["action"] == "resume" and sent["task_type"] == "l"
+        assert window.task_buttons["cancel"].isEnabled()
         window._task("cancel")
-        assert window.worker._take_outgoing()[-1]["action"] == "cancel"
+        sent = window.worker._take_outgoing()[-1]
+        assert sent["action"] == "cancel"
+        task.update(phase="PAUSED", pause_kind="fault", can_resume=False,
+                    resume_blockers=[dict(message="clock fault")])
+        window._message(state)
+        assert not window.task_buttons["pause"].isEnabled()
     finally:
         window.close()
 
@@ -647,5 +655,42 @@ def test_first_runtime_state_rejects_unknown_old_map_and_accepts_nested_session(
         current["_received_monotonic"] = base + 1.5
         window._message(current)
         assert window.canvas.map_image is not None
+    finally:
+        window.close()
+
+
+def test_map_delete_confirmation_and_unload_controls(app, monkeypatch):
+    from operator_app.mapping_panel import QMessageBox
+    monkeypatch.setattr(SocketWorker, 'start', lambda self: None)
+    window = OperatorWindow('unused')
+    try:
+        window._message(dict(type='hello', client_id='test', capabilities=[
+            'mapping', 'map_catalog', 'map_delete', 'map_unload']))
+        list_request = next(p for p in window.worker._take_outgoing() if p.get('action') == 'list')
+        state = dict(type='telemetry', active_client='test', task_busy=False, active_tasks=[],
+                     runtime=dict(mode='localization', phase='LOCALIZATION', current_map='active', busy=False))
+        window._message(state)
+        window._message(dict(type='reply', op='mapping', request_id=list_request['request_id'], success=True, maps=[
+            dict(name='active', valid=True), dict(name='broken', valid=False)]))
+        assert not window.mapping_buttons['delete'].isEnabled()
+        assert window.mapping_buttons['unload'].isEnabled()
+        window.saved_maps.setCurrentIndex(1)
+        assert window.mapping_buttons['delete'].isEnabled()
+        monkeypatch.setattr(QMessageBox, 'question', lambda *args: QMessageBox.No)
+        window.worker._take_outgoing()
+        window._mapping_action('delete')
+        assert not any(p.get('action') == 'delete' for p in window.worker._take_outgoing())
+        monkeypatch.setattr(QMessageBox, 'question', lambda *args: QMessageBox.Yes)
+        window._mapping_action('delete')
+        packet = window.worker._take_outgoing()[-1]
+        assert packet['name'] == 'broken' and packet['confirm'] is True
+        window._message(dict(type='reply', op='mapping', request_id=packet['request_id'],
+                             success=True, deleted=dict(name='broken')))
+        assert window.worker._take_outgoing()[-1]['action'] == 'list'
+        window.pending_requests.clear()
+        state.update(task_busy=True, active_tasks=['l'])
+        window._message(state)
+        assert not window.mapping_buttons['delete'].isEnabled()
+        assert not window.mapping_buttons['unload'].isEnabled()
     finally:
         window.close()

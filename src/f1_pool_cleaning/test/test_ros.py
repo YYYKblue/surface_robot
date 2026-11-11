@@ -515,7 +515,8 @@ def test_live_leased_output_and_fault_release(fault):
         h.close()
 
 
-def test_cancel_during_acquire_releases_late_token():
+@pytest.mark.parametrize("resuming", [False, True])
+def test_cancel_during_acquire_releases_late_token(resuming):
     from concurrent.futures import Future
     from f1_interfaces.srv import AcquireControl
     h = Harness([Parameter("output_enabled", value=True)])
@@ -530,7 +531,7 @@ def test_cancel_during_acquire_releases_late_token():
         h.controller._cancel(None, Trigger.Response())
         b.token = "late-token"
         future.set_result(AcquireControl.Response(success=True, token="late-token", epoch=7))
-        lease._acquired(future, generation, "fake-connection", 7)
+        lease._acquired(future, generation, "fake-connection", 7, resuming=resuming)
         h.wait(lambda: "late-token" in b.releases)
         assert not lease.token and h.controller.mission.phase == "CANCELLED"
         assert not b.commands
@@ -702,10 +703,10 @@ def test_stop_cuts_outputs_retains_coverage_and_restart_creates_new_run(tmp_path
         stopped = []
         node._stop_outputs = lambda: stopped.append(True)
         assert node._stop_task(None, Trigger.Response()).success
-        assert stopped and node.mission.phase == "STOPPED"
+        assert stopped and node.mission.phase == "CANCELLED"
         assert node.mission.last_effort is None and not node.mission.active
         assert node.mission.cleaned_by_edge == {"edge_0": [(1., 2.)]}
-        assert node.selected_edge is not None
+        assert node.selected_edge is None
         automatic_feedback(node)
         assert node._start(None, Trigger.Response()).success
         assert node.run_id != run and not node.mission.cleaned_by_edge
@@ -772,3 +773,53 @@ def test_center_wall_distance_never_reuses_invalid_or_stale_observation(tmp_path
         assert snapshots[-1]["center_wall_distance_m"] is None
     finally:
         node.destroy_node()
+
+
+def test_ros_user_pause_resume_preserves_run_and_stop_alias_cancels(harness):
+    h = harness
+    h.start()
+    node = h.controller
+    h.wait(lambda: node.mission.active and node.wall is not None)
+    run_id = node.run_id
+    pause = h.peer.create_client(Trigger, '/pool_cleaning/pause')
+    resume = h.peer.create_client(Trigger, '/pool_cleaning/resume')
+    h.wait(lambda: pause.service_is_ready() and resume.service_is_ready())
+    future = pause.call_async(Trigger.Request())
+    h.wait(future.done)
+    assert future.result().success
+    h.wait(lambda: h.commands and not h.commands[-1].brush_enabled)
+    h.wait(lambda: not node._resume_blockers())
+    assert node.mission.phase == 'PAUSED' and node.mission.pause_kind == 'user'
+    future = resume.call_async(Trigger.Request())
+    h.wait(future.done)
+    assert future.result().success
+    h.wait(lambda: node.mission.active)
+    assert node.run_id == run_id and node.mission.resume_sequence == 1
+    node._stop_task(None, Trigger.Response())
+    assert node.mission.phase == 'CANCELLED' and node.mission.pause_context is None
+    assert not node._resume(None, Trigger.Response()).success
+
+
+def test_live_pause_resume_reacquires_new_token_and_rc_invalidates_pause():
+    h = Harness([Parameter('output_enabled', value=True)])
+    b = FakeBridge(h)
+    try:
+        h.wait(lambda: h.controller.lease.bridge is not None)
+        h.start()
+        node = h.controller
+        h.wait(lambda: bool(node.lease.token) and node.mission.active)
+        old_generation = node.lease.generation
+        assert node._pause(None, Trigger.Response()).success
+        assert not node.lease.token
+        h.wait(lambda: not node._resume_blockers())
+        assert node._resume(None, Trigger.Response()).success
+        h.wait(lambda: node.mission.resume_sequence == 1 and bool(node.lease.token))
+        assert node.lease.generation > old_generation
+        assert node._pause(None, Trigger.Response()).success
+        b.state.source = 'RC'
+        h.wait(lambda: node.mission.pause_kind == 'fault')
+        assert node.mission.pause_context is None
+        b.state.source = 'NANO'
+        assert not node._resume(None, Trigger.Response()).success
+    finally:
+        h.close()

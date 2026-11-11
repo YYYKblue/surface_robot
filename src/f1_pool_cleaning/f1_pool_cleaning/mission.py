@@ -65,6 +65,9 @@ class Mission:
         self.last_scan = -1
         self.last_effort = None
         self.wall_lost_since_ns = None
+        self.pause_context = None
+        self.pause_kind = ""
+        self.resume_sequence = 0
         self.forward_boost_enabled = False
         self.forward_boost_cutoff_reached = False
 
@@ -181,7 +184,7 @@ class Mission:
         self._reset_edge_progress()
 
     def configure_edge(self, pool, edge, task_id=""):
-        if self.active or self.phase == "ACQUIRING":
+        if self.active or self.phase in ("ACQUIRING", "PAUSED"):
             return False, "cancel before changing the current edge"
         if (not isinstance(pool, PoolModel) or not hasattr(edge, "id")
                 or pool.by_id.get(edge.id) is not edge):
@@ -192,10 +195,74 @@ class Mission:
         return True, self.reason
 
     def halt(self, reason, phase="PAUSED"):
+        self.pause_context = None
+        self.pause_kind = "fault" if phase == "PAUSED" else ""
         self.phase, self.reason = phase, reason
         self.last_effort = None
         self.wall_lost_since_ns = None
         self.last_coverage_ns = None
+
+    def pause(self, f, now):
+        if self.phase == "PAUSED":
+            return self.pause_kind == "user", self.reason
+        if not self.active:
+            return False, "task is not executing"
+        error = self._pose_error(f, now)
+        if error:
+            self.halt(error)
+            return False, error
+        context = dict(phase=self.phase, pose=f.pose, since=now)
+        self.halt("user paused; resume or cancel")
+        self.pause_context, self.pause_kind = context, "user"
+        return True, self.reason
+
+    def resume_error(self, f, now):
+        context = self.pause_context
+        if not context or self.pause_kind != "user" or self.phase not in ("PAUSED", "ACQUIRING"):
+            return "no resumable user pause; cancel and start a new task"
+        error = self._pose_error(f, now)
+        if error:
+            return error
+        if now < context["since"]:
+            return "clock reversed during pause"
+        old = context["pose"]
+        if (math.hypot(f.pose.x-old.x, f.pose.y-old.y) > self.c.edge_progress_jump_m
+                or abs(wrap(f.pose.yaw-old.yaw)) > math.radians(20)):
+            return "pose drift exceeds resume limits; cancel and start a new task"
+        wall_required = context["phase"] in self.WALL_PHASES + ("APPROACH_NEXT_EDGE",)
+        if wall_required:
+            w = f.wall
+            if (w is None or not w.valid or w.stamp_ns <= context["since"]
+                    or not 0 <= now-w.stamp_ns < self.c.wall_max_age_sec*1e9
+                    or not math.isfinite(w.distance) or w.distance <= 0 or not math.isfinite(w.angle)):
+                return "fresh post-pause target wall required"
+        return ""
+
+    def resume(self, f, now):
+        error = self.resume_error(f, now)
+        if error:
+            return False, error
+        context = self.pause_context
+        duration = now-context["since"]
+        # Shift execution timers, never sensor timestamps or command deadlines.
+        for key in ("started_ns", "transfer_started_ns", "transfer_action_started_ns",
+                    "transfer_turn_started_ns", "stage_since"):
+            value = getattr(self, key, None)
+            if value is not None:
+                setattr(self, key, value+duration)
+        self.phase, self.reason = context["phase"], "user resumed"
+        self.pause_context, self.pause_kind = None, ""
+        self.resume_sequence += 1
+        self.last_update_ns, self.last_scan = now, -1
+        self.last_effort = None
+        self.last_contact_s = self.last_coverage_ns = self.wall_lost_since_ns = None
+        if hasattr(self, "coverage_anchor"):
+            self.coverage_anchor = self.arrived_since = None
+        if self.edge_active:
+            self.last_edge_s = self.edge.project(f.pose).s_m
+        if hasattr(self, "wall_after_ns"):
+            self.wall_after_ns = now
+        return True, self.reason
 
     def front_remaining(self, pose):
         x, _ = self.c.pool_xy(pose.x, pose.y)

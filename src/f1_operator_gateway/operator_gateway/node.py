@@ -189,8 +189,8 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
             self.hub.send(client_id, {"type": "hello", "protocol": "f1-operator-v1", "telemetry_hz": 10,
                 "session_id": self.diagnostic_history.session,
                 "drive_output": self._drive_output(),
-                "client_id": client_id, "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks", "diagnostic_history", "forward_boost", "compact_stream_v1", "indexed8_map", "continuous_drive_percent_v1"]
-                    + (["mapping", "map_catalog"] if self.runtime_enabled else [])})
+                "client_id": client_id, "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_resume", "task_tracks", "diagnostic_history", "forward_boost", "compact_stream_v1", "indexed8_map", "continuous_drive_percent_v1"]
+                    + (["mapping", "map_catalog", "map_delete", "map_unload"] if self.runtime_enabled else [])})
             if self.map_data:
                 self.hub.send(client_id, self._map_packet())
             self.hub.send(client_id, {"type": "diagnostics", "diagnostics": self.diagnostic_history.view()})

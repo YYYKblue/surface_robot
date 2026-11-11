@@ -78,7 +78,7 @@ class AutonomousMission(Mission):
         self.arrived_since = None
 
     def configure_edge(self, pool, edge, task_id=""):
-        if self.active or self.phase == "ACQUIRING":
+        if self.active or self.phase in ("ACQUIRING", "PAUSED"):
             return False, "cancel before selecting a new start edge"
         if pool is not self.pool or pool.by_id.get(edge.id) is not edge:
             return False, "unknown task edge"

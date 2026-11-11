@@ -12,7 +12,7 @@ MAX_PAYLOAD = 128 * 1024
 OPERATIONS = {"hello", "manual_input", "manual_stop", "task", "initial_pose", "mapping"}
 DIRECTIONS = {"STOP", "FORWARD", "REVERSE", "LEFT", "RIGHT"}
 MODES = {"FRONT", "BOTH", "BACK"}
-TASKS = {"start", "pause", "stop", "cancel", "set_forward_boost"}
+TASKS = {"start", "pause", "resume", "stop", "cancel", "set_forward_boost"}
 
 
 @dataclass(frozen=True)
@@ -67,18 +67,23 @@ def decode(raw):
         return {"op": op, "reason": reason}
     if op == "mapping":
         action = packet.get("action")
-        if action not in {"start", "save", "save_end", "discard", "list", "preview", "load", "retry_export"}:
+        if action not in {"start", "save", "save_end", "discard", "list", "preview", "load", "retry_export", "delete", "unload"}:
             raise ValueError("invalid mapping action")
         request_id = packet.get("request_id")
         if not isinstance(request_id, str) or not 1 <= len(request_id) <= 80:
             raise ValueError("mapping requires request_id")
         result = dict(op=op, action=action, request_id=request_id)
-        if action in {"save", "save_end", "preview", "load", "retry_export"}:
+        if action in {"save", "save_end", "preview", "load", "retry_export", "delete"}:
             from .map_store import MapStore
             result["name"] = MapStore.name(packet.get("name", ""))
-            if action in {"preview", "load", "retry_export"} and not result["name"]:
+            if action in {"preview", "load", "retry_export", "delete"} and not result["name"]:
                 raise ValueError("map name is required")
-        if action == "discard":
+        if action == "delete":
+            snapshot = packet.get("snapshot_id", "")
+            if not isinstance(snapshot, str) or (snapshot and (len(snapshot) != 32 or any(c not in "0123456789abcdef" for c in snapshot))):
+                raise ValueError("invalid snapshot_id")
+            result["snapshot_id"] = snapshot
+        if action in ("discard", "delete"):
             result["confirm"] = packet.get("confirm") is True
         return result
     if op in ("task", "initial_pose"):
@@ -101,6 +106,11 @@ def decode(raw):
         if task_type not in ("rectangle", "l"):
             raise ValueError("invalid task_type")
         result = dict(op=op, action=action, task_type=task_type, request_id=request_id)
+        if action == "resume":
+            run_id = packet.get("run_id")
+            if not request_id or not isinstance(run_id, str) or not 1 <= len(run_id) <= 80:
+                raise ValueError("resume requires request_id and run_id")
+            result["run_id"] = run_id
         if action == "set_forward_boost":
             if not request_id or type(packet.get("enabled")) is not bool:
                 raise ValueError("set_forward_boost requires request_id and boolean enabled")

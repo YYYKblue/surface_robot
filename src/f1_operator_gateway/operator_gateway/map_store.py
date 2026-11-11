@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 import json
 import math
 import os
+import shutil
 import uuid
 
 import yaml
@@ -153,6 +154,74 @@ class MapStore:
         directory.rmdir()
         Path(transaction["marker"]).unlink()
         return dict(name=name, paths=[str(p) for p in destinations])
+
+    def delete(self, name, snapshot_id=""):
+        """Quarantine an exact file set; a manifest survives interrupted removal.
+
+        Failed staging rolls back. After a crash, the manifest and retained files
+        are left for recovery rather than silently deleting more files at startup.
+        """
+        self.path(name)  # Validate even if the map is incomplete or absent.
+        if snapshot_id:
+            if len(snapshot_id) != 32 or any(c not in "0123456789abcdef" for c in snapshot_id):
+                raise ValueError("无效快照编号")
+            candidates = [t for t in self.recovered()
+                          if t["name"] == name and Path(t["directory"]).name == ".snapshot-" + snapshot_id]
+            if len(candidates) != 1:
+                raise ValueError("待导出快照不存在或已变化")
+            directory = Path(candidates[0]["directory"])
+            sources = list(directory.iterdir())
+            marker = self.path_marker(name)
+            if marker.exists() or marker.is_symlink():
+                sources.append(marker)
+        else:
+            directory = None
+            sources = [self.path(name, suffix) for suffix in (".yaml", ".pgm", ".pbstream")]
+            sources = [p for p in sources if p.exists()]
+        if any(p.is_symlink() or not p.is_file() for p in sources):
+            raise ValueError("删除对象必须是普通文件，不能含符号链接或目录")
+        if not sources:
+            return dict(name=name, snapshot_id=snapshot_id, already_absent=True)
+        staging = self.root / (".delete-" + uuid.uuid4().hex)
+        staging.mkdir()
+        manifest = dict(name=name, snapshot_id=snapshot_id, state="staging",
+                        files=[str(p.relative_to(self.root)) for p in sources])
+        manifest_path = staging / "delete.json"
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+        moved = []
+        try:
+            for index, source in enumerate(sources):
+                target = staging / str(index)
+                source.rename(target)
+                moved.append((source, target))
+        except OSError as exc:
+            try:
+                for source, target in reversed(moved):
+                    target.rename(source)
+                shutil.rmtree(staging)
+            except OSError:
+                raise OSError("删除未完成，恢复清单保留于 " + str(staging)) from exc
+            raise
+        manifest["state"] = "removed"
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+        try:
+            if directory:
+                directory.rmdir()
+            # Keep the manifest until the last retained file has been removed.
+            for _, target in moved:
+                target.unlink()
+            manifest_path.unlink()
+            staging.rmdir()
+        except OSError as exc:
+            raise OSError("地图已移出列表，但文件清理未完成：" + str(staging)) from exc
+        return dict(name=name, snapshot_id=snapshot_id, already_absent=False)
+
+    def path_marker(self, name):
+        self.path(name)
+        path = self.root / ("." + name + ".reserved")
+        if path.is_symlink():
+            raise ValueError("快照占位文件不能是符号链接")
+        return path
 
     def recovered(self):
         """Expose retained snapshots after an export failure or gateway restart."""

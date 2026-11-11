@@ -1,6 +1,6 @@
 """UI labels and derived task state; no robot control decisions live here."""
 PHASES = {
-    "IDLE": "待启动", "CANCELLED": "已取消", "STOPPED": "任务已停止（重新开始将创建新任务）", "PAUSED": "已暂停（取消后可重新开始）",
+    "IDLE": "待启动", "CANCELLED": "已取消", "STOPPED": "任务已停止（重新开始将创建新任务）", "PAUSED": "已暂停",
     "COMPLETE": "任务完成", "ACQUIRING": "正在获取控制权", "PLANNING": "正在规划路线",
     "NAVIGATING": "正在导航到清洗起点", "SETTLING": "正在调整姿态", "ACQUIRE_WALL": "正在寻找左墙",
     "DOCK_WALL": "正在靠墙对齐", "APPROACH_EDGE": "正在接近清洗边",
@@ -19,7 +19,7 @@ BLOCKERS = {
     "task_stale": "任务不可用或状态过期", "task_service": "任务服务不可用",
     "localization": "定位尚未就绪", "feedback": "反馈数据未就绪", "pose": "位姿数据未就绪",
     "scan": "雷达数据未就绪", "bridge": "硬件控制条件未满足", "bridge_service": "控制权服务不可用",
-    "map": "地图未匹配", "clock": "控制器时钟异常", "phase": "任务运行中或需要先取消暂停任务",
+    "map": "地图未匹配", "clock": "控制器时钟异常", "phase": "任务尚未结束，请继续或取消",
     "task_type": "任务类型未确认", "schema": "控制器需要升级", "busy": "已有任务运行或状态待确认",
     "pending": "操作处理中",
 }

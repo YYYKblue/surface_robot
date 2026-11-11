@@ -1,5 +1,7 @@
 # f1_l_cleaning：开放多段直墙清洗
 
+人工暂停续跑、取消及地图删除／卸载的接口和使用边界见[功能说明](../../docs/TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
+
 文档核对：2026-11-09，配置加载修复基线 `9db6798`。本包从原“大 L 两段墙”扩展为有方向的开放墙链，支持单条直墙及多次左转、右转。保留包名、`l_controller`、`l_bringup.launch.py`、`/l_cleaning/*` 和协议任务类型 `l`；App 显示“开放多边清洗”。定位与硬件输出继续复用共享组件，默认预览、等待显式 start。
 
 ## 路线与地图
@@ -106,7 +108,7 @@ ros2 service call /l_cleaning/cancel std_srvs/srv/Trigger '{}'
 
 复用已有节点时用 `start_localization:=false` / `start_bridge:=false`；仅清洗入口为 `l_cleaning.launch.py`，也需同一地图。只有一套 bridge、定位和地图发布链。网关组合入口继续兼容 `task_type=l`，独立 bringup 的网关定位前缀为 `/l_cleaning`，组合入口共享 `/f1_localization`。
 
-`pause` 后需 cancel 再启动；`stop` 保留进度快照，`cancel` 清除任务边关联；重新 start 创建新任务，不是断点续跑。App 的“停止手动输出”不停止自动任务。
+人工 `pause` 后可显式 `resume` 延续原任务；故障停机需取消后重新开始。`stop` 为 `cancel` 的兼容别名，清除任务边关联及可恢复断点；重新 start 创建新任务。App 的“停止手动输出”不停止自动任务。
 
 ## 验证
 

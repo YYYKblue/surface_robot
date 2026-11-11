@@ -143,6 +143,7 @@ class PoolController(Node):
         self.task_services = [
             self.create_service(Trigger, "/pool_cleaning/start", self._start),
             self.create_service(Trigger, "/pool_cleaning/pause", self._pause),
+            self.create_service(Trigger, "/pool_cleaning/resume", self._resume),
             self.create_service(Trigger, "/pool_cleaning/stop", self._stop_task),
             self.create_service(Trigger, "/pool_cleaning/cancel", self._cancel),
             self.create_service(SetEdge, "/pool_cleaning/set_edge", self._set_edge),
@@ -266,7 +267,7 @@ class PoolController(Node):
         self._publish_edge_target(reason=reason)
 
     def _set_edge(self, request, response):
-        if self.mission.active or self.mission.phase == "ACQUIRING":
+        if self.mission.active or self.mission.phase in ("ACQUIRING", "PAUSED"):
             response.success = False
             response.message = "cancel before changing the current edge"
             return response
@@ -482,15 +483,70 @@ class PoolController(Node):
         self._status()
         return response
 
+    def _pause_identity(self):
+        loc = self.localization_snapshot
+        return (self.map_id, loc.get("trajectory_id"), loc.get("initial_pose_stamp_ns"), self.session)
+
+    def _resume_blockers(self):
+        blockers = []
+        def add(code, message):
+            if message:
+                blockers.append(dict(code=code, message=message))
+        add("state", "task must be paused before resume" if self.mission.phase != "PAUSED" else "")
+        add("phase", self.mission.resume_error(self._feedback(), self.get_clock().now().nanoseconds))
+        add("identity", "localization/perception changed; cancel required"
+            if getattr(self, "paused_identity", None) != self._pause_identity() else "")
+        add("clock", "clock fault latched; restart controller" if self.clock_fault else "")
+        add("localization", self._localization_error())
+        add("feedback", self._stream_error(require_wall=False))
+        if self.lease:
+            add("bridge", self.lease.error(acquiring=True))
+            if not self.lease.acquire.service_is_ready():
+                add("bridge_service", "bridge acquire service unavailable")
+        return blockers
+
     def _pause(self, request, response):
-        self._halt("user pause; cancel before restarting")
-        response.success, response.message = True, self.mission.reason
+        if self.mission.phase == "ACQUIRING":
+            if self.mission.pause_context:
+                self.mission.phase = "PAUSED"
+                self._stop_outputs()
+            else:
+                self._halt("paused during start; cancel before restarting")
+            response.success, response.message = True, self.mission.reason
+            return response
+        already_paused = self.mission.phase == "PAUSED"
+        response.success, response.message = self.mission.pause(
+            self._feedback(), self.get_clock().now().nanoseconds)
+        if response.success and not already_paused:
+            self.paused_identity = self._pause_identity()
+            if self.edge_task_enabled and self.selected_edge is not None:
+                self.edge_generation += 1
+                self._publish_edge_target(valid=False, reason="user paused")
+        # Also stop outputs when fresh pose was unavailable during the request.
+        if not self.mission.active:
+            self._stop_outputs()
+        self._status()
+        return response
+
+    def _resume(self, request, response):
+        if self.use_map_tf:
+            self._read_tf_pose()
+        blockers = self._resume_blockers()
+        if blockers:
+            response.success, response.message = False, blockers[0]["message"]
+        elif self.lease:
+            response.success, response.message = self.lease.begin(resuming=True)
+        else:
+            response.success, response.message = self.mission.resume(
+                self._feedback(), self.get_clock().now().nanoseconds)
+            if response.success:
+                self._tick()
+        self._status()
         return response
 
     def _stop_task(self, request, response):
-        self._halt("user stopped task; start creates a new run", "STOPPED")
-        response.success, response.message = True, self.mission.reason
-        return response
+        """Deprecated compatibility alias: stop now ends the task like cancel."""
+        return self._cancel(request, response)
 
     def _cancel(self, request, response):
         self._halt("user cancelled", "CANCELLED")
@@ -628,7 +684,11 @@ class PoolController(Node):
         if self.mission.phase == "COMPLETE" and self.completed_at_ns is None:
             self.completed_at_ns = now
         blockers = self._start_blockers()
-        status = dict(phase=self.mission.phase,
+        resume_blockers = self._resume_blockers()
+        status = dict(can_resume=not resume_blockers, resume_blockers=resume_blockers,
+                      pause_kind=self.mission.pause_kind,
+                      paused_phase=(self.mission.pause_context or {}).get("phase"),
+                      resume_sequence=self.mission.resume_sequence, phase=self.mission.phase,
                       task_type="l" if self.MAP_PROFILE_KIND == "route" else "rectangle",
                       route_chain_index=getattr(self, "route_chain_index", None),
                       route_chain_count=getattr(self, "route_chain_count", None),

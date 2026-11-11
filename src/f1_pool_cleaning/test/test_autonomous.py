@@ -327,3 +327,77 @@ def test_left_transfer_stale_pose_and_cancel_keep_outputs_off(phase):
     assert m.phase == 'PAUSED' and m.last_effort is None
     m.halt('cancelled', 'CANCELLED')
     assert m.update(Feedback(None, replace(p, stamp_ns=now+400_000_000)), now+400_000_000) is None
+
+
+@pytest.mark.parametrize('closed', [True, False])
+def test_resume_at_each_route_phase_preserves_progress_and_completes(closed):
+    """Run the kinematic route with a 60 s pause in every encountered phase."""
+    m = (system() if closed else AutonomousMission(system().c,
+         PoolModel.from_polyline([(0., 0.), (4., 0.), (4., 4.)])))
+    m.set_forward_boost(True)
+    original = m.update
+    offset, paused = 0, set()
+
+    def update(f, now):
+        nonlocal offset
+        now += offset
+        f = replace(f, pose=replace(f.pose, stamp_ns=now),
+                    wall=replace(f.wall, stamp_ns=now) if f.wall else None)
+        if m.active and m.phase not in paused:
+            from copy import deepcopy
+            phase = m.phase
+            paused.add(phase)
+            progress = deepcopy((m.remaining_edges, m.cleaned_by_edge, m.finished_edges,
+                                 m.forward_boost_cutoff_reached, m.start_s))
+            assert m.pause(f, now)[0]
+            assert original(f, now+10_000_000_000) is None
+            offset += 60_000_000_000
+            now += 60_000_000_000
+            f = replace(f, pose=replace(f.pose, stamp_ns=now),
+                        wall=replace(f.wall, stamp_ns=now) if f.wall else None)
+            assert m.resume(f, now)[0], m.resume_error(f, now)
+            assert m.phase == phase
+            assert progress == (m.remaining_edges, m.cleaned_by_edge, m.finished_edges,
+                                m.forward_boost_cutoff_reached, m.start_s)
+        return original(f, now)
+
+    m.update = update
+    initial = Pose(1, 2., 1.67, 0.) if closed else Pose(1, .3, -.33, 0.)
+    run_boat(m, initial)
+    assert 'FOLLOW' in paused and m.resume_sequence == len(paused)
+    assert ('TURN_TO_NEXT_EDGE' if closed else 'TURN_LEFT_TO_NEXT_EDGE') in paused
+
+
+def test_user_pause_rejects_drift_stale_wall_and_fault_relabel():
+    m = system()
+    now = 1_000_000_000
+    f = feedback(m, Pose(now, 2., 1.67, 0.), now)
+    assert m.start(f, now)[0]
+    m.phase = 'FOLLOW'
+    f = feedback(m, f.pose, now)
+    assert m.pause(f, now)[0]
+    assert not m.resume(f, now+1)[0]  # Wall must postdate the pause.
+    later = feedback(m, replace(f.pose, x=3.), now+100_000_000)
+    assert not m.resume(later, now+100_000_000)[0]
+    m.halt('RC takeover')
+    assert not m.pause(later, now+100_000_000)[0]
+    assert not m.resume(later, now+100_000_000)[0]
+    assert m.pause_kind == 'fault'
+
+
+def test_pause_mid_timed_transfer_keeps_only_remaining_duration():
+    m = system()
+    now = 1_000_000_000
+    f = feedback(m, Pose(now, 2., 1.67, 0.), now)
+    assert m.start(f, now)[0]
+    m.phase = 'MOVE_INWARD'
+    m.transfer_action_started_ns = now
+    m.transfer_started_ns = now
+    elapsed = round(m.c.transfer_move_duration_sec * .4 * 1e9)
+    paused_at = now + elapsed
+    assert m.pause(feedback(m, f.pose, paused_at), paused_at)[0]
+    resumed_at = paused_at + 600_000_000_000
+    assert m.resume(feedback(m, f.pose, resumed_at), resumed_at)[0]
+    assert resumed_at-m.transfer_action_started_ns == elapsed
+    assert resumed_at-m.transfer_started_ns == elapsed
+    assert m.last_effort is None and m.coverage_anchor is None

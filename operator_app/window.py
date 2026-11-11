@@ -254,17 +254,17 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.task_buttons = {}
         task_actions = QGridLayout()
         for index, (label, action) in enumerate((("开始清洗", "start"), ("暂停任务", "pause"),
-                                                 ("停止任务", "stop"), ("取消任务", "cancel"))):
+                                                 ("取消任务", "cancel"))):
             button = QPushButton(label)
             if action == "start":
                 button.setObjectName("primary")
-            elif action == "stop":
+            elif action == "cancel":
                 button.setObjectName("stop")
             button.setEnabled(False)
             button.clicked.connect(lambda checked=False, a=action: self._task(a))
             button.setToolTip({
                 "start": "启动新的清洗任务",
-                "pause": "关闭输出，取消后可重新开始",
+                "pause": "暂停关闭输出并保留断点；继续前重新检查定位和控制权",
                 "stop": "关闭输出并保留记录；再次开始创建新任务",
                 "cancel": "关闭输出并清除当前边关联；历史轨迹保留",
             }[action])
@@ -274,7 +274,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.result_label = QLabel("")
         self.result_label.setWordWrap(True); box.addWidget(self.result_label)
         box.addStretch()
-        note = QLabel("暂停后需取消再重新开始。\n停止保留任务记录；取消另清除当前边关联。\n再次开始会创建新任务，不会续跑。\n顶部红色按钮仅停止手动输出。")
+        note = QLabel("人工暂停后可继续原任务。\n取消结束本次任务；再次开始创建新任务。\n故障停机需取消，排除故障后重新开始。\n顶部红色按钮仅停止手动输出。")
         note.setWordWrap(True); box.addWidget(note)
         self.pose_button.setEnabled(False)
         self.publish_pose_button.setEnabled(False)
@@ -409,15 +409,18 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
             self.pose_button.setChecked(False)
         self.task_buttons["start"].setEnabled(fresh and supported and operator and not local_pending and not selecting and task.get("can_start") is True)
         active = packet.get("active_tasks", [])
-        pending_start = any(p.get("action") == "start" for _, p in self.pending_requests.values())
+        pending_start = any(p.get("action") in ("start", "resume") for _, p in self.pending_requests.values())
         stopping = any(p.get("action") in ("pause", "stop", "cancel") for _, p in self.pending_requests.values())
-        stoppable = bool(active or pending_start or (task_fresh and task.get("phase") == "PAUSED"))
-        self.task_buttons["pause"].setEnabled(fresh and operator and stoppable and not stopping)
-        self.task_buttons["stop"].setEnabled(fresh and operator and stoppable and not stopping
-                                              and "task_stop" in self.capabilities)
-        cancellable = stoppable or (task_fresh and task.get("run_id")
-                                    and task.get("phase") not in ("IDLE", "CANCELLED"))
-        self.task_buttons["cancel"].setEnabled(fresh and operator and bool(cancellable) and not stopping)
+        paused = task_fresh and task.get("phase") == "PAUSED"
+        self.task_buttons["pause"].setText("继续任务" if paused else "暂停任务")
+        resumable = ("task_resume" in self.capabilities and task.get("can_resume") is True)
+        self.task_buttons["pause"].setEnabled(fresh and operator and not local_pending and
+            (resumable if paused else bool(active) and task.get("phase") != "ACQUIRING"))
+        self.task_buttons["pause"].setToolTip(
+            "; ".join(b.get("message", "") for b in task.get("resume_blockers", [])) if paused
+            else "关闭输出并保留当前任务，等待继续或取消")
+        cancellable = bool(active or pending_start or paused)
+        self.task_buttons["cancel"].setEnabled(fresh and operator and cancellable and not stopping)
         loc = packet.get("localization", {})
         map_id = loc.get("map_id", "")
         self.map_status.setText("地图：" + (map_id.rsplit("/", 1)[-1] if map_id else "未确认"))
@@ -458,8 +461,8 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         text += "　位姿：" + ("正常" if loc.get("pose_fresh") else "未就绪")
         self.localization_status.setText(text)
         self.localization_status.setToolTip(str(loc.get("reason", "")))
-        blockers = task.get("start_blockers", [])
-        condition = blocker_text(blockers) or "启动条件已满足"
+        blockers = task.get("resume_blockers" if paused else "start_blockers", [])
+        condition = blocker_text(blockers) or ("可以继续原任务" if paused else "启动条件已满足")
         if not fresh:
             condition = "连接中断或遥测过期，禁止开始任务"
             self.canvas.set_telemetry({"pose": None})
@@ -474,7 +477,9 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.data_age.setText("实时遥测" if fresh else "遥测已过期")
         phase = task.get("phase", "")
         mode = "实际输出" if task.get("output_enabled") else "预览模式（不驱动硬件）"
-        self.task_status.setText((PHASES.get(phase, phase or "等待任务状态") + "\n" + mode) if task_fresh else "任务状态未知")
+        phase_label = ("故障停机（请先取消任务）" if phase == "PAUSED" and task.get("pause_kind") == "fault"
+                       else PHASES.get(phase, phase or "等待任务状态"))
+        self.task_status.setText((phase_label + "\n" + mode) if task_fresh else "任务状态未知")
         self.task_status.setStyleSheet("color:#00877e;font-weight:bold;" if task_fresh and phase == "COMPLETE" else "")
         self.task_reason.setText(str(task.get("reason", "")) if task_fresh else "")
         details = ""
@@ -666,7 +671,12 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self._clear_manual()
         active = self.telemetry.get("active_tasks", [])
         kind = active[0] if action != "start" and len(active) == 1 else self.task_combo.currentData()
-        self._send_request("task", action=action, task_type=kind)
+        if action == "pause" and self.telemetry.get("tasks", {}).get(kind, {}).get("phase") == "PAUSED":
+            action = "resume"
+        fields = {}
+        if action == "resume":
+            fields["run_id"] = self.telemetry.get("tasks", {}).get(kind, {}).get("run_id", "")
+        self._send_request("task", action=action, task_type=kind, **fields)
 
     def _status(self, text):
         self._log_change("connection", text, "连接", text)

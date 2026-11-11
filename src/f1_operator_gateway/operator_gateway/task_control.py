@@ -12,7 +12,7 @@ from std_srvs.srv import Trigger, SetBool
 from .tracks import TaskTrack
 
 TASK_PREFIXES = {"rectangle": "/pool_cleaning", "l": "/l_cleaning"}
-TERMINAL = {"IDLE", "CANCELLED", "STOPPED", "COMPLETE", "PAUSED"}
+TERMINAL = {"IDLE", "CANCELLED", "STOPPED", "COMPLETE"}
 MAX_AGE = .6
 
 
@@ -32,7 +32,7 @@ class TaskControl:
         self.task_unavailable_reasons = json.loads(self.get_parameter("task_unavailable_reasons").value)
         self.task_clients = {
             kind: {action: self.create_client(Trigger, f"{namespace}/{action}")
-                   for action in ("start", "pause", "stop", "cancel")}
+                   for action in ("start", "pause", "resume", "stop", "cancel")}
             for kind, namespace in TASK_PREFIXES.items()}
         for kind, namespace in TASK_PREFIXES.items():
             self.task_clients[kind]["set_forward_boost"] = self.create_client(
@@ -75,7 +75,7 @@ class TaskControl:
             self.task_locks.add(kind)
         elif (kind not in self.uncertain_tasks
               and self._source_fresh(value, self.task_received[kind])
-              and not (self.command_pending and self.command_pending["packet"].get("action") == "start"
+              and not (self.command_pending and self.command_pending["packet"].get("action") in ("start", "resume")
                        and self.command_pending["packet"].get("task_type") == kind
                        and value.get("run_id") == self.command_pending["old_run"])):
             self.task_locks.discard(kind)
@@ -149,11 +149,34 @@ class TaskControl:
             add("busy", "已有清洗任务运行，或其最终状态尚未确认")
         if self.command_pending and not for_start:
             add("pending", "操作处理中")
+        resume_error = self._resume_error(kind)
+        value.update(can_resume=not resume_error and not self.command_pending,
+                     resume_blockers=([dict(code="resume", message=resume_error)] if resume_error else []))
         value.update(task_type=kind, fresh=fresh, can_start=not blockers, start_blockers=blockers)
         boost_error = self._forward_boost_error(kind)
         value.update(can_set_forward_boost=not boost_error and not self.command_pending,
                      forward_boost_setting_error=boost_error)
         return value
+
+    def _resume_error(self, kind):
+        task = self.tasks.get(kind, {})
+        if not self._runtime_task_allowed():
+            return "当前地图模式不能继续任务"
+        if not self._source_fresh(task, self.task_received.get(kind, 0)):
+            return "任务状态过期"
+        if self.uncertain_tasks or self.task_locks - {kind}:
+            return "其他任务占用或操作结果未确认"
+        loc = self._localization_view()
+        if not loc["ready"] or not task.get("map_id") or task["map_id"] != loc.get("map_id"):
+            return "定位未就绪或地图不匹配"
+        if (task.get("task_type") != kind or not task.get("run_id")
+                or task.get("phase") != "PAUSED" or task.get("pause_kind") != "user"):
+            return "没有可继续的人工暂停任务"
+        if not self.task_clients[kind]["resume"].service_is_ready():
+            return "继续任务服务不可用，请升级控制器"
+        if task.get("can_resume") is not True:
+            return "; ".join(b.get("message", "") for b in task.get("resume_blockers", [])) or "控制器未确认可以继续"
+        return ""
 
     def _forward_boost_error(self, kind):
         if not self._runtime_task_allowed() or self._runtime_busy():
@@ -188,7 +211,7 @@ class TaskControl:
         self.hub.send(client_id, result)
 
     def _operation_request(self, client_id, packet):
-        if not self._runtime_task_allowed() and (packet["op"] == "initial_pose" or packet.get("action") == "start"):
+        if not self._runtime_task_allowed() and (packet["op"] == "initial_pose" or packet.get("action") in ("start", "resume")):
             self._rpc_reply(client_id, packet, False, "当前模式不能设置定位或启动清洗")
             return
         key = (client_id, packet.get("request_id"))
@@ -208,13 +231,16 @@ class TaskControl:
             # A stop arriving during start is applied AFTER its asynchronous
             # reply, so a late start callback cannot undo the user's stop.
             if packet["op"] == "task" and packet["action"] in ("pause", "stop", "cancel"):
-                if pending["packet"].get("action") == "start" and pending["packet"].get("task_type") == packet["task_type"]:
+                if pending["packet"].get("action") in ("start", "resume") and pending["packet"].get("task_type") == packet["task_type"]:
                     if pending.get("stop_after"):
                         self._rpc_reply(client_id, packet, False, "停止请求处理中")
                     elif pending["stage"] == "handover":
                         self.command_pending = None
                         self._rpc_reply(pending["client"], pending["packet"], False, "启动已取消")
-                        self._rpc_reply(client_id, packet, True, "任务尚未启动，已取消启动")
+                        if pending["packet"].get("action") == "resume":
+                            self._operation_request(client_id, packet)
+                        else:
+                            self._rpc_reply(client_id, packet, True, "任务尚未启动，已取消启动")
                     else:
                         pending["stop_after"] = (client_id, packet)
                         if pending["stage"] == "status":
@@ -226,6 +252,10 @@ class TaskControl:
             error = self._initial_pose_error(packet)
         elif packet["action"] == "start":
             error = "; ".join(item["message"] for item in self._task_view(packet["task_type"])["start_blockers"])
+        elif packet["action"] == "resume":
+            error = self._resume_error(packet["task_type"])
+            if packet.get("run_id") != self.tasks.get(packet["task_type"], {}).get("run_id"):
+                error = "任务已变化，请刷新后继续"
         elif packet["action"] == "set_forward_boost":
             error = self._forward_boost_error(packet["task_type"])
         else:
@@ -237,12 +267,13 @@ class TaskControl:
             return
         self._stop_manual("operator_" + packet["op"])
         self.command_pending = dict(client=client_id, packet=packet, stage="handover", since=time.monotonic(),
-                                    old_run=self.tasks.get(packet.get("task_type"), {}).get("run_id"))
+                                    old_run=self.tasks.get(packet.get("task_type"), {}).get("run_id"),
+                                    old_resume=self.tasks.get(packet.get("task_type"), {}).get("resume_sequence", 0))
         self._task_tick()
 
     def _initial_pose_error(self, packet):
         if self.task_locks:
-            return "请先暂停或取消正在运行的清洗任务"
+            return "请先取消当前清洗任务"
         if not self.initial_pose_client.service_is_ready():
             return "初始位姿服务不可用"
         if not self.map_data or packet["map_revision"] != self.map_revision:
@@ -281,9 +312,20 @@ class TaskControl:
         if pending["stage"] == "status":
             kind = pending["packet"]["task_type"]
             task = self.tasks.get(kind, {})
-            if (self._source_fresh(task, self.task_received.get(kind, 0))
-                    and task.get("run_id") and task["run_id"] != pending["old_run"]):
-                self._finish_operation(pending, True, "启动请求已确认，请查看任务阶段")
+            fresh = (self._source_fresh(task, self.task_received.get(kind, 0))
+                     and task.get("stamp_ns", 0) >= pending["sent_ns"])
+            resuming = pending["packet"]["action"] == "resume"
+            if resuming:
+                progressed = task.get("resume_sequence", 0) > pending["old_resume"]
+                failed = (task.get("phase") in TERMINAL or
+                          (task.get("phase") == "PAUSED" and task.get("pause_kind") == "fault"))
+                confirmed = task.get("run_id") == pending["old_run"] and (progressed or failed)
+            else:
+                progressed = True
+                confirmed = bool(task.get("run_id") and task["run_id"] != pending["old_run"])
+            if fresh and confirmed:
+                self._finish_operation(pending, progressed,
+                    "任务状态已确认，请查看任务阶段" if progressed else "恢复未完成：" + task.get("reason", ""))
             return
         if pending["stage"] != "handover":
             return
@@ -303,6 +345,11 @@ class TaskControl:
                     return
                 if blockers:
                     self._finish_operation(pending, False, "; ".join(b["message"] for b in blockers))
+                    return
+            if action == "resume":
+                error = self._resume_error(kind)
+                if error or self.tasks.get(kind, {}).get("run_id") != pending["old_run"]:
+                    self._finish_operation(pending, False, error or "任务已变化")
                     return
             if action == "set_forward_boost":
                 error = self._forward_boost_error(kind)
@@ -335,13 +382,13 @@ class TaskControl:
             self.initial_pose_stamp = request.pose.header.stamp.sec*10**9 + request.pose.header.stamp.nanosec
         pending["stage"] = "service"
         pending["sent_ns"] = self.get_clock().now().nanoseconds
-        if packet.get("action") == "start":
+        if packet.get("action") in ("start", "resume"):
             self.task_locks.add(packet["task_type"])
         try:
             future = client.call_async(request)
             future.add_done_callback(lambda done: self._operation_done(pending, done))
         except Exception as exc:
-            if pending["packet"].get("action") == "start":
+            if pending["packet"].get("action") in ("start", "resume"):
                 self.uncertain_tasks.add(pending["packet"]["task_type"])
             self._finish_operation(pending, False, str(exc))
 
@@ -351,7 +398,7 @@ class TaskControl:
         try:
             result = future.result()
         except Exception as exc:
-            if pending["packet"].get("action") == "start":
+            if pending["packet"].get("action") in ("start", "resume"):
                 self.uncertain_tasks.add(pending["packet"]["task_type"])
             self._finish_operation(pending, False, str(exc))
             return
@@ -367,7 +414,7 @@ class TaskControl:
             # remains locked until the next fresh terminal status.
             if self.tasks.get(kind, {}).get("phase") in TERMINAL:
                 self.task_locks.discard(kind)
-        if result.success and pending["packet"].get("action") == "start" and not pending.get("stop_after"):
+        if result.success and pending["packet"].get("action") in ("start", "resume") and not pending.get("stop_after"):
             pending["stage"] = "status"
             return
         self._finish_operation(pending, bool(result.success), result.message)
@@ -389,7 +436,7 @@ class TaskControl:
             if task["fresh"]:
                 history.update(task.get("map_id"), task.get("run_id"),
                     getattr(self, "pose", None),
-                    recording=(task.get("phase") not in TERMINAL and loc["ready"]
+                    recording=(task.get("phase") not in TERMINAL | {"PAUSED", "ACQUIRING"} and loc["ready"]
                                and loc.get("map_id") == task.get("map_id")),
                     epoch=(loc.get("trajectory_id"), loc.get("initial_pose_stamp_ns")))
             else:

@@ -239,13 +239,17 @@ def test_websocket_initial_pose_task_routing_completion_and_localization_loss():
             if action == "start":
                 statuses[kind].update(phase="PLANNING", run_id=uuid.uuid4().hex)
                 state["started"] = time.monotonic()
+            elif action == "resume":
+                statuses[kind].update(phase="FOLLOW", can_resume=False, resume_sequence=1)
+            elif action == "pause":
+                statuses[kind].update(phase="PAUSED", pause_kind="user", can_resume=True, resume_sequence=0)
             else:
-                statuses[kind]["phase"] = {"pause": "PAUSED", "stop": "STOPPED", "cancel": "CANCELLED"}[action]
+                statuses[kind]["phase"] = "CANCELLED"
             response.success, response.message = True, "accepted"
             return response
         return callback
     for kind, prefix in (("l", "/l_cleaning"), ("rectangle", "/pool_cleaning")):
-        for action in ("start", "pause", "stop", "cancel"):
+        for action in ("start", "pause", "resume", "stop", "cancel"):
             peer.create_service(Trigger, prefix + "/" + action, task_callback(kind, action))
         def boost_callback(request, response, k=kind):
             calls.append((k, "set_forward_boost"))
@@ -300,9 +304,17 @@ def test_websocket_initial_pose_task_routing_completion_and_localization_loss():
             await send(dict(op="task", request_id="locked-boost", task_type="l", action="set_forward_boost", enabled=False))
             rejected = await until(lambda p: p.get("request_id") == "locked-boost")
             assert not rejected["success"] and statuses["l"]["forward_boost_enabled"]
+            await send(dict(op="task", request_id="pause", task_type="l", action="pause"))
+            await until(lambda p: p.get("request_id") == "pause" and p.get("success"))
+            paused = await until(lambda p: p.get("type") == "telemetry" and p["tasks"]["l"].get("can_resume"))
+            run_id = paused["tasks"]["l"]["run_id"]
+            assert paused["task_busy"] and not paused["can_set_initial_pose"]
+            await send(dict(op="task", request_id="resume", task_type="l", action="resume", run_id=run_id))
+            await until(lambda p: p.get("request_id") == "resume" and p.get("success") and not p.get("pending"))
+            assert statuses["l"]["run_id"] == run_id and statuses["l"]["phase"] == "FOLLOW"
             await send(dict(op="task", request_id="stop", task_type="l", action="stop"))
             await until(lambda p: p.get("request_id") == "stop" and p.get("success"))
-            stopped = await until(lambda p: p.get("type") == "telemetry" and p["tasks"]["l"].get("phase") == "STOPPED")
+            stopped = await until(lambda p: p.get("type") == "telemetry" and p["tasks"]["l"].get("phase") == "CANCELLED")
             assert stopped["tasks"]["l"]["run_id"] != done["tasks"]["l"]["run_id"]
             await send(dict(op="task", request_id="cancel", task_type="l", action="cancel"))
             await until(lambda p: p.get("request_id") == "cancel" and p.get("success"))

@@ -83,7 +83,8 @@ class Gateway(TaskControl):
 
 
 def task(kind="l", action="start", request_id="request-1"):
-    return dict(op="task", task_type=kind, action=action, request_id=request_id)
+    return dict(op="task", task_type=kind, action=action, request_id=request_id,
+                **({"run_id": "old"} if action == "resume" else {}))
 
 
 def initial_pose():
@@ -368,3 +369,46 @@ def test_task_view_omits_expected_track_and_duplicate_localization():
     g.status("l", expected_track={"points": [1, 2]}, localization_snapshot={"state": "ready"})
     view = g._task_telemetry()["tasks"]["l"]
     assert "expected_track" not in view and "localization_snapshot" not in view
+
+
+def paused_gateway():
+    g = Gateway()
+    g.status('l', phase='PAUSED', pause_kind='user', can_resume=True, resume_sequence=0)
+    return g
+
+
+def test_pause_keeps_task_lock_and_resume_confirms_same_run():
+    g = paused_gateway()
+    assert g._tasks_busy() and g.task_locks == {'l'}
+    assert not g._task_view('rectangle')['can_start']
+    assert g._initial_pose_error(initial_pose())
+    g._operation_request('app', task(action='resume'))
+    respond(g.task_clients['l']['resume'])
+    # A status emitted before the service executed may arrive after its reply.
+    g.status("l", phase="PAUSED", pause_kind="user", can_resume=True, resume_sequence=0)
+    g._task_tick()
+    assert g.command_pending is not None
+    g.status('l', phase='FOLLOW', run_id='old', resume_sequence=1)
+    g._task_tick()
+    assert g.command_pending is None and g.sent[-1]['success']
+    g._operation_request('app', task(action='resume'))
+    assert len(g.task_clients['l']['resume'].calls) == 1
+
+
+def test_cancel_during_resume_is_dispatched_after_late_reply():
+    g = paused_gateway()
+    g._operation_request('app', task(action='resume'))
+    g._operation_request('app', task(action='cancel', request_id='cancel'))
+    assert not g.task_clients['l']['cancel'].calls
+    respond(g.task_clients['l']['resume'])
+    assert len(g.task_clients['l']['cancel'].calls) == 1
+    respond(g.task_clients['l']['cancel'])
+    g.status('l', phase='CANCELLED')
+    assert not g.task_locks
+
+
+def test_resume_rejects_request_for_old_run():
+    g = paused_gateway()
+    g._operation_request('app', dict(task(action='resume'), run_id='previous-run'))
+    assert not g.sent[-1]['success']
+    assert not g.task_clients['l']['resume'].calls

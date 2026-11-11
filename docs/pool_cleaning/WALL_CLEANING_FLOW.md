@@ -150,8 +150,9 @@ flowchart TD
 /pool_cleaning/wall_observation     墙线感知结果
 /pool_cleaning/edge_target          当前地图边生成的目标墙上下文
 /pool_cleaning/start                启动任务
-/pool_cleaning/pause                暂停并关闭输出
-/pool_cleaning/stop                 停止并保留进度快照；再次 start 是新任务
+/pool_cleaning/pause                人工暂停、关闭输出并保留断点
+/pool_cleaning/resume               校验条件后继续同一任务
+/pool_cleaning/stop                 旧接口，等同 cancel，结束当前任务
 /pool_cleaning/cancel               取消并清除边关联
 /pool_cleaning/command_preview      执行器命令预览；live 模式另经 lease 发往 bridge
 /pool_cleaning/status               状态、原因、边进度和覆盖区间
@@ -159,6 +160,6 @@ flowchart TD
 
 射线选墙位于 [geometry.py](../../src/f1_pool_cleaning/f1_pool_cleaning/geometry.py)，简单靠近与路线编排位于 [autonomous.py](../../src/f1_pool_cleaning/f1_pool_cleaning/autonomous.py)，沿墙与换边位于 [mission.py](../../src/f1_pool_cleaning/f1_pool_cleaning/mission.py)。沿墙默认参数位于 [pool_cleaning.yaml](../../src/f1_pool_cleaning/config/pool_cleaning.yaml)，`approach_*` 默认值由 `ApproachConfig` 定义并由控制器声明。
 
-组合入口的定位状态为 `/f1_localization/localization_status`；开放任务的控制接口为 `/l_cleaning/*`。`stop/cancel` 均不支持断点续跑，App 的 `manual_stop` 仅停止手动会话。
+组合入口的定位状态为 `/f1_localization/localization_status`；开放任务的控制接口为 `/l_cleaning/*`。人工 `pause` 可显式 `resume`；`stop/cancel` 结束任务并使断点失效，App 的 `manual_stop` 仅停止手动会话。完整门控和地图管理规则见[功能说明](../TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
 
 > 说明：`COMPLETE` 表示本次路线执行结束；`coverage_complete` 单独表示记录的要求区间是否满足覆盖容差；`cleaned_intervals` 的统计基准是左侧滚刷接触中心线，不应单独解释为池底面积覆盖率。实船漂移、角部留白和实际清洁效果仍需现场验收记录。

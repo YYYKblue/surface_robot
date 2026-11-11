@@ -426,7 +426,7 @@ class SocketWorker(QThread):
         drive_output = dict(min=0, max=100, step=1, firmware_protocol_version=3, available=True)
         self._receive({"type": "hello", "client_id": "mock", "session_id": "mock-stream",
                        "drive_output": dict(drive_output), "capabilities": ["task_selection", "initial_pose",
-                       "start_conditions", "task_stop", "task_tracks", "mapping", "map_catalog",
+                       "start_conditions", "task_stop", "task_resume", "task_tracks", "mapping", "map_catalog", "map_delete", "map_unload",
                        "forward_boost", "continuous_drive_percent_v1"]})
         control = dict(state="READY", connected=True, source="NANO", motion_authorized=False,
             connection_id="mock-serial", epoch=1, armed=True,
@@ -468,20 +468,32 @@ class SocketWorker(QThread):
         while not self.stop_requested.wait(.1):
             now = time.monotonic()
             ready = initialized is not None and now-initialized >= 1. and runtime["mode"] == "localization"
+            occupied = active or next((k for k, t in tasks.items() if t["phase"] == "PAUSED"), None)
             for packet in self._take_outgoing():
+                occupied = active or next((k for k, t in tasks.items() if t["phase"] == "PAUSED"), None)
                 op = packet["op"]
                 success, message = True, "模拟操作已接受"
                 fields = {}
                 if op in ("manual_input", "manual_stop"):
-                    control = self._mock_drive_state(packet, control)
+                    if not occupied or op == "manual_stop":
+                        control = self._mock_drive_state(packet, control)
                     continue
                 control = self._mock_drive_state(dict(op="manual_stop"), control)
                 if op == "mapping":
                     action = packet["action"]
-                    if active and action not in ("list", "preview"):
+                    if occupied and action not in ("list", "preview"):
                         success, message = False, "请先停止清洗任务"
                     elif action == "list":
                         fields["maps"] = list(catalog)
+                    elif action == "unload" and runtime["mode"] != "mapping":
+                        initialized, ready = None, False
+                        runtime.update(mode="idle", phase="IDLE", current_map="", session_id=uuid.uuid4().hex)
+                        self._receive(dict(type="map", map=None, runtime_session_id=runtime["session_id"]))
+                    elif action == "delete" and packet.get("confirm") and packet["name"] != runtime.get("current_map"):
+                        catalog[:] = [e for e in catalog if e["name"] != packet["name"]]
+                        fields["deleted"] = dict(name=packet["name"])
+                        runtime["last_saved"] = None
+                        message = "地图已删除：" + packet["name"]
                     elif action == "preview":
                         fields.update(preview=mock_map, name=packet["name"])
                     elif action == "start" and runtime["mode"] != "mapping":
@@ -516,17 +528,17 @@ class SocketWorker(QThread):
                             task["actual_track"].update(run_id="", segments=[], point_count=0)
                     else:
                         success, message = False, "当前模式不支持此操作"
-                elif op == "initial_pose":
+                elif op == "initial_pose" and not occupied:
                     initialized, ready = now, False
                     pose = {key: packet[key] for key in ("x", "y", "yaw")}
                 elif op == "task":
                     kind, action = packet["task_type"], packet["action"]
                     if action == "set_forward_boost":
-                        if active is None and tasks[kind]["phase"] in ("IDLE", "CANCELLED", "STOPPED", "COMPLETE"):
+                        if occupied is None and tasks[kind]["phase"] in ("IDLE", "CANCELLED", "STOPPED", "COMPLETE"):
                             tasks[kind]["forward_boost_enabled"] = packet["enabled"]
                         else:
                             success, message = False, "只能在任务开始前设置提速"
-                    elif action == "start" and ready and active is None:
+                    elif action == "start" and ready and occupied is None:
                         active, started = kind, now
                         region = dict(edge_id="edge_0", reference_wall_point=[.2, 2.],
                                       polygon=[[.1, 2.], [.3, 2.], [.3, 1.15], [.1, 1.15]])
@@ -538,8 +550,17 @@ class SocketWorker(QThread):
                         start_pose = dict(pose)
                         tasks[kind]["actual_track"].update(run_id=tasks[kind]["run_id"],
                             segments=[[[pose["x"], pose["y"]]]], point_count=1)
-                    elif action in ("pause", "stop", "cancel"):
-                        tasks[kind]["phase"] = {"pause": "PAUSED", "stop": "STOPPED", "cancel": "CANCELLED"}[action]
+                    elif action == "pause" and active == kind:
+                        tasks[kind].update(paused_phase=tasks[kind]["phase"], phase="PAUSED",
+                                           pause_kind="user", paused_elapsed=now-started)
+                        active = None
+                    elif (action == "resume" and tasks[kind]["phase"] == "PAUSED" and ready
+                          and packet.get("run_id") == tasks[kind]["run_id"]):
+                        active, started = kind, now-tasks[kind]["paused_elapsed"]
+                        tasks[kind]["phase"] = tasks[kind]["paused_phase"]
+                        tasks[kind]["actual_track"]["segments"].append([])
+                    elif action in ("stop", "cancel"):
+                        tasks[kind].update(phase="CANCELLED", pause_kind="")
                         active = None
                     else:
                         success, message = False, "模拟启动条件未满足"
@@ -565,19 +586,21 @@ class SocketWorker(QThread):
                 pose = dict(x=a[0]+(b[0]-a[0])*fraction, y=a[1]+(b[1]-a[1])*fraction,
                             yaw=math.atan2(b[1]-a[1], b[0]-a[0]))
                 history = tasks[active]["actual_track"]
-                history["segments"][0].append([pose["x"], pose["y"]])
+                history["segments"][-1].append([pose["x"], pose["y"]])
                 history["point_count"] += 1
                 if now-started > 8:
                     tasks[active].update(phase="COMPLETE", completed_at_ns=time.time_ns(), coverage_complete=True)
                     active = None
                 elif now-started > 3:
                     tasks[active]["phase"] = "FOLLOW"
+            occupied = active or next((k for k, t in tasks.items() if t["phase"] == "PAUSED"), None)
             for task in tasks.values():
+                task.update(can_resume=task["phase"] == "PAUSED" and ready, resume_blockers=[])
                 editable = task["phase"] in ("IDLE", "CANCELLED", "STOPPED", "COMPLETE")
                 boost_active = (task["forward_boost_enabled"] and task["phase"] == "FOLLOW"
                                 and not task.get("forward_boost_cutoff_reached", False))
                 task.update(forward_boost_editable=editable,
-                    can_set_forward_boost=editable and active is None,
+                    can_set_forward_boost=editable and occupied is None,
                     forward_boost_active=boost_active,
                     forward_boost_reason=("disabled" if not task["forward_boost_enabled"] else
                         "active" if boost_active else "inactive_task" if editable else
@@ -585,8 +608,8 @@ class SocketWorker(QThread):
                 blockers = []
                 if not ready:
                     blockers.append(dict(code="localization", message="等待定位稳定"))
-                if active or task["phase"] == "PAUSED":
-                    blockers.append(dict(code="phase", message="任务运行中或需要先取消暂停任务"))
+                if occupied:
+                    blockers.append(dict(code="phase", message="任务尚未结束，请继续或取消"))
                 task.update(fresh=True, can_start=not blockers, start_blockers=blockers,
                             wall_fresh=ready, wall_valid=ready,
                             center_wall_distance_m=.35 if ready else None)
@@ -600,9 +623,9 @@ class SocketWorker(QThread):
                 drive_output=dict(drive_output), control_fresh=True,
                 pose=pose if runtime["mode"] != "idle" else None,
                 runtime=dict(runtime), tasks=json.loads(json.dumps({k: {field: value for field, value in t.items()
-                    if field != "actual_track"} for k, t in tasks.items()})) if runtime["mode"] == "localization" else {}, task_busy=bool(active),
-                operation_pending=False, active_tasks=[active] if active else [], active_client="mock",
-                can_set_initial_pose=active is None and runtime["mode"] == "localization",
+                    if field != "actual_track"} for k, t in tasks.items()})) if runtime["mode"] == "localization" else {}, task_busy=bool(occupied),
+                operation_pending=False, active_tasks=[occupied] if occupied else [], active_client="mock",
+                can_set_initial_pose=occupied is None and runtime["mode"] == "localization",
                 localization=dict(fresh=True, ready=ready, initial_pose_received=initialized is not None,
                     state="LOCALIZATION_READY" if ready else "LOCALIZATION_CHECK", map_id="mock-map",
                     pose_fresh=ready, scan_fresh=True, map_available=True, stable_sec=1.,

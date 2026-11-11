@@ -134,7 +134,7 @@ class RuntimeControl:
         try:
             if action not in READ_ACTIONS:
                 if self.command_pending or self.task_locks or self.uncertain_tasks:
-                    raise ValueError("请先停止清洗任务并等待停止确认")
+                    raise ValueError("请先取消清洗任务并等待确认")
                 if self.runtime["mode"] == "localization":
                     for kind in self.runtime.get("task_kinds", []):
                         if not self._source_fresh(self.tasks.get(kind, {}), self.task_received.get(kind, 0)):
@@ -143,6 +143,13 @@ class RuntimeControl:
                     raise ValueError("当前未处于建图模式")
                 if action in ("start", "load") and self.runtime["mode"] == "mapping":
                     raise ValueError("请先保存并结束，或明确放弃当前建图")
+                if action == "delete":
+                    if not packet.get("confirm"):
+                        raise ValueError("删除地图需要明确确认")
+                    if packet["name"] == self.runtime.get("current_map"):
+                        raise ValueError("请先卸载当前地图，再删除")
+                if action == "unload" and self.runtime["mode"] not in ("localization", "error", "idle"):
+                    raise ValueError("请先保存或放弃当前建图")
                 if action == "start" and not self._runtime_scan_fresh():
                     raise ValueError("雷达无新鲜有效扫描，请检查雷达状态")
                 if action == "discard" and not packet.get("confirm"):
@@ -170,9 +177,14 @@ class RuntimeControl:
                 entries = self.map_store.catalog()
                 for transaction in self.map_store.recovered():
                     entries.append(dict(name=transaction["name"], valid=False, recoverable=True,
+                        snapshot_id=Path(transaction["directory"]).name.removeprefix(".snapshot-"),
                         saved_at="", reason="快照已保留，可重试栅格导出"))
                 return entries
             self._runtime_work(listing, "list")
+        elif action == "delete":
+            self._runtime_work(lambda: self.map_store.delete(packet["name"], packet.get("snapshot_id", "")), "deleted")
+        elif action == "unload":
+            self._runtime_stop("stopped")
         elif action == "preview":
             self._runtime_work(lambda: self.map_store.preview(packet["name"]), "preview")
         elif action == "load":
@@ -211,7 +223,7 @@ class RuntimeControl:
 
     def _runtime_switch(self):
         if self.command_pending or self.task_locks or self.uncertain_tasks:
-            raise ValueError("准备地图期间任务状态改变，请先停止任务")
+            raise ValueError("准备地图期间任务状态改变，请先取消任务")
         if self.runtime_process:
             self._runtime_stop("stopped")
         else:
@@ -284,7 +296,7 @@ class RuntimeControl:
                 if self._manual_acquires or any(not f.done() for f in self.manual_releases):
                     return
                 if self.command_pending or self.task_locks or self.uncertain_tasks:
-                    self._runtime_finish(False, "清洗任务状态改变，请先停止任务")
+                    self._runtime_finish(False, "清洗任务状态改变，请先取消任务")
                     return
                 state = self.control_state
                 if self.get_parameter("output_enabled").value and time.monotonic() - self.control_received >= .3:
@@ -309,7 +321,13 @@ class RuntimeControl:
                     if time.monotonic() - pending["since"] > 8:
                         raise RuntimeError("仍有建图、定位或清洗节点运行，未启动重复实例")
                     return
-                self._runtime_spawn()
+                if pending["packet"]["action"] == "unload":
+                    self.runtime.update(mode="idle", phase="IDLE", current_map="", task_kinds=[],
+                                        session_id=uuid.uuid4().hex)
+                    self._runtime_reset()
+                    self._runtime_finish(True, "当前地图已卸载，返回待机")
+                else:
+                    self._runtime_spawn()
                 return
             if stage == "ready":
                 if not self.runtime_process.alive():
@@ -352,6 +370,10 @@ class RuntimeControl:
             value = future.result()
             if stage == "list":
                 self._runtime_finish(True, "地图列表已更新", maps=value, maps_directory=str(self.map_store.root))
+            elif stage == "deleted":
+                if (self.runtime.get("last_saved") or {}).get("name") == value["name"]:
+                    self.runtime["last_saved"] = None
+                self._runtime_finish(True, "地图已删除：" + value["name"], deleted=value)
             elif stage == "preview":
                 self._runtime_finish(True, "地图预览已加载", preview=value, name=pending["packet"]["name"])
             elif stage == "prepared":

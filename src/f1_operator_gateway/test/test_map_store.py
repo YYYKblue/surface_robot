@@ -81,3 +81,46 @@ def test_bad_yaml_and_missing_image_are_reported_per_map(tmp_path):
     entries = {e['name']: e for e in store.catalog()}
     assert entries['good']['valid']
     assert not entries['bad']['valid'] and entries['bad']['reason']
+
+
+def test_delete_incomplete_map_and_exact_snapshot(tmp_path):
+    store = MapStore(tmp_path)
+    triplet(store.root, 'keep')
+    store.path('broken').write_bytes(b'partial')
+    assert store.delete('broken')['name'] == 'broken'
+    assert store.delete('broken')['already_absent']
+    txn = store.reserve('keep')
+    Path(txn['stem']+'.pbstream').write_bytes(b'snapshot')
+    sid = Path(txn['directory']).name.removeprefix('.snapshot-')
+    store.delete(txn['name'], sid)
+    assert not store.recovered() and not Path(txn['marker']).exists()
+    assert store.validate('keep')
+    store.delete('keep')
+    assert not store.catalog()
+
+
+def test_delete_rolls_back_on_staging_failure(tmp_path, monkeypatch):
+    store = MapStore(tmp_path)
+    triplet(store.root, 'keep')
+    original = Path.rename
+    def fail_second(path, target):
+        if path == store.path('keep', '.pgm'):
+            raise OSError('injected rename failure')
+        return original(path, target)
+    monkeypatch.setattr(Path, 'rename', fail_second)
+    with pytest.raises(OSError):
+        store.delete('keep')
+    assert store.validate('keep')
+    assert not list(store.root.glob('.delete-*'))
+
+
+def test_delete_rejects_symlinks_and_snapshot_path_escape(tmp_path):
+    store = MapStore(tmp_path)
+    outside = tmp_path / 'outside'
+    outside.write_bytes(b'private')
+    (store.root / 'bad.pbstream').symlink_to(outside)
+    with pytest.raises(ValueError):
+        store.delete('bad')
+    with pytest.raises(ValueError):
+        store.delete('bad', '../outside')
+    assert outside.read_bytes() == b'private'
