@@ -6,7 +6,9 @@
 - 原包名与声明版本：`pavo2_ros`，`2.1.2`。目录包含现有 ROS 2 适配，不等同于未经修改的厂商发布包。
 - `source_manifest.json` 记录本次读取的源文件 SHA-256（不包含 Python 缓存），用于后续比较；没有已核实的上游 Git 提交号。
 
-`pavo2_sdk/`、`Readme.vendor`、本包 `src/*.cpp` 及 `include/f1_lidar_driver/pavo2_utils.h` 按字节保留源文件。SDK 作为包内静态库编译，不依赖原工作空间的二进制文件。包名、CMake、launch、参数文件、服务模板与项目文档为迁移适配。
+2026-10-31 导入时，`pavo2_sdk/`、`Readme.vendor`、本包 `src/*.cpp` 及 `include/f1_lidar_driver/pavo2_utils.h` 按字节保留源文件。SDK 作为包内静态库编译，不依赖原工作空间的二进制文件。包名、CMake、launch、参数文件、服务模板与项目文档为迁移适配。
+
+2026-11-11 随实机换装 PAVO2-LS-50HC，仅调整可选 `src/pavo2_fov_marker_node.cpp` 的默认视场为 ±180°，全圆轮廓不再绘制连接圆心的扇形边线，并同步查看器 launch/RViz。该显示节点不再与导入哈希一致；扫描驱动、工具函数和 SDK 未作修改，`source_manifest.json` 继续保留原导入记录。
 
 `Readme.vendor` 含历史 ROS 1 命令，仅作来源资料；当前使用方式以本包 README 为准。原驱动说明 PDF 保留在 SDK 目录中。
 

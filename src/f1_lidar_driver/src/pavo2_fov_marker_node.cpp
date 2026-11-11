@@ -46,8 +46,8 @@ public:
     marker_topic_ = declare_parameter<std::string>(
       "marker_topic", "/pavo2_scan_visualization");
     range_m_ = std::max(0.1, declare_parameter<double>("range_m", 100.0));
-    angle_min_deg_ = declare_parameter<double>("angle_min_deg", -140.0);
-    angle_max_deg_ = declare_parameter<double>("angle_max_deg", 140.0);
+    angle_min_deg_ = declare_parameter<double>("angle_min_deg", -180.0);
+    angle_max_deg_ = declare_parameter<double>("angle_max_deg", 180.0);
     arc_step_deg_ = std::max(0.1, declare_parameter<double>("arc_step_deg", 1.0));
 
     if (angle_min_deg_ > angle_max_deg_) {
@@ -109,14 +109,19 @@ private:
     marker.color.b = 1.00F;
     marker.color.a = 0.95F;
 
-    marker.points.push_back(origin_point(0.04));
+    const bool full_circle = angle_max_deg_ - angle_min_deg_ >= 360.0;
+    if (!full_circle) {
+      marker.points.push_back(origin_point(0.04));
+    }
     marker.points.push_back(
       polar_point(range_m_, degrees_to_radians(angle_min_deg_), 0.04));
     for (double angle = angle_min_deg_; angle < angle_max_deg_; angle += arc_step_deg_) {
       const double next_angle = std::min(angle + arc_step_deg_, angle_max_deg_);
       marker.points.push_back(polar_point(range_m_, degrees_to_radians(next_angle), 0.04));
     }
-    marker.points.push_back(origin_point(0.04));
+    if (!full_circle) {
+      marker.points.push_back(origin_point(0.04));
+    }
     return marker;
   }
 

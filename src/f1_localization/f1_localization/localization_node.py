@@ -351,16 +351,17 @@ class LocalizationManager(Node):
             self._scan_map_overlap = None
             self._scan_overlap_reason = "scan has no timestamp or frame"
             return
-        values = list(message.ranges)
-        valid = [value for value in values if math.isfinite(value)
-                 and message.range_min <= value <= message.range_max]
-        fraction = len(valid) / len(values) if values else 0.
-        overlap = self._scan_overlap(message, valid)
+        # Reuse the message array and one validity pass for both quality checks.
+        ranges = message.ranges
+        valid_indices = [i for i, value in enumerate(ranges)
+                         if math.isfinite(value) and message.range_min <= value <= message.range_max]
+        fraction = len(valid_indices) / len(ranges) if ranges else 0.
+        overlap = self._scan_overlap(message, ranges, valid_indices)
         self._last_scan = ScanQuality(stamp, fraction, overlap, message.header.frame_id)
         self._last_scan_received = time.monotonic()
 
-    def _scan_overlap(self, message, valid_values):
-        if not valid_values:
+    def _scan_overlap(self, message, ranges, valid_indices):
+        if not valid_indices:
             self._scan_overlap_reason = "scan has no valid range returns"
             return 0.
         try:
@@ -398,9 +399,6 @@ class LocalizationManager(Node):
         # Sample a bounded number of rays.  Endpoints are matched against
         # occupied cells in the actual /map grid, rather than merely checked
         # against the configured rectangular boundary.
-        ranges = list(message.ranges)
-        valid_indices = [i for i, value in enumerate(ranges)
-                         if math.isfinite(value) and message.range_min <= value <= message.range_max]
         step = max(1, len(valid_indices) // 120)
         points = []
         for index in valid_indices[::step]:

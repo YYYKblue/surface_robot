@@ -71,7 +71,7 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
-      Name: Pavo2 280 Degree FOV
+      Name: Pavo2 360 Degree FOV
       Namespaces:
         pavo2_fov: true
       Topic:
