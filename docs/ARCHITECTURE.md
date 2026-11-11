@@ -42,6 +42,8 @@ flowchart LR
 
 图中的网关任务服务调用与初始位姿调用分别进入控制器和定位管理器。IMU 由桥发布，但当前建图和固定地图定位均不融合 IMU 或轮速。TF 链为 `map → odom → base_link → pavo2s_frame`；雷达静态安装参数来自 `f1_mapping_bringup/config/lidar_planar.yaml`。建图 Lua 的跟踪帧为 `pavo2s_frame`，纯定位 Lua 的跟踪帧为 `base_link`，对外船体位姿都使用 `map → base_link`。
 
+2026-11-11 起桥接使用 F103 v3，主电机输出为整数 0–100，固件按方向和电机组混控，CH06=`1050+9*p`、PWM 偏移=`4*p` μs。网关/Windows 通过 `continuous_drive_percent_v1` 与动态 `drive_output.available` 表示连续输出能力；实际使能还需新鲜且兼容的 CTRL、ACK、中性握手和租约。版本不匹配进入 `INCOMPATIBLE`，恢复后重新申请，旧动作不会恢复。RC v2 原始14通道独立进入诊断，不作为 Nano 控制输入；CTRL 保留目标 PWM 与接受 ACK 的语义。新 25% 输出比旧 25 档的 PWM 偏移小，自主动作首批固定新25%，尚未拆分各动作参数或加入变力度控制。
+
 ## 3. 入口选择与进程归属
 
 | 入口 | 启动内容 | 使用前提 |
@@ -85,7 +87,7 @@ App 加载地图的启动链为 `operator_system.launch.py → runtime.py → op
 
 默认 `left_ray` 沿船体 +y 选择第一面命中的有限墙段；公共角点按清洗方向与船头夹角选墙。无交点拒绝启动，不延长墙或回退最近墙。显式 `set_edge` 或 `start_policy=specified` 可覆盖。开始前检查定位和位姿，锁定墙及最近投影点，取得控制权后旋转、前后移动和侧移进入旧版合理起始范围，再确认墙面。没有路径搜索、足迹或雷达环境碰撞检查；控制租约、定位与通信期限仍生效。
 
-当前墙距目标为 0.33 m，控制区间 0.32–0.36 m；刷盘与侧推默认幅度为 50%。滚刷在墙距合格且航向在 ±10° 内时推进，主电机在航向偏差超过 ±3° 时纠偏。默认提速关闭；启动前可经 `set_forward_boost` 设置四电推最低 25 档辅助前进，运行中及暂停时锁定。只有 `FOLLOW` 且船中心距当前墙端沿程距离大于 0.80 m 才可提速，纠偏优先，进入近端后本墙段锁定关闭，矩形补洗也检查实际结束位置。此状态由共享 `Mission` 持有，App 经网关调用 SetBool 服务并等待状态确认；控制器重启/换图默认关闭。`transfer_side_percent` 控制右转换边侧推，`side_percent` 用于沿墙、初始侧移及左转换边侧移。
+当前墙距目标为 0.33 m，控制区间 0.32–0.36 m；刷盘与侧推默认幅度为 50%。滚刷在墙距合格且航向在 ±10° 内时推进，主电机在航向偏差超过 ±3° 时纠偏。默认提速关闭；启动前可经 `set_forward_boost` 设置四电推25% 输出辅助前进，运行中及暂停时锁定。只有 `FOLLOW` 且船中心距当前墙端沿程距离大于 0.80 m 才可提速，纠偏优先，进入近端后本墙段锁定关闭，矩形补洗也检查实际结束位置。此状态由共享 `Mission` 持有，App 经网关调用 SetBool 服务并等待状态确认；控制器重启/换图默认关闭。`transfer_side_percent` 控制右转换边侧推，`side_percent` 用于沿墙、初始侧移及左转换边侧移。
 
 覆盖由 `coverage.py` 和 `AutonomousMission` 统计左刷接触中心线区间，默认缺口容差 0.05 m。矩形顺时针绕行后只补齐首次有效开刷位置之前的起始边，并重叠 0.10 m；不再规划其他缺口的补洗。开放任务只执行选中位置之后到墙链末端的路线，不返回、不补洗。`COMPLETE` 表示本次路线执行结束，`coverage_complete` 和剩余缺口单独报告。
 
@@ -107,7 +109,7 @@ Windows App 仅绘制底图、实时船体位姿和实际任务轨迹。网关�
 
 ## 7. 验证和维护入口
 
-ROS 包通过 `CMakeLists.txt` 注册 pytest/GoogleTest，使用 `colcon test` 执行；Qt 测试单独运行。仓库现有测试包含纯逻辑、模拟 ROS 服务、localhost DDS、WebSocket 以及合成扫描的 Cartographer 集成。涉及外部固件的两个组需要 `F1_FIRMWARE_DIR`，见[部署测试说明](../DEPLOY_NANO.md#7-nano离线测试)。
+ROS 包通过 `CMakeLists.txt` 注册 pytest/GoogleTest，使用 `colcon test` 执行；Qt 测试单独运行。仓库现有测试包含纯逻辑、模拟 ROS 服务、localhost DDS、WebSocket 以及合成扫描的 Cartographer 集成。固件测试默认读取 `under/F103firmware`，可用 `F1_FIRMWARE_DIR` 指定同版本源码，见[部署测试说明](../DEPLOY_NANO.md#7-nano离线测试)。
 
 以下为可按需执行的几何与任务逻辑检查命令；本次文档更新未重新运行它们：
 

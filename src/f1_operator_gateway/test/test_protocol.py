@@ -19,13 +19,29 @@ def test_manual_input_is_a_plain_latest_intent():
      "mode": "BOTH", "brush_enabled": False, "thrust_enabled": False},
     {"op": "manual_input", "seq": 1, "direction": "BAD", "speed_percent": 25,
      "mode": "BOTH", "brush_enabled": False, "thrust_enabled": False},
-    {"op": "manual_input", "seq": 1, "direction": "FORWARD", "speed_percent": 10,
+    {"op": "manual_input", "seq": 1, "direction": "FORWARD", "speed_percent": 101,
      "mode": "BOTH", "brush_enabled": False, "thrust_enabled": False},
     {"op": "task", "action": "acquire"},
 ])
 def test_invalid_packet_rejected(packet):
     with pytest.raises(ValueError):
         decode(json.dumps(packet).encode())
+
+
+@pytest.mark.parametrize("speed", [0, 1, 24, 25, 37, 50, 75, 99, 100])
+def test_manual_speed_accepts_integer_percent_without_quantization(speed):
+    packet = dict(op="manual_input", seq=1, direction="FORWARD", speed_percent=speed,
+                  mode="BOTH", brush_enabled=False, thrust_enabled=False)
+    assert decode(json.dumps(packet))["input"].speed_percent == speed
+
+
+@pytest.mark.parametrize("speed", [-1, 101, True, False, 25.0, 25.5, "25", None,
+                                  float("nan"), float("inf")])
+def test_manual_speed_rejects_non_integer_and_out_of_range_values(speed):
+    packet = dict(op="manual_input", seq=1, direction="FORWARD", speed_percent=speed,
+                  mode="BOTH", brush_enabled=False, thrust_enabled=False)
+    with pytest.raises(ValueError, match="speed_percent"):
+        decode(json.dumps(packet))
 
 
 def test_duplicate_keys_rejected():

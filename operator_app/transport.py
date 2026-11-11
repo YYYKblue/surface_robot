@@ -423,7 +423,19 @@ class SocketWorker(QThread):
     def _mock_loop(self):
         """Interactive UI fixture only; never opens a hardware connection."""
         import uuid
-        self._receive({"type": "hello", "client_id": "mock", "session_id": "mock-stream", "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks", "mapping", "map_catalog", "forward_boost"]})
+        drive_output = dict(min=0, max=100, step=1, firmware_protocol_version=3, available=True)
+        self._receive({"type": "hello", "client_id": "mock", "session_id": "mock-stream",
+                       "drive_output": dict(drive_output), "capabilities": ["task_selection", "initial_pose",
+                       "start_conditions", "task_stop", "task_tracks", "mapping", "map_catalog",
+                       "forward_boost", "continuous_drive_percent_v1"]})
+        control = dict(state="READY", connected=True, source="NANO", motion_authorized=False,
+            connection_id="mock-serial", epoch=1, armed=True,
+            allow_fifth_thruster=True, firmware_protocol_version=3, firmware_protocol_compatible=True,
+            direction="STOP", speed_percent=25, mode="BOTH", target_pwm_bl_br_fl_fr=[1500]*4,
+            brush_enabled=False, brush_percent=0, thrust_enabled=False, thrust_percent=0,
+            have_sequence=False, ack_sequence=0, sent_sequence=0, result="OK",
+            ctrl_age_sec=0., ack_age_sec=0., command_remaining_sec=0.,
+            rc_valid=False, rc_flags=0, rc_sequence=0, rc_age_sec=-1., rc_channels=[0]*14)
         mock_map = {"resolution": .02, "width": 160, "height": 100,
             "frame_id": "map", "revision": 1, "origin": {"x": 0, "y": 0, "yaw": 0}, "data": [0]*16000}
         self._receive({"type": "map", "map": dict(mock_map), "runtime_session_id": "mock-session"})
@@ -460,6 +472,10 @@ class SocketWorker(QThread):
                 op = packet["op"]
                 success, message = True, "模拟操作已接受"
                 fields = {}
+                if op in ("manual_input", "manual_stop"):
+                    control = self._mock_drive_state(packet, control)
+                    continue
+                control = self._mock_drive_state(dict(op="manual_stop"), control)
                 if op == "mapping":
                     action = packet["action"]
                     if active and action not in ("list", "preview"):
@@ -580,8 +596,8 @@ class SocketWorker(QThread):
                     json.loads(json.dumps({k: t["actual_track"] for k, t in tasks.items()}))))
             sequence += 1
             self._receive(dict(type="telemetry", stream=dict(session="mock-stream", sequence=sequence,
-                generated_monotonic=now, generated_unix=time.time(), server_queue_ms=0.), state=dict(state="READY", connected=True,
-                source="NANO", motion_authorized=False, allow_fifth_thruster=True), control_fresh=True,
+                generated_monotonic=now, generated_unix=time.time(), server_queue_ms=0., control_age_ms=0.), state=dict(control),
+                drive_output=dict(drive_output), control_fresh=True,
                 pose=pose if runtime["mode"] != "idle" else None,
                 runtime=dict(runtime), tasks=json.loads(json.dumps({k: {field: value for field, value in t.items()
                     if field != "actual_track"} for k, t in tasks.items()})) if runtime["mode"] == "localization" else {}, task_busy=bool(active),
@@ -591,3 +607,28 @@ class SocketWorker(QThread):
                     state="LOCALIZATION_READY" if ready else "LOCALIZATION_CHECK", map_id="mock-map",
                     pose_fresh=ready, scan_fresh=True, map_available=True, stable_sec=1.,
                     stable_elapsed_sec=0. if initialized is None else now-initialized)))
+
+    @staticmethod
+    def _mock_drive_state(packet, previous):
+        """Display fixture for accepted targets; no motor or vessel simulation."""
+        state = dict(previous)
+        if packet.get("op") == "manual_stop":
+            state.update(direction="STOP", motion_authorized=False,
+                         brush_enabled=False, brush_percent=0, thrust_enabled=False, thrust_percent=0)
+        else:
+            for key in ("direction", "speed_percent", "mode", "brush_enabled", "brush_percent",
+                        "thrust_enabled", "thrust_percent"):
+                state[key] = packet.get(key, state.get(key))
+            if state["speed_percent"] == 0:
+                state["direction"] = "STOP"
+            sequence = state.get("sent_sequence", 0) + 1
+            state.update(motion_authorized=True, have_sequence=True,
+                         sent_sequence=sequence, ack_sequence=sequence)
+        thrust = {"STOP": (0, 0, 0, 0), "FORWARD": (1, 1, 1, 1),
+                  "REVERSE": (-1, -1, -1, -1), "LEFT": (-1, 1, -1, 1), "RIGHT": (1, -1, 1, -1)}
+        mode = state["mode"]
+        state["target_pwm_bl_br_fl_fr"] = [
+            1500 if (mode == "FRONT" and index < 2) or (mode == "BACK" and index >= 2)
+            else 1500 + sign*polarity*state["speed_percent"]*4
+            for index, (sign, polarity) in enumerate(zip(thrust[state["direction"]], (1, 1, -1, 1)))]
+        return state

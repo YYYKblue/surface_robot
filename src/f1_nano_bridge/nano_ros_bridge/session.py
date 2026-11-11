@@ -2,7 +2,7 @@
 from dataclasses import dataclass, replace
 import secrets
 
-from .protocol import U32, channels, encode, forward, neutral
+from .protocol import U32, WIRE_VERSION, UnsupportedProtocol, channels, encode, forward, neutral
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,7 @@ class Session:
         self.connected = False
         self.connection_id = ""
         self.ctrl = None
+        self.firmware_protocol_version = 0
         self.ctrl_at = None
         self.ack_at = None
         self.last_ack = None
@@ -80,6 +81,7 @@ class Session:
         self.connected = True
         self.connection_id = secrets.token_hex(16)
         self.ctrl = None
+        self.firmware_protocol_version = 0
         self.ctrl_at = self.ack_at = self.last_ack = None
         self.last_sent = self.last_tx_at = None
         self.wire_seq = 0
@@ -93,8 +95,19 @@ class Session:
         self.fault = reason
         self.stop(reason)
 
+    def protocol_mismatch(self, version):
+        self.stop(str(UnsupportedProtocol(version)))
+        self.firmware_protocol_version = version
+        self.ctrl = None
+        self.ctrl_at = self.ack_at = self.last_ack = None
+        self.last_sent = self.last_tx_at = None
+        self.wire_seq = 0
+
     def receive(self, ctrl, now):
         if not self.connected:
+            return
+        if ctrl.protocol_version != WIRE_VERSION:
+            self.protocol_mismatch(ctrl.protocol_version)
             return
         old = self.ctrl
         changed = old is None or (ctrl.source, ctrl.epoch) != (old.source, old.epoch)
@@ -108,6 +121,7 @@ class Session:
             self.last_sent = None
             self.wire_seq = 0
         self.ctrl = ctrl
+        self.firmware_protocol_version = ctrl.protocol_version
         self.ctrl_at = now
         if ctrl.source != "NANO":
             self.reason = "RC has control; Nano stop cannot override RC"
@@ -238,12 +252,15 @@ class Session:
     def snapshot(self, now):
         self.health(now)
         state = ("FAULT" if self.fault else "DISCONNECTED" if not self.connected
+                 else "INCOMPATIBLE" if self.firmware_protocol_version not in (0, WIRE_VERSION)
                  else "RC" if self.ctrl and self.ctrl.source == "RC"
                  else "ACTIVE" if self.token else "READY" if self.ready
                  else "HANDSHAKE")
         if not self.motion_enabled and state == "READY":
             state = "MONITOR"
         return dict(state=state, reason=self.fault or self.reason,
+                    firmware_protocol_version=self.firmware_protocol_version,
+                    firmware_protocol_compatible=self.firmware_protocol_version == WIRE_VERSION,
                     last_stop_reason=self.last_stop_reason,
                     allow_fifth_thruster=self.allow_fifth,
                     connected=self.connected, connection_id=self.connection_id,

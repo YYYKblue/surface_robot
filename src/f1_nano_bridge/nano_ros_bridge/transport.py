@@ -9,7 +9,7 @@ import time
 
 import serial
 
-from .protocol import Control, Lines, decode, forward
+from .protocol import Control, Remote, UnsupportedProtocol, Lines, decode, forward
 from .session import Session
 
 
@@ -76,6 +76,8 @@ class Worker:
         self.imu_at = None
         self.imu_status = 0
         self.imu_previous = None
+        self.remote = None
+        self.remote_at = None
         # Clock injection is only for offline tests, never a ROS parameter.
         self.wall_clock_ns = wall_clock_ns or time.time_ns
         self.clock_offset = None
@@ -135,6 +137,14 @@ class Worker:
             result.update(invalid_lines=self.invalid_lines,
                           imu_age_sec=-1. if self.imu_at is None else now - self.imu_at,
                           imu_status=self.imu_status)
+            rc_age = -1. if self.remote_at is None else now - self.remote_at
+            result.update(rc_valid=bool(self.remote and self.remote.valid
+                                       and not self.remote.flags & 12
+                                       and 0 <= rc_age < Session.CTRL_TIMEOUT),
+                          rc_age_sec=rc_age,
+                          rc_flags=self.remote.flags if self.remote else 0,
+                          rc_sequence=self.remote.sequence if self.remote else 0,
+                          rc_channels=list(self.remote.channels) if self.remote else [1500] * 14)
             return result
 
     def transport_diagnostics(self):
@@ -244,12 +254,27 @@ class Worker:
         for line in self.lines.feed(data):
             try:
                 sample = decode(line)
+            except UnsupportedProtocol as error:
+                self.core.protocol_mismatch(error.version)
+                self.remote = self.remote_at = None
+                continue
             except (ValueError, UnicodeError):
                 self.invalid_lines += 1
                 continue
             if isinstance(sample, Control):
+                old = self.core.ctrl
+                if (old is not None and sample.milliseconds != old.milliseconds
+                        and not forward(sample.milliseconds, old.milliseconds)):
+                    self.remote = self.remote_at = None
                 self.core.receive(sample, mono_ns / 1e9)
-            else:
+            elif isinstance(sample, Remote):
+                # A repeated remote sequence can be a fresh invalid/no-signal
+                # report. Firmware time, rather than the RC sequence, proves
+                # this telemetry is new. A CTRL clock reset clears this cache.
+                if self.remote is None or forward(sample.milliseconds, self.remote.milliseconds):
+                    self.remote = sample
+                    self.remote_at = mono_ns / 1e9
+            elif sample["kind"] == "IMU":
                 self.imu_status = sample["status"]
                 seq, ms = sample["sequence"], sample["stm32_ms"]
                 fresh = self.imu_previous is None
@@ -281,6 +306,7 @@ class Worker:
         self.imu_at = None
         self.imu_status = 0
         self.imu_previous = None
+        self.remote = self.remote_at = None
 
     def _run(self):
         retry_at = 0.

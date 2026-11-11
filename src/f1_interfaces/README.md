@@ -17,6 +17,8 @@
 
 Python 使用 `from f1_interfaces.msg import ActuatorCommand` 或 `from f1_interfaces.srv import AcquireControl`；依赖包在 `package.xml` 中声明 `f1_interfaces`。
 
+2026-11-11 F103 v3：`ActuatorCommand.speed_percent` 为整数 0–100 的主电机 PWM 输出；0 仅停止主电机，滚刷和第五电推独立。新 25% 对应 100 μs 偏移，旧 25 档为 125 μs。`ControlState` 新增 `firmware_protocol_version`（0 表示尚未观察到 CTRL）、`firmware_protocol_compatible` 和 `rc_valid/rc_flags/rc_sequence/rc_age_sec/rc_channels[14]`。RC 为原始输入诊断；CTRL PWM 仍为目标值。必须重建本接口包及所有依赖节点并一同重启，不能混用旧生成消息。详细编码和兼容策略见[桥接说明](../f1_nano_bridge/README.md#f103-v3-连续输出2026-11-11)。
+
 2026-10-22 控制链修复：`ControlState` 新增 `allow_fifth_thruster`（bridge 第五路配置）及 `last_stop_reason`（最近撤权原因，保留到下一次成功申请）。更新时重新构建本包和依赖节点，并同步重启，不能混用旧生成消息。
 
 ## 从旧接口包迁移

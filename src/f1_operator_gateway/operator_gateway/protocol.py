@@ -114,8 +114,8 @@ def decode(raw):
     if direction not in DIRECTIONS or mode not in MODES:
         raise ValueError("invalid direction or wheel mode")
     speed = packet.get("speed_percent")
-    if speed not in (25, 50, 75):
-        raise ValueError("speed_percent must be 25, 50 or 75")
+    if type(speed) is not int or not 0 <= speed <= 100:
+        raise ValueError("speed_percent must be an integer from 0 to 100")
     fields = {}
     for name in ("brush_enabled", "thrust_enabled"):
         if type(packet.get(name)) is not bool:

@@ -1,6 +1,6 @@
 # Nano 从零部署 surface_ws
 
-更新：2026-11-09。适用于 Nano 首次部署或已有 `surface_ws` 升级。当前包含 PAVO2 驱动、建图与定位、硬件桥、两种清洗任务及 Qt App 网关。PC 与 Nano 分别构建；下面每节标明执行设备。2026-11-09 控制器配置加载修复已部署到 Nano 并验证，见[故障排查](#定位正常但开放任务不能启动)。这项修复不涉及雷达驱动迁移；雷达旧服务迁移见第 8 节，旧清洗包升级见[清洗包迁移说明](src/f1_pool_cleaning/MIGRATION.md)。
+更新：2026-11-11。适用于 Nano 首次部署或已有 `surface_ws` 升级。当前包含 PAVO2 驱动、建图与定位、硬件桥、两种清洗任务及 Qt App 网关。PC 与 Nano 分别构建；下面每节标明执行设备。2026-11-09 控制器配置加载修复已部署到 Nano 并验证，见[故障排查](#定位正常但开放任务不能启动)。这项修复不涉及雷达驱动迁移；雷达旧服务迁移见第 8 节，旧清洗包升级见[清洗包迁移说明](src/f1_pool_cleaning/MIGRATION.md)。
 
 | 项目 | 统一约定 |
 | --- | --- |
@@ -16,6 +16,20 @@
 | 操作员网关 | `f1_operator_gateway` |
 
 PC 和 Nano 分别编译，不传 PC 的生成目录。部署状态以各项验证记录为准，文档中的操作命令不表示全部步骤均已在目标设备执行。
+
+## 2026-11-11 F103 v3 升级
+
+此版桥接仅支持仓库 `under/F103firmware` 的 v3 协议。部署前核对实机已烧录的版本，收到旧版 CTRL 时会显示 `INCOMPATIBLE` 并拒绝控制。自定义 bridge YAML 的 `firmware_profile` 应为 `f1_direction_percent_v3`。先停止现有 operator 节点，更新源码并重建 `f1_interfaces` 及其依赖节点，完成检查后一同重启；旧生成消息不能与新增协议/RC字段混用。Windows 同步更新整个 `operator_app`，exe 在 Windows 重新打包。此节是升级步骤，编译或启动上位机服务不会自动烧录下位机。
+
+主输出为整数 0–100；0 仅停止主电机，辅助独立。新 25% 为 PWM 偏移 100 μs，旧最低档为 125 μs，默认自主动作仍用新 25%。检查四电机当前极性 BL/BR/FL/FR=`+,+,-,+`、零主输出时辅助独立、手动全停、断线、RC接管与归还后重新握手；再验证纠偏、固定时间后退换边和前进辅助。CTRL/ACK/PWM 目标不能证明船体达到速度或停止。完整契约见[桥接说明](src/f1_nano_bridge/README.md#f103-v3-连续输出2026-11-11)。
+
+### 2026-11-11 Nano 实际执行记录
+
+- `192.168.1.188` 全量构建成功：8 个包，耗时约 1 分 28 秒；全部 CMake 安装模式统一为 `OFF`（复制安装）。
+- `backups/` 与 `deploy_backups/` 已移到 `/home/nvidia/surface_ws_backups/pre-v3-20261111-105419/`。同目录保存构建前安装快照 `install-before-build.tar.gz`、源码快照及服务配置。快照保存当时磁盘文件；此前 Python 安装软链接已指向同步后的 v3 源码，因此它不等同于完整旧 v2 可运行版本。
+- Nano 的 `under/`、`operator_app/` 已删除，PC 原件保留；地图和运行日志保留。默认 `colcon list` 也仅发现 8 个项目包。
+- 已启动新版 `f1-operator.service`；雷达服务保持运行，PID 未变化。12 秒内收到 121 条遥测，均为 `INCOMPATIBLE`：实际报告固件 v2，要求 v3，`motion_authorized=false`、`drive_output.available=false`。因此当前不可通过新版 App 控制，需另行烧录配套 v3 固件。本次未烧录、未发送运动或清洗任务命令。
+- 精简部署测试排除两组固件 C 测试及一个依赖该 C 库的 PTY 集成用例。首次运行暴露 PTY 源码依赖，修正测试选择后补跑传输组通过；最终 xUnit 为 770 个用例、0 错误、0 失败，`colcon test-result` 含 CTest 汇总计为 808 tests。该结果不表示新版固件已通过实机验收。
 
 ## 1. Nano：检查系统与 ROS
 
@@ -65,23 +79,27 @@ mkdir -p /home/nvidia/surface_ws/src
 在 **PC 终端**执行。PC 如缺少 rsync，先执行 `sudo apt-get install rsync`。
 
 ```bash
+cd /home/bboss/new-nano/surface_ws
 ssh nvidia@192.168.1.188 'mkdir -p /home/nvidia/surface_ws/src'
 
 rsync -av --progress \
-  --exclude='/build/' --exclude='/install/' --exclude='/log/' \
-  --exclude='.git/' --exclude='.venv/' \
   --exclude='__pycache__/' --exclude='.pytest_cache/' --exclude='*.pyc' \
-  --exclude='/operator_app/' \
-  --exclude='/test_bags/' --exclude='/deploy_backups/' \
-  /home/bboss/new-nano/surface_ws/ \
+  src docs tools README.md DEPLOY_NANO.md \
   nvidia@192.168.1.188:/home/nvidia/surface_ws/
 ```
 
-源目录末尾的 `/` 表示传工作空间的目录内容，目标是 `/home/nvidia/surface_ws/`，源码会落入其 `src/`，不会变成 `surface_ws/surface_ws/src`。本命令传输源码、地图和部署文档，排除 Windows App 的 `operator_app/`；Nano 所需的 `src/f1_operator_gateway/` 仍会同步。没有使用 `--delete`，远端独有文件会保留，但同名文件可能被 PC 版本覆盖。
+这里只同步 Nano 使用的 `src/`、文档和工具；不传 `under/` 下位机工程、`operator_app/` Windows App、历史备份、开发环境配置及 PC 的生成目录。`src/f1_operator_gateway/` 是 Nano 必需的网关，仍会同步。没有使用 `--delete`，远端独有文件保留，同名文件会更新。已误传的目录不会被此命令自动删除，见第 10 节。
 
-`maps/` 被 Git 忽略，克隆仓库不会得到地图；上述 rsync 会同步本地已有的地图。每份地图的同名 `.pbstream`、`.yaml`、`.pgm` 直接放在工作空间 `maps/` 下，App 地图列表不递归扫描子目录。YAML 的 `image` 使用同目录 PGM 文件名，例如 `image: lidar_20261021_145054.pgm`，避免绑定 PC 或 Nano 的绝对路径。命令行启动时用 `map:=实际绝对路径` 指定本次地图，池尺寸、边界和 L 路线由它推导；只传 `map:=xxx.yaml` 时，同名 `.pbstream` 也必须存在。以后仅更新源码、需要保留 Nano 的同名地图时，在同步命令中额外加入 `--exclude='/maps/'`。
+日常代码同步不覆盖 Nano 地图。首次部署或明确需要更新地图时，另行执行：
 
-不要直接复制 PC 的整个工作空间生成目录到 Nano。PC 的 `build/` 包含本机绝对路径、CMake 缓存和生成索引，`install/` 也包含本机生成的文件与链接。这里的排除规则只阻止本次传输，不会清理 Nano 上已经存在的生成目录。若曾误传，或遇到缓存/JSON 索引错误，按[第 10 节](#10-同步后-cmake-缓存或-json-索引报错)备份并重新生成。
+```bash
+rsync -av --progress /home/bboss/new-nano/surface_ws/maps/ \
+  nvidia@192.168.1.188:/home/nvidia/surface_ws/maps/
+```
+
+`maps/` 被 Git 忽略，克隆仓库不会得到地图。每份地图的同名 `.pbstream`、`.yaml`、`.pgm` 直接放在工作空间 `maps/` 下，App 地图列表不递归扫描子目录。YAML 的 `image` 使用同目录 PGM 文件名，例如 `image: lidar_20261021_145054.pgm`，避免绑定 PC 或 Nano 的绝对路径。命令行启动时用 `map:=实际绝对路径` 指定本次地图；只传 `map:=xxx.yaml` 时，同名 `.pbstream` 也必须存在。
+
+不要直接复制 PC 的整个工作空间生成目录到 Nano。PC 的 `build/` 包含本机绝对路径、CMake 缓存和生成索引，`install/` 也包含本机生成的文件与链接。这里的目录选择只限制本次传输，不会清理 Nano 上已经存在的生成目录。若曾误传，或遇到缓存/JSON 索引错误，按[第 10 节](#10-同步后重复包cmake-缓存或-json-索引报错)备份并重新生成。
 
 ## 4. Nano：安装源码声明的依赖
 
@@ -104,7 +122,7 @@ ssh nvidia@192.168.1.188
   rosdep update --rosdistro humble
   rosdep install --from-paths src --ignore-src --rosdistro humble -y
   rosdep check --from-paths src --ignore-src --rosdistro humble
-  colcon list --names-only
+  colcon list --base-paths src --names-only
 )
 ```
 
@@ -128,17 +146,17 @@ f1_pool_cleaning
 
 ## 5. Nano：编译
 
-仍在刚才的 Nano 构建终端执行，尚不要 source 本工作空间的 install：
+在 Nano 新构建终端执行，只加载系统 ROS，尚不要 source 本工作空间的 install。已有 operator 服务时，先确认无任务、无手动控制，再执行 `sudo systemctl stop f1-operator.service`，避免运行期间替换消息接口。
 
 ```bash
 source /opt/ros/humble/setup.bash
 cd /home/nvidia/surface_ws
 CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
-  colcon build --symlink-install --parallel-workers 1 \
-  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
+  colcon build --base-paths src --executor sequential \
+  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 -DAMENT_CMAKE_SYMLINK_INSTALL=OFF
 ```
 
-同时限制包间和包内并行度，减小 Nano 编译时的内存占用。仅构建本仓库时，成功应看到 `8 packages finished`，且没有 failed/aborted。失败时保留输出，先定位首个报错；只有编译成功后才加载本工作空间环境。
+只扫描 `src/`，同时限制包间和包内并行度，减小 Nano 编译时的内存占用。这里统一采用复制安装（`AMENT_CMAKE_SYMLINK_INSTALL=OFF`），避免在已有复制安装缓存上直接切换 `--symlink-install` 造成目录冲突。仅构建本仓库时，成功应看到 `8 packages finished`，且没有 failed/aborted。失败时保留输出，先定位首个报错；只有编译成功后才加载本工作空间环境。
 
 ## 6. Nano：检查安装结果
 
@@ -167,11 +185,21 @@ ros2 launch f1_l_cleaning l_bringup.launch.py --show-args
 
 `f1_nano_bridge` 前缀应为 `/home/nvidia/surface_ws/install/f1_nano_bridge`，其可执行程序应只有 `f1_bridge`；`f1_operator_gateway` 应提供 `f1_operator_gateway`，`f1_l_cleaning` 应提供 `l_controller`。IMU 随原生串口桥发布，无独立接入节点。Cartographer 应有 `cartographer_node` 及 `cartographer_occupancy_grid_node` 或 `occupancy_grid_node`。`--show-args` 只检查启动入口，不启动硬件。
 
+已有 operator 服务且本节检查通过后，执行：
+
+```bash
+sudo systemctl start f1-operator.service
+systemctl status f1-operator.service --no-pager
+journalctl -u f1-operator.service -n 80 --no-pager
+```
+
+`active` 只代表进程存活。还需查看 App/网关遥测中的 `firmware_protocol_version`、`firmware_protocol_compatible` 和 bridge 状态；旧 v2 固件会被新版桥接拒绝，必须另外烧录配套 v3 固件才能恢复控制。不要用放宽协议检查的方法绕过它。
+
 以后运行节点时只加载 `/opt/ros/humble/setup.bash` 和 `/home/nvidia/surface_ws/install/local_setup.bash`。同机查看结果的终端使用相同 ROS 域；PC 参与实时通信时也设置域 33 和相同 RMW，并加载 PC 自己构建的 `surface_ws`。
 
 ## 7. Nano：离线测试
 
-先在单独测试终端运行无需固件源码的用例：
+Nano 的精简部署不携带固件源码。在单独测试终端运行 ROS 离线用例，排除需要 F103 C 源码的两组测试，以及 `transport` 组内同样依赖固件 C 库的 PTY 集成用例：
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -181,31 +209,20 @@ export ROS_DOMAIN_ID=173
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 cd /home/nvidia/surface_ws
 export CYCLONEDDS_URI="file://$PWD/src/f1_operator_gateway/test/cyclonedds_localhost.xml"
-colcon test --executor sequential --return-code-on-test-failure \
+PYTEST_ADDOPTS="-k 'not test_real_serial_pty_deadline_stop_and_imu'" \
+  colcon test --base-paths src --executor sequential --return-code-on-test-failure \
   --ctest-args -E '^firmware(_imu)?$'
 colcon test-result --verbose
 ```
 
-此命令排除 `firmware` 和 `firmware_imu` 两组测试，两者都需要仓库外的 STM32 固件源码；其余用例包含网关协议、大 L 路线、清洗状态机和本机 ROS 检查，应无失败、无错误。测试使用合成输入和本机通信，不连接执行器。指定的 DDS 配置只供 localhost 测试，处理本地大消息分片接收问题，不能用于跨机运行。测试后关闭该终端，实景终端按第 6 节加载环境。Qt App 测试在 PC 另行执行，不计入 colcon 结果。
+用例包含网关协议、开放墙路线、清洗状态机及本机 ROS 检查，应无失败、无错误。测试使用合成输入和本机通信，不连接执行器。指定的 DDS 配置只供 localhost 测试，不能用于跨机运行。测试后关闭该终端，实景终端按第 6 节加载环境。Qt App 测试在 PC 另行执行，不计入 colcon 结果。
 
-如要运行完整测试，在 PC 单独同步只读测试所需的固件目录：
-
-```bash
-ssh nvidia@192.168.1.188 'mkdir -p /home/nvidia/surface_firmware'
-rsync -av --exclude='__pycache__/' --exclude='*.pyc' \
-  /home/bboss/new-nano/firmware/USER \
-  /home/bboss/new-nano/firmware/SYSTEM \
-  /home/bboss/new-nano/firmware/HARDWARE \
-  /home/bboss/new-nano/firmware/tests \
-  nvidia@192.168.1.188:/home/nvidia/surface_firmware/
-```
-
-`surface_firmware` 是测试资料目录，不是另一个 ROS 工作空间。在 Nano 测试终端补跑：
+固件真实 C 解码/仲裁测试通常在 PC 完整工作空间运行。如确需在 Nano 执行，可将同版本固件工程单独放到工作空间外，并设置 `F1_FIRMWARE_DIR`；`USER/SYSTEM/HARDWARE/tests` 必须完整，主机 C 测试库在临时目录编译：
 
 ```bash
-export F1_FIRMWARE_DIR=/home/nvidia/surface_firmware
+export F1_FIRMWARE_DIR=/home/nvidia/firmware_test_sources/F103firmware
 colcon test --packages-select f1_nano_bridge --return-code-on-test-failure \
-  --ctest-args -R '^firmware(_imu)?$'
+  --ctest-args -R '^(firmware(_imu)?|transport)$'
 colcon test-result --verbose
 ```
 
@@ -269,13 +286,32 @@ export ROSDISTRO_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/rosdistro/index-
   rosdep update --rosdistro humble
   rosdep install --from-paths src --ignore-src --rosdistro humble -y
   rosdep check --from-paths src --ignore-src --rosdistro humble
-  colcon list --names-only
+  colcon list --base-paths src --names-only
 )
 ```
 
 确认没有 `ERROR`，并显示缓存更新成功与依赖检查通过，再继续第 5 节编译。该 `export` 只对当前终端有效；以后新终端执行 rosdep 更新前需重新设置，或手动在 `~/.bashrc` 中保留一行同样的设置。若镜像仍超时，先检查网络，不继续反复初始化或删除源码。
 
-## 10. 同步后 CMake 缓存或 JSON 索引报错
+## 10. 同步后重复包、CMake 缓存或 JSON 索引报错
+
+如果 `colcon build` 报 `Duplicate package names`，且两个路径分别位于 `backups/.../src/` 和 `src/`，原因是默认递归扫描把备份也识别成了源码。备份应放在工作空间外；尚需留在工作空间内时，至少在备份根目录添加 `COLCON_IGNORE`。日常构建仍使用第 5 节的 `--base-paths src`。
+
+以下一次性整理命令只在 **Nano** 执行：历史备份移到工作空间外，删除误传的 Windows 与下位机源码，保留 `src/`、地图和日志。执行前确认这两份工程在 PC 有原件，且 Nano 中没有独有修改。
+
+```bash
+set -e
+cd /home/nvidia/surface_ws
+surface_backup_root="$(mktemp -d /home/nvidia/surface_ws_cleanup.XXXXXX)"
+for directory in backups deploy_backups; do
+  if [ -d "$directory" ]; then mv -- "$directory" "$surface_backup_root/"; fi
+done
+rm -rf -- /home/nvidia/surface_ws/under /home/nvidia/surface_ws/operator_app
+source /opt/ros/humble/setup.bash
+colcon list --names-only
+```
+
+下面处理生成目录本身损坏的情况；仅重复包报错不需要清空 `build/` 或 `install/`。
+
 
 2026-10-22 Nano 构建反馈：`f1_interfaces` 成功，`f1_nano_bridge` 随即提示缓存没有 `CMAKE_PROJECT_NAME`，并在 `_read_codemodel()` 的 `json.load()` 报 `JSONDecodeError: Expecting value: line 1 column 1`。
 
@@ -304,8 +340,8 @@ export ROSDISTRO_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/rosdistro/index-
   printf '旧生成目录已备份到：%s\n' "$surface_cache_backup"
 
   CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
-    colcon build --symlink-install --parallel-workers 1 \
-    --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
+    colcon build --base-paths src --executor sequential \
+    --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 -DAMENT_CMAKE_SYMLINK_INSTALL=OFF
 )
 ```
 
@@ -344,14 +380,14 @@ done
 set -e
 source /opt/ros/humble/setup.bash
 cd /home/nvidia/surface_ws
-localization_backup=$(mktemp -d "$PWD/pre-localization-split.XXXXXX")
+localization_backup=$(mktemp -d /home/nvidia/pre-localization-split.XXXXXX)
 touch "$localization_backup/COLCON_IGNORE"
 for generated in build install log; do
   if [ -d "$generated" ]; then mv "$generated" "$localization_backup/"; fi
 done
 rosdep install --from-paths src --ignore-src --rosdistro humble -y
-colcon build --symlink-install --parallel-workers 1 \
-  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
+colcon build --base-paths src --executor sequential \
+  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 -DAMENT_CMAKE_SYMLINK_INSTALL=OFF
 source install/local_setup.bash
 export ROS_LOCALHOST_ONLY=1 ROS_DOMAIN_ID=173 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 colcon test --executor sequential \
@@ -367,7 +403,9 @@ colcon test-result --verbose
 同步并重新构建 `f1_operator_gateway`、`f1_localization`、`f1_pool_cleaning`、`f1_l_cleaning`，同时更新 Windows 的整个 `operator_app`。原手动协议保留，新任务界面要求后端提供启动检查及任务实例标识。
 
 ```bash
-colcon build --symlink-install --packages-up-to f1_operator_gateway
+CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
+  colcon build --base-paths src --executor sequential --packages-up-to f1_operator_gateway \
+  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 -DAMENT_CMAKE_SYMLINK_INSTALL=OFF
 source install/local_setup.bash
 ros2 launch f1_operator_gateway operator_bringup.launch.py \
   map:="$PWD/maps/现场地图.pbstream" bind_address:=0.0.0.0
@@ -485,7 +523,9 @@ ros2 launch f1_operator_gateway operator_system.launch.py \
 sudo systemctl stop f1-operator.service
 cd /home/nvidia/surface_ws
 source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-up-to f1_operator_gateway
+CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
+  colcon build --base-paths src --executor sequential --packages-up-to f1_operator_gateway \
+  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 -DAMENT_CMAKE_SYMLINK_INSTALL=OFF
 sudo install -m 644 src/f1_operator_gateway/deploy/f1-operator.service /etc/systemd/system/f1-operator.service
 sudo systemctl daemon-reload
 sudo systemctl reset-failed f1-operator.service

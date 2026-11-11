@@ -8,6 +8,10 @@ bool connected
 bool motion_authorized
 bool allow_fifth_thruster
 string owner
+# Observed CTRL wire version (0 before the first report). Compatibility does
+# not imply fresh telemetry, neutral handshake completion or a motion lease.
+uint8 firmware_protocol_version
+bool firmware_protocol_compatible
 # Observed firmware values, only current while ctrl_age_sec is within the limit.
 string source
 uint32 epoch
@@ -24,6 +28,13 @@ float64 ack_age_sec
 float64 command_remaining_sec
 float64 imu_age_sec
 uint32 imu_status
+# Raw RC v2 telemetry for diagnostics only. rc_valid also requires a recent
+# report; channels are not executed outputs or evidence of control ownership.
+bool rc_valid
+uint8 rc_flags
+uint32 rc_sequence
+float64 rc_age_sec
+uint16[14] rc_channels
 # Target PWM from CTRL, not actual ramp output, RPM or measured thrust.
 uint16[4] target_pwm_bl_br_fl_fr
 bool brush_enabled

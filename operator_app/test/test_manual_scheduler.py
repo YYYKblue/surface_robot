@@ -174,3 +174,38 @@ def test_queue_full_notification_allows_gui_to_cancel_intent(scheduler):
         assert worker.send_packet(dict(op="task", request_id=str(index)))
     assert not worker.send_packet(dict(op="task", request_id="overflow"))
     assert lock_was_available == [True]
+
+
+def test_speed_changes_replace_extracted_intent_and_zero_keeps_auxiliaries(scheduler, monkeypatch):
+    worker, socket, clock = scheduler
+    worker.send_packet(dict(op="mapping", action="list", request_id="list"))
+    assert worker.update_manual_intent(dict(manual(), speed_percent=100, brush_enabled=True, brush_percent=50))
+    original = worker._send_now
+
+    def send(ws, packet):
+        if packet["op"] == "mapping":
+            # The UI has cleared the held direction when the slider hit zero.
+            worker.update_manual_intent(dict(manual("STOP"), speed_percent=0, brush_enabled=True, brush_percent=50))
+            worker.update_manual_intent(dict(manual("STOP"), speed_percent=37, brush_enabled=True, brush_percent=50))
+        original(ws, packet)
+
+    monkeypatch.setattr(worker, "_send_now", send)
+    worker._flush(socket)
+    clock[0] += .051
+    worker._flush(socket)
+    packets = [packet for packet in socket.sent if packet["op"] == "manual_input"]
+    assert len(packets) == 1
+    assert packets[0]["speed_percent"] == 37 and packets[0]["direction"] == "STOP"
+    assert packets[0]["brush_enabled"] is True
+
+
+def test_mock_reports_percentage_targets_and_zero_only_stops_main_drive():
+    state = dict(mode="BOTH", speed_percent=25, direction="STOP", sent_sequence=0)
+    state = SocketWorker._mock_drive_state(dict(manual(), speed_percent=37, brush_enabled=True, brush_percent=50), state)
+    assert state["target_pwm_bl_br_fl_fr"] == [1648, 1648, 1352, 1648]
+    assert state["ack_sequence"] == state["sent_sequence"] == 1
+    state = SocketWorker._mock_drive_state(dict(manual(), speed_percent=0, brush_enabled=True, brush_percent=50), state)
+    assert state["direction"] == "STOP" and state["target_pwm_bl_br_fl_fr"] == [1500]*4
+    assert state["brush_enabled"] is True
+    state = SocketWorker._mock_drive_state(dict(op="manual_stop"), state)
+    assert not state["brush_enabled"] and not state["thrust_enabled"]

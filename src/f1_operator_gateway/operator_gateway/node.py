@@ -72,6 +72,9 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         self.last_app_seq = -1
         self.token = ""
         self.pending_acquire = False
+        self.manual_started = False
+        self.manual_rearm_required = False
+        self.manual_lease_acquired_ns = None
         self.bridge_sequence = 0
         self.hub = WebSocketHub(address, port, None)
         self.hub.start()
@@ -93,12 +96,28 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
             value = getattr(message, name)
             if name == "stamp":
                 value = {"sec": value.sec, "nanosec": value.nanosec}
-            elif name == "target_pwm_bl_br_fl_fr":
+            elif name in ("target_pwm_bl_br_fl_fr", "rc_channels"):
                 value = [int(item) for item in value]
             state[name] = value
+        previous = self.control_state
         self.control_state = state
         self.control_received = time.monotonic()
         self.diagnostic_history.bridge(state)
+        identity_changed = bool(previous) and any(previous.get(key) != state.get(key)
+            for key in ("connection_id", "source", "epoch"))
+        stamp = state.get("stamp", {})
+        stamp_ns = stamp.get("sec", 0)*10**9 + stamp.get("nanosec", 0)
+        # A READY sample generated before the acquire reply is not a revocation.
+        lease_lost = bool(self.token and self.manual_lease_acquired_ns is not None
+            and stamp_ns > self.manual_lease_acquired_ns
+            and (state.get("motion_authorized") is not True
+                 or state.get("owner") != "operator_app"))
+        if identity_changed or not self._fresh_ready() or lease_lost:
+            if self.manual_started or self.token or self.pending_acquire:
+                self.manual_rearm_required = True
+            if self.token or self.pending_acquire or self.last_input is not None:
+                self._stop_manual("manual control session changed" if identity_changed
+                                  else "manual control unavailable")
 
     def _map(self, message):
         if self.runtime_enabled and (not self.runtime_accept_map or
@@ -139,12 +158,15 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
             if time.monotonic() - self.last_input_at >= self.input_timeout:
                 self._stop_manual("input_timeout")
             elif self.last_input is not None:
-                if not self.token:
+                if (self.token or self._needs_control(self.last_input)) and not self._fresh_ready():
+                    self._invalidate_manual(self._manual_unavailable_reason())
+                elif not self.token:
                     if self._needs_control(self.last_input):
                         self._acquire_if_ready()
                 elif self.last_input.sequence > self.last_app_seq:
-                    self._publish(self.last_input)
-                    self.last_app_seq = self.last_input.sequence
+                    value = self.last_input
+                    if self._publish(value):
+                        self.last_app_seq = value.sequence
 
     def _handle_event(self, event):
         kind, client_id = event[0], event[1]
@@ -166,7 +188,8 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         if packet["op"] == "hello":
             self.hub.send(client_id, {"type": "hello", "protocol": "f1-operator-v1", "telemetry_hz": 10,
                 "session_id": self.diagnostic_history.session,
-                "client_id": client_id, "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks", "diagnostic_history", "forward_boost", "compact_stream_v1", "indexed8_map"]
+                "drive_output": self._drive_output(),
+                "client_id": client_id, "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_tracks", "diagnostic_history", "forward_boost", "compact_stream_v1", "indexed8_map", "continuous_drive_percent_v1"]
                     + (["mapping", "map_catalog"] if self.runtime_enabled else [])})
             if self.map_data:
                 self.hub.send(client_id, self._map_packet())
@@ -206,29 +229,84 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
             })
             # Do not forward an unsupported fifth-motor field. Keep the
             # chassis command alive so the rest of the controls still work.
-            value = replace(value, thrust_enabled=False, thrust_percent=0)
+            value = replace(value, thrust_enabled=False, thrust_percent=0.)
+        if self._needs_control(value):
+            if not self._fresh_ready():
+                compatible = self._drive_output_available()
+                self._invalidate_manual(self._manual_unavailable_reason())
+                self.hub.send(client_id, {
+                    "type": "reply", "op": "manual_input", "success": False,
+                    "message": ("Nano 手动控制尚未就绪，输出已拒绝；恢复后先松开操作回到中性"
+                                if compatible else "未确认新鲜且兼容的 F103 v3 状态，手动输出已拒绝"),
+                })
+                return
+            if self.manual_rearm_required:
+                self.hub.send(client_id, {
+                    "type": "reply", "op": "manual_input", "success": False,
+                    "message": "控制会话已变化，请先松开操作并发送中性输入，再重新操作",
+                })
+                return
+            self.manual_started = True
+        elif self.manual_rearm_required:
+            # Releasing an old hold while RC owns the boat cannot arm a future
+            # Nano session. The neutral input must arrive after that session is ready.
+            if not self._fresh_ready():
+                return
+            self.manual_rearm_required = False
         self.last_input, self.last_input_at = value, time.monotonic()
         if not self.token and self._needs_control(value):
             self._acquire_if_ready()
 
     @staticmethod
     def _needs_control(value: ManualInput):
-        return value.direction != "STOP" or value.brush_enabled or value.thrust_enabled
+        return ((value.direction != "STOP" and value.speed_percent > 0)
+                or (value.brush_enabled and value.brush_percent != 0)
+                or (value.thrust_enabled and value.thrust_percent != 0))
+
+    def _drive_output_available(self):
+        """A fresh compatible firmware is necessary, but is not motion authorization."""
+        state = self.control_state
+        age = self._control_age_sec()
+        return (state.get("firmware_protocol_version") == 3
+                and state.get("firmware_protocol_compatible") is True
+                and state.get("connected") is True
+                and 0 <= age < .3
+                and 0 <= state.get("ctrl_age_sec", float("inf")) + age < .4)
+
+    def _control_age_sec(self):
+        stamp = self.control_state.get("stamp", {})
+        stamp_ns = stamp.get("sec", 0)*10**9 + stamp.get("nanosec", 0)
+        source_age = (self.get_clock().now().nanoseconds - stamp_ns) / 1e9
+        received_age = time.monotonic() - self.control_received
+        if source_age < 0 or received_age < 0:
+            return float("inf")
+        # Include ROS transport/queue time without double-counting time since receive.
+        return max(source_age, received_age)
+
+    def _drive_output(self):
+        return dict(min=0, max=100, step=1, firmware_protocol_version=3,
+                    available=self._drive_output_available())
+
+    def _manual_unavailable_reason(self):
+        return ("manual control unavailable" if self._drive_output_available()
+                else "firmware protocol unavailable")
+
+    def _invalidate_manual(self, reason):
+        self.manual_rearm_required = True
+        if self.token or self.pending_acquire or self.last_input is not None:
+            self._stop_manual(reason)
 
     def _fresh_ready(self):
         state = self.control_state
-        age = time.monotonic() - self.control_received
-        stamp = state.get("stamp", {})
-        stamp_ns = stamp.get("sec", 0)*10**9 + stamp.get("nanosec", 0)
-        return (age < .3 and 0 <= self.get_clock().now().nanoseconds-stamp_ns < 300_000_000
-                and 0 <= state.get("ctrl_age_sec", float("inf")) + age < .4
+        age = self._control_age_sec()
+        return (self._drive_output_available()
                 and 0 <= state.get("ack_age_sec", float("inf")) + age < .4
-                and state.get("connected") is True and state.get("source") == "NANO"
+                and state.get("source") == "NANO"
                 and state.get("armed") is True and state.get("result") == "OK"
                 and state.get("state") in ("READY", "ACTIVE"))
 
     def _acquire_if_ready(self):
-        if self.pending_acquire or self.token or not self._fresh_ready():
+        if self.pending_acquire or self.token or self.manual_rearm_required or not self._fresh_ready():
             return
         if not self.acquire_client.service_is_ready():
             return
@@ -253,13 +331,17 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
             except Exception as error:
                 self.get_logger().warning(f"automatic manual session failed: {error}")
                 return
+            if generation == self.manual_generation and not self._fresh_ready():
+                self._invalidate_manual(self._manual_unavailable_reason())
             if generation == self.manual_generation and not self._tasks_busy() and result.success and self.active_client and self.last_input_at is not None \
-                    and time.monotonic() - self.last_input_at < self.input_timeout:
+                    and time.monotonic() - self.last_input_at < self.input_timeout and self._fresh_ready() and not self.manual_rearm_required:
                 self.token = result.token
+                self.manual_lease_acquired_ns = self.get_clock().now().nanoseconds
                 self.bridge_sequence = 0
                 self.last_app_seq = -1
-                self._publish(self.last_input)
-                self.last_app_seq = self.last_input.sequence
+                value = self.last_input
+                if self._publish(value):
+                    self.last_app_seq = value.sequence
             else:
                 if result.token:
                     self._release_token(result.token)
@@ -268,7 +350,10 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
 
     def _publish(self, value: ManualInput):
         if not self.token or value is None:
-            return
+            return False
+        if not self._fresh_ready() or (self._needs_control(value) and self.manual_rearm_required):
+            self._invalidate_manual(self._manual_unavailable_reason())
+            return False
         now = self.get_clock().now().nanoseconds
         message = ActuatorCommand()
         message.token = self.token
@@ -283,6 +368,7 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
             stamp = getattr(message, field)
             stamp.sec, stamp.nanosec = divmod(stamp_ns, 1_000_000_000)
         self.publisher.publish(message)
+        return True
 
     def _stop_manual(self, reason):
         # Capture timing before clearing input, including disconnects whose event
@@ -298,6 +384,7 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         self.manual_generation += 1
         token = self.token
         self.token = ""
+        self.manual_lease_acquired_ns = None
         self.pending_acquire = False
         self.last_input = self.last_input_at = None
         self.last_app_seq = -1
@@ -348,16 +435,18 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
     def _telemetry(self):
         self.telemetry_sequence += 1
         now = time.monotonic()
+        control_age = self._control_age_sec()
         stream = dict(session=self.diagnostic_history.session, sequence=self.telemetry_sequence,
                       generated_unix=time.time(), generated_monotonic=now,
                       tick_gap_ms=round(getattr(self, "_tick_gap_ms", 0.), 2),
-                      control_age_ms=round(max(0., now - self.control_received) * 1000, 2))
+                      control_age_ms=(round(control_age * 1000, 2) if math.isfinite(control_age) else None))
         self._tick_gap_ms = 0.
         if hasattr(self.hub, "stats"):
             stream["transport"] = self.hub.stats(include_clients=False)
         self.hub.broadcast({"type": "telemetry", "state": self.control_state,
+                            "drive_output": self._drive_output(),
                             "stream": stream,
-                            "control_fresh": time.monotonic() - self.control_received < .3,
+                            "control_fresh": control_age < .3,
                             "pose": self.pose,
                             "active_client": self.active_client, "runtime": self._runtime_view(), **self._task_telemetry()})
 

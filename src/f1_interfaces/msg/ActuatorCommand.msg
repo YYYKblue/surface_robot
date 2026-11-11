@@ -7,14 +7,16 @@ builtin_interfaces/Time valid_until
 # Optional absolute pulse end. Zero uses valid_until. Ends motion and auxiliaries
 # while a fresh STOP command can keep the lease; resends never move this time.
 builtin_interfaces/Time direction_until
-# Wire v2: exactly one chassis direction; firmware performs wheel mixing.
+# Wire v3: exactly one chassis direction; firmware performs wheel mixing.
 uint8 STOP=0
 uint8 FORWARD=1
 uint8 REVERSE=2
 uint8 LEFT=3
 uint8 RIGHT=4
 uint8 direction
-# PWM gear only: 25, 50 or 75; not measured speed or thrust.
+# Main motor PWM output: integer 0..100, not measured speed or thrust.
+# Zero stops only the main motors; auxiliary outputs remain independent.
+# v3 25% = 100 us PWM offset; the old 25 gear was 125 us.
 uint8 speed_percent 25
 uint8 FRONT=0
 uint8 BOTH=1

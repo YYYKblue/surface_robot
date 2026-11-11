@@ -1,4 +1,4 @@
-"""Pure codec for F1_IMU_NEW _back2 (wire v2)."""
+"""Pure codec for the F103 direction/percent protocol (wire v3)."""
 import binascii
 from dataclasses import dataclass
 import math
@@ -6,9 +6,17 @@ import struct
 
 U32 = 0xffffffff
 MODES = ("FRONT", "BOTH", "BACK")
-PROFILE = "f1_direction_gear_v2"
+WIRE_VERSION = 3
+PROFILE = "f1_direction_percent_v3"
 DIRECTIONS = ("STOP", "FORWARD", "REVERSE", "LEFT", "RIGHT")
-GEARS = (25, 50, 75)
+
+
+class UnsupportedProtocol(ValueError):
+    """A checksum-valid CTRL report uses an incompatible wire version."""
+
+    def __init__(self, version):
+        self.version = version
+        super().__init__(f"incompatible firmware protocol v{version}; expected v{WIRE_VERSION}")
 
 
 def forward(new, old):
@@ -33,7 +41,7 @@ def servo(value):
 
 def neutral():
     values = [1500] * 16
-    values[5] = 1050  # Lowest main-wheel gear, including during handshake.
+    values[5] = 1050  # Zero main-wheel output, including during handshake.
     values[9:11] = [1050, 1050]
     return values
 
@@ -44,18 +52,21 @@ def channels(direction=0, speed_percent=25, mode=1, brush_enabled=False,
         raise ValueError("invalid wheel group")
     if type(direction) is not int or direction not in range(5):
         raise ValueError("direction must be STOP/FORWARD/REVERSE/LEFT/RIGHT (0..4)")
-    if type(speed_percent) is not int or speed_percent not in GEARS:
-        raise ValueError("main-wheel gear must be 25, 50 or 75")
+    if type(speed_percent) is not int or not 0 <= speed_percent <= 100:
+        raise ValueError("main-wheel percent must be an integer within [0,100]")
     if type(brush_enabled) is not bool or type(thrust_enabled) is not bool:
         raise ValueError("auxiliary enables must be boolean")
     percent(brush_percent)
     percent(thrust_percent)
     values = neutral()
-    # The firmware owns wheel mixing and installation polarity in v2.
+    # The firmware owns wheel mixing and installation polarity. Zero stops
+    # only the main wheels; independent auxiliaries retain their commands.
+    if speed_percent == 0:
+        direction = 0
     values[2:4] = ((1500, 1500), (1950, 1500), (1050, 1500),
                    (1500, 1050), (1500, 1950))[direction]
     values[4] = (1050, 1500, 1950)[mode]
-    values[5] = (1050, 1500, 1950)[GEARS.index(speed_percent)]
+    values[5] = 1050 + 9 * speed_percent
     values[7] = servo(brush_percent) if brush_enabled else 1500
     values[8] = servo(thrust_percent) if thrust_enabled else 1500
     values[9] = 1950 if brush_enabled else 1050
@@ -70,7 +81,7 @@ def encode(values, epoch, sequence):
         raise ValueError("invalid epoch or wire sequence")
     packed = sum(((8 * v - 6990 + 2) // 5) << (11 * i) for i, v in enumerate(values))
     sbus = b"\x0f" + packed.to_bytes(22, "little") + b"\0\0"
-    body = struct.pack("<BBII", 2, 25, epoch, sequence) + sbus
+    body = struct.pack("<BBII", WIRE_VERSION, 25, epoch, sequence) + sbus
     return b"\xa5\x5a" + body + struct.pack("<H", binascii.crc_hqx(body, 0xffff))
 
 
@@ -112,6 +123,7 @@ class Control:
     pwm: tuple
     speed_percent: int = 25
     direction: str = "STOP"
+    protocol_version: int = WIRE_VERSION
 
     @property
     def neutral(self):
@@ -119,20 +131,41 @@ class Control:
                 and not self.thrust_enabled and self.brush_percent == self.thrust_percent == 0)
 
 
+@dataclass(frozen=True)
+class Remote:
+    """Raw RC input for diagnostics; never a source of Nano actuator commands."""
+    milliseconds: int
+    sequence: int
+    valid: bool
+    flags: int
+    channels: tuple
+
+
 def decode(line):
     p = checked_fields(line)
     if p[0] == "CTRL":
-        if len(p) != 20 or p[1] != "2" or p[3] not in ("NANO", "RC"):
+        if len(p) != 20 or p[3] not in ("NANO", "RC"):
             raise ValueError("invalid CTRL schema")
+        version = number(p[1], 1, 255)
+        if version != WIRE_VERSION:
+            raise UnsupportedProtocol(version)
         if (p[7] not in ("WAIT_NANO", "WAIT_NEUTRAL", "OK", "DIR_CONFLICT", "LINK_LOST", "INVALID")
-                or p[8] not in MODES or p[18] not in ("25", "50", "75") or p[19] not in DIRECTIONS):
+                or p[8] not in MODES or p[19] not in DIRECTIONS):
             raise ValueError("invalid CTRL enum")
+        speed = number(p[18], 0, 100)
+        if p[3] == "RC" and speed not in (25, 50, 75):
+            raise ValueError("invalid RC gear")
         return Control(number(p[2]), p[3], number(p[4], 1),
                        bool(number(p[5], 0, 1)), number(p[6]), p[7], p[8],
                        bool(number(p[9], 0, 1)), bool(number(p[10], 0, 1)),
                        number(p[11], -100, 100), bool(number(p[12], 0, 1)),
                        number(p[13], -100, 100), tuple(number(v, 1100, 1900) for v in p[14:18]),
-                       number(p[18]), p[19])
+                       speed, p[19], version)
+    if p[0] == "RC":
+        if len(p) != 20 or p[1] != "2":
+            raise ValueError("invalid RC schema")
+        return Remote(number(p[2]), number(p[3]), bool(number(p[4], 0, 1)),
+                      number(p[5], 0, 15), tuple(number(v, 0, 65535) for v in p[6:20]))
     if p[0] == "IMU":
         if len(p) != 18:
             raise ValueError("invalid IMU schema")

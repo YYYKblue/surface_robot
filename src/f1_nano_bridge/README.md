@@ -2,6 +2,25 @@
 
 本包负责 F103 串口控制、CTRL/ACK、IMU 发布和 ROS 执行器接口。Windows App 不再直接连接本包，也不再使用旧 ZMQ 网关；新版 App 通过同级功能包 `f1_operator_gateway` 接入。
 
+## F103 v3 连续输出（2026-11-11）
+
+当前对接仓库内 `under/F103firmware`，配置 `firmware_profile: f1_direction_percent_v3`。下行仍为 39 字节、460800 baud、每 20 ms 一帧，版本字节为 3；CTRL 为 `CTRL,3,...`。桥接不兼容旧 v1/v2 固件；收到校验正确但版本不支持的 CTRL 时撤销租约、停止发送动作，状态报告 `INCOMPATIBLE` 及实际/预期版本。恢复 v3 后仍需中性握手和新的控制申请，不恢复旧动作。
+
+`ActuatorCommand.speed_percent` 接受整数 0–100，CH06 编码为 `1050 + 9*p`，主电机 PWM 偏移为 `4*p` μs。`0` 或 `STOP` 只令四主电机中位，独立滚刷、第五电推仍按各自使能和百分比执行。完整停止需要同时关闭辅助输出；中性握手使用零主输出、STOP 和辅助关闭。CH07 保持 1500，遥控器 H 自动前进锁存不用于 Nano。
+
+| 输出数字 | 旧三档 / 当前物理遥控器 PWM 偏移 | v3 Nano PWM 偏移 |
+|---|---:|---:|
+| 25 | 125 μs | 100 μs |
+| 50 | 250 μs | 200 μs |
+| 75 | 375 μs | 300 μs |
+| 100 | 不适用 | 400 μs |
+
+这些是 PWM 幅度，不能推导实际转速、推力或船速。自主任务第一阶段仍固定使用新标度的 25%，需要重新验证纠偏、接近、换边和前进辅助。固件负责四电机混控，当前前进极性按 BL/BR/FL/FR 为 `+,+,-,+`；升级后需逐路核对实际方向。
+
+桥接分别解析 CTRL、IMU 与 `RC,2,...,CH1..CH14`，正常 RC 报告不再计为无效行。`ControlState` 新增固件版本/兼容状态及 RC 原始通道、flags、sequence、接收年龄和有效性；重复 RC 时间戳不能刷新年龄，超过 0.4 s 或报文标明失联时 `rc_valid=false`。RC 通道仅用于诊断，执行状态和控制源以 CTRL 为准。兼容标志不代表遥测新鲜、握手完成或已取得控制权。
+
+CTRL 的四路 PWM 是目标值，ACK 表示命令接受，不表示电机已达到目标或船已停稳。当前软件斜坡输出、UART/DMA 故障计数和仲裁重置原因尚未上报。原有命令 TTL、CTRL/ACK 超时、发送间隔保护和 RC 接管规则保持不变。
+
 ## 入口
 
 | 入口 | 职责 |
@@ -15,7 +34,7 @@ App 的启动方式和协议见 [`f1_operator_gateway`](../f1_operator_gateway/R
 
 | 接口 | 类型与用途 |
 |---|---|
-| `/f1/actuator_command` | `f1_interfaces/ActuatorCommand`，方向、档位、轮组、辅助目标及期限 |
+| `/f1/actuator_command` | `f1_interfaces/ActuatorCommand`，方向、0–100 主输出、电机组、辅助目标及期限 |
 | `/f1/acquire_control` | `f1_interfaces/AcquireControl`，由网关手动会话或清洗控制器申请单一控制租约 |
 | `/f1/release_control` | `f1_interfaces/ReleaseControl`，持有租约的网关或清洗控制器释放控制权 |
 | `/f1/stop` | `std_srvs/srv/Trigger`，全局停止请求，不能覆盖 RC |
@@ -62,8 +81,8 @@ source install/local_setup.bash
 export ROS_LOCALHOST_ONLY=1
 export ROS_DOMAIN_ID=173
 colcon test --packages-select f1_nano_bridge f1_operator_gateway \
-  --return-code-on-test-failure --ctest-args -E '^firmware(_imu)?$'
+  --return-code-on-test-failure
 colcon test-result --verbose
 ```
 
-上述命令跳过需要外部固件源码的 `firmware` 和 `firmware_imu` 测试组；完整测试的 `F1_FIRMWARE_DIR` 准备步骤见[部署文档](../../DEPLOY_NANO.md#7-nano离线测试)。测试不会连接真实串口或驱动电机。跨机 WebSocket、实际 Wi-Fi 延迟、雷达坐标和执行器方向仍需现场验收。
+固件测试默认使用工作空间 `under/F103firmware`，也可通过 `F1_FIRMWARE_DIR` 显式指定同版本源码。`under/` 被 Git 忽略，新克隆需另行准备完整固件副本。测试库在临时目录编译，覆盖真实 C 解码/仲裁及 Python 桥接的映射，不烧录固件、不连接真实串口。完整环境准备见[部署文档](../../DEPLOY_NANO.md#7-nano离线测试)。跨机 WebSocket、实际 Wi-Fi 延迟、雷达坐标和执行器方向仍需现场验收。

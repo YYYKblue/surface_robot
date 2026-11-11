@@ -22,7 +22,8 @@ class DiagnosticHistory:
 
     def bridge(self, state):
         keys = ("connection_id", "state", "source", "owner", "motion_authorized",
-                "reason", "last_stop_reason")
+                "reason", "last_stop_reason", "firmware_protocol_version",
+                "firmware_protocol_compatible")
         signature = tuple(state.get(key) for key in keys)
         if signature != self.bridge_signature:
             self.bridge_signature = signature
@@ -33,7 +34,8 @@ class DiagnosticHistory:
         return {key: state[key] for key in (
             "state", "source", "owner", "motion_authorized", "last_stop_reason",
             "ctrl_age_sec", "ack_age_sec", "command_remaining_sec", "reconnects",
-            "max_tx_gap_sec", "rejected_commands") if key in state}
+            "max_tx_gap_sec", "rejected_commands", "firmware_protocol_version",
+            "firmware_protocol_compatible") if key in state}
 
     def view(self):
         return dict(session=self.session, events=list(self.events))

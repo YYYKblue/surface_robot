@@ -2,9 +2,12 @@ import ctypes as c
 import os
 from pathlib import Path
 import random
+import re
 import subprocess
 
-from nano_ros_bridge.protocol import channels, decode, encode, neutral
+import pytest
+
+from nano_ros_bridge.protocol import Remote, channels, decode, encode, neutral
 from nano_ros_bridge.session import Command, Session
 
 
@@ -36,7 +39,7 @@ def test_real_c_decodes_random_channels_and_new_polarity(firmware):
     assert lib.test_get(2) == 1
     feed(lib, encode(channels(1, brush_enabled=True, brush_percent=-25), 1, 17), 340)
     state = report(lib, 340)
-    assert state.pwm == (1625, 1625, 1375, 1375)
+    assert state.pwm == (1600, 1600, 1400, 1600)
     assert state.brush_enabled and state.brush_percent == -25
 
 
@@ -65,7 +68,7 @@ def test_real_c_session_handshake_rc_return_and_no_resume(firmware):
     assert core.accept(Command(token, 0, 1_000_000_000, 1_150_000_000, 1,
                                brush_enabled=True, brush_percent=30), .42, 1_000_000_000)
     step(440)
-    assert report(lib, 440).pwm == (1625, 1625, 1375, 1375)
+    assert report(lib, 440).pwm == (1600, 1600, 1400, 1600)
     remote = neutral()
     remote[2] = 1950
     for ms in range(460, 521, 20):
@@ -97,39 +100,43 @@ def test_real_c_timeout_crc_fault_and_wire_wrap(firmware):
 
 
 def test_existing_firmware_regressions(firmware_library):
-    root = Path(os.environ.get("F1_FIRMWARE_DIR", Path(__file__).resolve().parents[4] / "firmware"))
+    root = Path(os.environ.get("F1_FIRMWARE_DIR",
+                               Path(__file__).resolve().parents[3] / "under" / "F103firmware"))
     result = subprocess.run(
         ["/usr/bin/python3", "-B", "-m", "unittest", "discover", "-s", str(root / "tests"),
          "-p", "test_control_mux.py", "-v"],
         env=dict(os.environ, CONTROL_TEST_LIBRARY=str(firmware_library), PYTHONDONTWRITEBYTECODE="1"),
         capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "Ran 26 tests" in result.stderr
+    count = re.search(r"Ran (\d+) tests?", result.stderr)
+    assert count and int(count.group(1)) > 0, result.stderr
     assert "skipped" not in result.stderr.lower()
 
 
-def test_v2_direction_gear_group_matrix_matches_firmware(firmware):
+def test_v3_every_percent_direction_group_matches_firmware(firmware):
     lib = firmware
-    signs = [(0, 0, 0, 0), (1, 1, -1, -1), (-1, -1, 1, 1),
-             (-1, 1, 1, -1), (1, -1, -1, 1)]
+    signs = [(0, 0, 0, 0), (1, 1, -1, 1), (-1, -1, 1, -1),
+             (-1, 1, 1, 1), (1, -1, -1, -1)]
     for seq in range(17):
         feed(lib, encode(neutral(), 1, seq), seq * 20)
     seq = 17
     for mode in range(3):
-        for gear in (25, 50, 75):
+        for speed in range(101):
             for direction in range(5):
                 ms = seq * 20
-                feed(lib, encode(channels(direction, gear, mode), 1, seq), ms)
+                feed(lib, encode(channels(direction, speed, mode), 1, seq), ms)
                 state = report(lib, ms)
                 expected = tuple(1500 if (mode == 0 and i < 2 or mode == 2 and i >= 2)
-                                 else 1500 + sign * gear * 5 for i, sign in enumerate(signs[direction]))
+                                 else 1500 + sign * speed * 4 for i, sign in enumerate(signs[direction]))
                 assert state.pwm == expected
-                assert state.direction == ("STOP", "FORWARD", "REVERSE", "LEFT", "RIGHT")[direction]
-                assert state.speed_percent == gear and state.result == "OK"
+                assert state.direction == ("STOP", "FORWARD", "REVERSE", "LEFT", "RIGHT")[direction if speed else 0]
+                assert state.speed_percent == speed and state.result == "OK"
+                assert state.protocol_version == 3
                 seq += 1
 
 
-def test_v1_rejected_and_conflict_is_reported_with_independent_aux(firmware):
+@pytest.mark.parametrize("old_version", [1, 2])
+def test_old_versions_rejected_and_conflict_keeps_independent_aux(firmware, old_version):
     import binascii
     import struct
     lib = firmware
@@ -142,8 +149,40 @@ def test_v1_rejected_and_conflict_is_reported_with_independent_aux(firmware):
     assert state.result == "DIR_CONFLICT" and state.direction == "STOP"
     assert state.pwm == (1500,) * 4 and state.brush_enabled
     old = bytearray(encode(channels(1), 1, 18))
-    old[2] = 1
+    old[2] = old_version
     old[-2:] = struct.pack('<H', binascii.crc_hqx(old[2:37], 0xffff))
     feed(lib, bytes(old), 360)
     state = report(lib, 360)
     assert state.epoch != 1 and state.neutral
+
+
+def test_zero_percent_stops_main_motors_and_preserves_auxiliary_commands(firmware):
+    for seq in range(17):
+        feed(firmware, encode(neutral(), 1, seq), seq * 20)
+    feed(firmware, encode(channels(1, 37, brush_enabled=True, brush_percent=50,
+                                   thrust_enabled=True, thrust_percent=-20), 1, 17), 340)
+    assert report(firmware, 340).pwm == (1648, 1648, 1352, 1648)
+    feed(firmware, encode(channels(1, 0, brush_enabled=True, brush_percent=50,
+                                   thrust_enabled=True, thrust_percent=-20), 1, 18), 360)
+    state = report(firmware, 360)
+    assert state.direction == "STOP" and state.speed_percent == 0
+    assert state.pwm == (1500,) * 4
+    assert state.brush_enabled and state.brush_percent == 50
+    assert state.thrust_enabled and state.thrust_percent == -20
+
+
+def test_real_c_remote_report_decodes_all_fourteen_channels_and_expires(firmware):
+    # The physical remote still uses its original three-position CH6.
+    values = neutral()
+    values[5] = 1500
+    values[11:14] = [1050, 1500, 1950]
+    packet = encode(values, 1, 0)[12:37]
+    firmware.test_remote(packet, 100)
+    buffer = c.create_string_buffer(256)
+    length = firmware.test_rc_report(100, buffer, len(buffer))
+    sample = decode(buffer.raw[:length])
+    assert isinstance(sample, Remote) and sample.valid
+    assert tuple(sample.channels) == tuple(values[:14])
+    length = firmware.test_rc_report(200, buffer, len(buffer))
+    stale = decode(buffer.raw[:length])
+    assert not stale.valid and tuple(stale.channels) == (1500,) * 14

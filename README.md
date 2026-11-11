@@ -1,8 +1,10 @@
 # surface_ws：水面清洗机器人 ROS 2 工作空间
 
-更新：2026-11-09，依据当前源码、启动文件和默认配置整理。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
+更新：2026-11-11，依据当前源码、启动文件和默认配置整理。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
 
-项目包含 PAVO2 纯雷达建图、固定地图定位、F103 串口控制、矩形四边清洗、开放多段直墙清洗和 WebSocket 操作员网关。当前源码基线为 `9db6798`，本次补充控制器配置加载修复说明。已记录的软件回归、现场反馈及后续验收项见[开发与验收记录](docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#7-测试和证据要求)；历史基本测试反馈不代表新增左转换边已完成实船验收。
+F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主电机输出支持整数 0–100，Windows App 提供滑条、数值输入和快捷值，反馈区分设定值、固件报告值与目标 PWM；RC 原始通道独立用于诊断。旧固件协议会明确阻止控制。新标度 25% 为 PWM 偏移 100 μs，旧 25 档为 125 μs；自主清洗首批仍固定使用新 25%，动作状态机未变，需重新进行实船标定。接口包、桥接、网关、依赖节点和 Windows App 应一起升级，见[协议与迁移](src/f1_nano_bridge/README.md#f103-v3-连续输出2026-11-11)。
+
+项目包含 PAVO2 纯雷达建图、固定地图定位、F103 串口控制、矩形四边清洗、开放多段直墙清洗和 WebSocket 操作员网关。历史配置加载修复基线为 `9db6798`。已记录的软件回归、现场反馈及后续验收项见[开发与验收记录](docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#7-测试和证据要求)；历史基本测试反馈不代表新增左转换边或本次v3输出已完成实船验收。
 
 ## 项目结构
 
@@ -20,7 +22,7 @@
 | `maps/` | 地图三件套直接存放于此；被 Git 忽略，克隆仓库不包含，当前部署同步命令会传输 |
 | `docs/`、`tools/` | 开发验收、历史试验记录和离线路线示意工具 |
 
-仓库共有八个 ROS 功能包。PAVO2 驱动与 SDK 已迁入 `f1_lidar_driver`；STM32 固件源码和地图仍需单独准备。Nano 编译与旧雷达服务迁移流程见[驱动说明](src/f1_lidar_driver/README.md)。旧 ZMQ 网关和旧 UI 协议已移除。
+仓库共有八个 ROS 功能包。PAVO2 驱动与 SDK 已迁入 `f1_lidar_driver`；本地 F103 固件源码位于 `under/F103firmware`。`under/` 和地图目录被 Git 忽略，重新克隆后需另行准备；本页测试使用当前 PC 本地固件副本。Nano 日常部署仅同步 `src/`、文档和工具，不需要 Windows App 或固件工程，命令见 [Nano 部署指南](DEPLOY_NANO.md#3-pc把源码和文档传到-nano)。Nano 编译与旧雷达服务迁移流程见[驱动说明](src/f1_lidar_driver/README.md)。旧 ZMQ 网关和旧 UI 协议已移除。
 
 ## 数据与控制链路
 
@@ -58,7 +60,7 @@ App 的受管入口支持无地图待机、纯雷达建图、命名保存、地�
 
 受管模式下，`rectangle_config` / `l_config` 留空会加载各清洗包的默认 YAML。标准配置中两个控制器都使用 `map → base_link` TF 并要求定位就绪；App 的共享定位正常不代表每个控制器已取得有效位姿。2026-11-09 已修复空参数导致 YAML 被跳过的问题并在 Nano 验证，操作者随后反馈“目前测试正常”。参数核对与排查见[定位正常但开放任务不能启动](DEPLOY_NANO.md#定位正常但开放任务不能启动)，具体证据范围见[修复验证记录](src/f1_operator_gateway/README.md#控制器配置加载修复验证2026-11-09)。
 
-当前沿墙默认中心墙距为 **32–36 cm**、目标 **33 cm**，滚刷与第五路侧推幅度均为 **50%**。默认沿墙前进依靠滚刷，四主电机作航向纠偏。Windows App 可在任务开始前开启“主电机提速”：稳定沿墙且船中心沿墙方向距当前墙端大于 **80 cm** 时，四电推以 **25 档、BOTH** 辅助前进；进入 80 cm 内（含边界）后本墙段不再提速，纠偏仍保留。运行中及暂停时不能修改开关，控制器重启/重新加载地图后默认关闭。船中心距当前墙端 **40 cm** 时关刷并进入换边，末段结束任务。App 只绘制实际轨迹，显示精简不改变这些控制参数。具体规则见[清洗控制说明](src/f1_pool_cleaning/README.md)。
+当前沿墙默认中心墙距为 **32–36 cm**、目标 **33 cm**，滚刷与第五路侧推幅度均为 **50%**。默认沿墙前进依靠滚刷，四主电机作航向纠偏。Windows App 可在任务开始前开启“主电机提速”：稳定沿墙且船中心沿墙方向距当前墙端大于 **80 cm** 时，四电推以 **25% 输出、BOTH** 辅助前进；进入 80 cm 内（含边界）后本墙段不再提速，纠偏仍保留。运行中及暂停时不能修改开关，控制器重启/重新加载地图后默认关闭。船中心距当前墙端 **40 cm** 时关刷并进入换边，末段结束任务。App 只绘制实际轨迹，显示精简不改变这些控制参数。具体规则见[清洗控制说明](src/f1_pool_cleaning/README.md)。
 
 App 的[诊断日志](operator_app/README.md#诊断日志)保留最近 2000 条记录并支持导出，网关暂存最近 50 条停止/桥状态事件供重连补读。开机服务先等待校时，允许稳定的离线本地时间回退；运行中时钟故障触发停机、重启至无地图待机，不恢复旧任务，详见[服务部署](DEPLOY_NANO.md#app-建图选图与开机服务)。
 
@@ -152,12 +154,11 @@ export ROS_LOCALHOST_ONLY=1
 export ROS_DOMAIN_ID=173
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export CYCLONEDDS_URI="file://$PWD/src/f1_operator_gateway/test/cyclonedds_localhost.xml"
-colcon test --executor sequential --return-code-on-test-failure \
-  --ctest-args -E '^firmware(_imu)?$'
+colcon test --executor sequential --return-code-on-test-failure
 colcon test-result --verbose
 ```
 
-上述命令从工作空间根目录执行，排除两个依赖外部固件源码的测试组。DDS 配置只用于本机测试，避免本地大消息分片接收问题；不要用于实机跨主机通信。完整测试需要设置 `F1_FIRMWARE_DIR`，目录准备和补跑命令见[部署指南](DEPLOY_NANO.md#7-nano离线测试)。Qt App 测试另见 [App 开发验证](operator_app/README.md#开发验证)，不在 colcon 测试中。测试后关闭隔离测试终端；实机终端使用前述运行环境。
+上述完整测试命令在 PC 工作空间根目录执行；Nano 精简部署请使用[排除固件依赖的测试命令](DEPLOY_NANO.md#7-nano离线测试)。固件测试默认使用 `under/F103firmware` 的真实 C 源码，`F1_FIRMWARE_DIR` 可覆盖目录。DDS 配置只用于本机测试，避免本地大消息分片接收问题；不要用于实机跨主机通信。完整环境见[部署指南](DEPLOY_NANO.md#7-nano离线测试)。Qt App 测试另见 [App 开发验证](operator_app/README.md#开发验证)，不在 colcon 测试中。测试后关闭隔离测试终端；实机终端使用前述运行环境。
 
 本地测试与预览不能证明实船清洗效果。带地图自动任务在本次路线执行结束后进入 `COMPLETE`；`coverage_complete` 单独表示要求接触区间的缺口是否满足容差，存在缺口也不追加补洗；覆盖记录统计左刷接触中心线轨迹，不能直接当作池底面积覆盖率。
 

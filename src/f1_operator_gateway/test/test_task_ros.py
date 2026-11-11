@@ -5,6 +5,7 @@ import json
 import time
 import uuid
 
+import pytest
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
@@ -12,10 +13,137 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 from std_srvs.srv import Trigger, SetBool
 from nav_msgs.msg import OccupancyGrid
-from f1_interfaces.srv import SetInitialPose
+from f1_interfaces.msg import ActuatorCommand, ControlState
+from f1_interfaces.srv import AcquireControl, ReleaseControl, SetInitialPose
 import websockets
 
 from operator_gateway.node import OperatorGateway
+
+
+@pytest.mark.parametrize("fault", ["incompatible", "rc", "handshake", "epoch", "connection", "lease_lost"])
+def test_continuous_manual_output_requires_live_compatible_firmware_and_never_replays(fault):
+    """Exercise the wire contract and ROS output with simulated firmware, no hardware."""
+    rclpy.init(args=["--ros-args", "-p", "port:=0"])
+    gateway = OperatorGateway()
+    peer = Node("operator_manual_test_robot")
+    executor = SingleThreadedExecutor()
+    executor.add_node(gateway)
+    executor.add_node(peer)
+    pool = ThreadPoolExecutor(max_workers=1)
+    firmware = dict(compatible=True, source="NANO", phase=None, epoch=1,
+                    connection_id="serial-session", leased=False)
+    commands, acquired, released = [], [], []
+    control_pub = peer.create_publisher(ControlState, "/f1/control_state", 10)
+    peer.create_subscription(ActuatorCommand, "/f1/actuator_command", commands.append,
+                             QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
+
+    def publish_control():
+        message = ControlState()
+        message.stamp = peer.get_clock().now().to_msg()
+        message.connected, message.armed = True, firmware["phase"] != "HANDSHAKE"
+        message.state = firmware["phase"] or ("ACTIVE" if firmware["leased"] else "READY")
+        message.source, message.result = firmware["source"], "OK"
+        message.connection_id, message.epoch = firmware["connection_id"], firmware["epoch"]
+        message.motion_authorized = firmware["leased"]
+        message.owner = "operator_app" if firmware["leased"] else ""
+        message.firmware_protocol_version = 3 if firmware["compatible"] else 2
+        message.firmware_protocol_compatible = firmware["compatible"]
+        control_pub.publish(message)
+
+    def acquire(request, response):
+        acquired.append(request.owner)
+        firmware["leased"] = True
+        response.success, response.token = True, "manual-test-token"
+        return response
+
+    def release(request, response):
+        released.append(request.token)
+        firmware["leased"] = False
+        response.success = True
+        return response
+
+    peer.create_timer(.05, publish_control)
+    peer.create_service(AcquireControl, "/f1/acquire_control", acquire)
+    peer.create_service(ReleaseControl, "/f1/release_control", release)
+    port = gateway.hub.server.sockets[0].getsockname()[1]
+
+    async def scenario():
+        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+            async def until(predicate):
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    packet = json.loads(await asyncio.wait_for(ws.recv(), 5))
+                    if predicate(packet):
+                        return packet
+                raise AssertionError("manual contract state not received")
+
+            async def manual(sequence, speed, *, brush=False):
+                await ws.send(json.dumps(dict(op="manual_input", seq=sequence,
+                    direction="FORWARD", speed_percent=speed, mode="BOTH",
+                    brush_enabled=brush, brush_percent=50 if brush else 0,
+                    thrust_enabled=False, thrust_percent=0)))
+
+            await ws.send(json.dumps(dict(op="hello", client="continuous-manual-test")))
+            hello = await until(lambda p: p.get("type") == "hello")
+            assert "continuous_drive_percent_v1" in hello["capabilities"]
+            await until(lambda p: p.get("type") == "telemetry" and p["drive_output"]["available"])
+            await manual(1, 0)
+            await until(lambda p: p.get("type") == "telemetry")
+            assert not acquired and not commands
+            await manual(2, 37)
+            await until(lambda p: any(c.speed_percent == 37 for c in commands))
+            assert acquired == ["operator_app"]
+            await manual(3, 0, brush=True)
+            await until(lambda p: any(c.speed_percent == 0 and c.brush_enabled
+                                     and c.brush_percent == 50. for c in commands))
+            await manual(4, 0)
+            await until(lambda p: bool(commands) and commands[-1].speed_percent == 0
+                         and not commands[-1].brush_enabled)
+            # Revocation must clear the old lease even if no new input arrives.
+            changes = {
+                "incompatible": dict(compatible=False, phase="INCOMPATIBLE"),
+                "rc": dict(source="RC", phase="RC", epoch=2),
+                "handshake": dict(phase="HANDSHAKE"),
+                "epoch": dict(epoch=2),
+                "connection": dict(connection_id="new-serial-session"),
+                "lease_lost": {},
+            }[fault]
+            firmware.update(changes, leased=False)
+            await until(lambda p: p.get("type") == "telemetry" and bool(released))
+            assert not gateway.token and gateway.last_input is None
+            await manual(5, 99)
+            reply = await until(lambda p: p.get("type") == "reply" and p.get("op") == "manual_input")
+            assert reply["success"] is False
+            if fault in ("incompatible", "rc", "handshake"):
+                await manual(6, 0)  # Neutral before authority returns cannot rearm.
+                await until(lambda p: p.get("type") == "telemetry")
+                assert gateway.manual_rearm_required
+            count = len(commands)
+            firmware.update(compatible=True, phase=None, source="NANO")
+            await until(lambda p: p.get("type") == "telemetry" and p["drive_output"]["available"]
+                        and p["state"]["state"] == "READY" and p["state"]["source"] == "NANO")
+            await manual(7, 99)  # Continuing the old hold after recovery is still rejected.
+            reply = await until(lambda p: p.get("type") == "reply" and p.get("op") == "manual_input")
+            assert reply["success"] is False and "中性" in reply["message"]
+            assert len(commands) == count and len(acquired) == 1
+            await manual(8, 0)
+            await manual(9, 99)
+            await until(lambda p: len(commands) > count)
+            assert commands[-1].speed_percent == 99 and len(acquired) == 2
+
+    future = pool.submit(asyncio.run, scenario())
+    try:
+        deadline = time.monotonic() + 20
+        while not future.done() and time.monotonic() < deadline:
+            executor.spin_once(timeout_sec=.02)
+        assert future.done()
+        future.result()
+    finally:
+        gateway.destroy_node()
+        peer.destroy_node()
+        executor.shutdown()
+        rclpy.shutdown()
+        pool.shutdown(wait=True)
 
 
 def test_websocket_manual_timeout_history_is_available_after_reconnect():

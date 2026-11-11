@@ -1,17 +1,18 @@
 """Operator-facing diagnostic log, independent of motion control decisions."""
 from datetime import datetime
 import json
+import math
 from pathlib import Path
 import time
 
 try:
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog, QHBoxLayout, QLabel,
-                                   QPlainTextEdit, QPushButton, QVBoxLayout, QWidget)
+    from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
+                                   QPlainTextEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget)
 except ImportError:
     from PyQt5.QtCore import Qt
-    from PyQt5.QtWidgets import (QApplication, QDialog, QFileDialog, QHBoxLayout, QLabel,
-                                 QPlainTextEdit, QPushButton, QVBoxLayout, QWidget)
+    from PyQt5.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
+                                 QPlainTextEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 
 REASONS = {
@@ -29,6 +30,8 @@ REASONS = {
     "command deadline expired": "串口桥执行指令过期",
     "CTRL timeout": "下位机 CTRL 状态超时",
     "ACK progress timeout": "下位机 ACK 确认超时",
+    "firmware protocol unavailable": "F103 协议未就绪或不兼容，已停止手动输出",
+    "control_identity_changed": "串口连接、控制源或控制代次改变，已清除旧手动动作",
     "transmit scheduling gap": "串口发送调度间隔超限",
     "source/epoch changed": "控制源或控制代次发生变化",
     "owner released control": "控制者释放控制权",
@@ -42,8 +45,12 @@ class DiagnosticPanel:
         self._gateway_cursors = {}
         self._last_send_tick = None
         self._log_dialog = None
-        page = QWidget()
-        layout = QVBoxLayout(page)
+        page = QScrollArea()
+        page.setWidgetResizable(True)
+        page.setFrameShape(QFrame.NoFrame)
+        content = QWidget()
+        page.setWidget(content)
+        layout = QVBoxLayout(content)
         hint = QLabel("记录连接、手动锁定及停止原因；保留最近 2000 条。\n"
                       "复现后导出日志。时间带时区；Nano 事件使用 Nano 时间，可能与 Windows 有偏差。")
         hint.setWordWrap(True)
@@ -51,6 +58,12 @@ class DiagnosticPanel:
         self.diagnostic_summary = QLabel("等待遥测")
         self.diagnostic_summary.setWordWrap(True)
         layout.addWidget(self.diagnostic_summary)
+        self.output_diagnostics = QLabel("F103 输出目标：等待状态")
+        self.output_diagnostics.setWordWrap(True)
+        layout.addWidget(self.output_diagnostics)
+        self.rc_diagnostics = QLabel("RC 接收诊断：等待状态（只读）")
+        self.rc_diagnostics.setWordWrap(True)
+        layout.addWidget(self.rc_diagnostics)
         expand = QPushButton("展开查看日志")
         expand.clicked.connect(self._expand_diagnostics)
         layout.addWidget(expand)
@@ -63,6 +76,7 @@ class DiagnosticPanel:
             actions.addWidget(button)
         layout.addLayout(actions)
         self.log_view = QPlainTextEdit()
+        self.log_view.setMinimumHeight(180)
         self.log_view.setReadOnly(True)
         # Reading/copying logs must not capture WASD as a text input.
         self.log_view.setFocusPolicy(Qt.NoFocus)
@@ -164,3 +178,53 @@ class DiagnosticPanel:
             f"CTRL 年龄：{state.get('ctrl_age_sec', '未知')} s · ACK 年龄：{state.get('ack_age_sec', '未知')} s\n"
             f"指令剩余：{state.get('command_remaining_sec', '未知')} s\n"
             f"最近撤销原因：{state.get('last_stop_reason') or '无'}")
+
+    def _refresh_output_diagnostics(self, packet, fresh):
+        if not fresh or packet.get("control_fresh") is not True:
+            self.output_diagnostics.setText("F103 输出目标：状态未收到或已过期")
+            self.rc_diagnostics.setText("RC 接收诊断：状态未收到或已过期（只读）")
+            return
+        state = packet.get("state", {})
+        compatible = {True: "兼容", False: "不兼容"}.get(state.get("firmware_protocol_compatible"), "未知")
+        protocol = f"F103 协议：v{state.get('firmware_protocol_version', '未知')}（{compatible}）"
+        pwm = state.get("target_pwm_bl_br_fl_fr")
+        values = (" · ".join(f"{name}={value}" for name, value in zip(("BL", "BR", "FL", "FR"), pwm))
+                  if isinstance(pwm, (list, tuple)) and len(pwm) == 4 else "未提供")
+        ack = state.get("ack_sequence", "—") if state.get("have_sequence") is True else "未确认"
+        self.output_diagnostics.setText(protocol + "\n" + (
+            f"四路目标 PWM / μs：{values}\n"
+            f"发送序号：{state.get('sent_sequence', '—')} · ACK：{ack} · 结果：{state.get('result', '—')}\n"
+            "目标 PWM / ACK 表示指令目标与接收状态，不是实际转速、推力或船速。"
+            if self._firmware_ctrl_fresh(state) else
+            f"F103 输出目标：CTRL 未收到或已过期\n原因：{state.get('reason') or '等待新鲜 CTRL'}"))
+        channels = state.get("rc_channels")
+        channel_text = (" · ".join(f"CH{i}={value}" for i, value in enumerate(channels, 1))
+                        if isinstance(channels, (list, tuple)) and len(channels) == 14 else "未提供")
+        flags = state.get("rc_flags")
+        flags_text = f"0x{flags:02X}" if type(flags) is int else "—"
+        rc_age = self._reported_age_sec(state, "rc_age_sec")
+        rc_fresh = (state.get("connected") is True and state.get("rc_valid") is True
+                    and rc_age is not None and rc_age < .4)
+        valid = "新鲜帧" if rc_fresh else "无有效帧或已过期"
+        if not rc_fresh:
+            channel_text = "不显示过期原始通道"
+        age_text = f"{rc_age:.3f} s" if rc_age is not None else "未知"
+        self.rc_diagnostics.setText(
+            f"RC 接收诊断（只读）：{valid} · 帧序号 {state.get('rc_sequence', '—')}\n"
+            f"年龄：{age_text} · flags：{flags_text}\n{channel_text}")
+
+    def _reported_age_sec(self, state, field):
+        age = state.get(field)
+        if type(age) not in (int, float) or not math.isfinite(age) or age < 0 or not self.last_telemetry_at:
+            return None
+        control_age_ms = (self.telemetry.get("stream") or {}).get("control_age_ms", 0.)
+        if (type(control_age_ms) not in (int, float) or not math.isfinite(control_age_ms)
+                or control_age_ms < 0):
+            return None
+        # The gateway can keep publishing ROS state while serial CTRL/RC stalls.
+        # Include network-receive-to-display age and known gateway queue delay.
+        return age + control_age_ms / 1000. + max(0., time.monotonic()-self.last_telemetry_at)
+
+    def _firmware_ctrl_fresh(self, state):
+        age = self._reported_age_sec(state, "ctrl_age_sec")
+        return state.get("connected") is True and age is not None and age < .4

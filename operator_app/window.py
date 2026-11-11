@@ -7,12 +7,12 @@ try:
     from PySide6.QtCore import QEvent, QTimer, Qt
     from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QGridLayout,
                                    QHBoxLayout, QLabel, QMainWindow, QPushButton,
-                                   QSpinBox, QTabWidget, QVBoxLayout, QWidget, QScrollArea, QLineEdit, QAbstractSpinBox)
+                                   QSlider, QSpinBox, QTabWidget, QVBoxLayout, QWidget, QScrollArea, QLineEdit, QAbstractSpinBox)
 except ImportError:
     from PyQt5.QtCore import QEvent, QTimer, Qt
     from PyQt5.QtWidgets import (QApplication, QComboBox, QFrame, QGridLayout,
                                  QHBoxLayout, QLabel, QMainWindow, QPushButton,
-                                 QSpinBox, QTabWidget, QVBoxLayout, QWidget, QScrollArea, QLineEdit, QAbstractSpinBox)
+                                 QSlider, QSpinBox, QTabWidget, QVBoxLayout, QWidget, QScrollArea, QLineEdit, QAbstractSpinBox)
 
 try:
     from .map_canvas import MapCanvas
@@ -54,6 +54,8 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self._retired_runtime_sessions = []
         self.client_id = None
         self.capabilities = set()
+        self.drive_output = {}
+        self._control_identity = None
         self.pending_requests = {}
         self.initial_pose = None
         self.completed_results = {}
@@ -134,19 +136,46 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
     def _build_manual(self, parent):
         box = QVBoxLayout(parent); box.setContentsMargins(4, 8, 4, 8)
         self.mode_label = QLabel("手动控制 · 网关自动管理会话"); self.mode_label.setWordWrap(True); box.addWidget(self.mode_label)
-        box.addWidget(QLabel("PWM 档位"))
+        self.speed_label = QLabel("主驱动档位（旧网关）")
+        box.addWidget(self.speed_label)
+        self.speed_controls = QWidget()
+        percent_row = QHBoxLayout(self.speed_controls)
+        percent_row.setContentsMargins(0, 0, 0, 0)
+        self.speed_slider = QSlider(Qt.Horizontal)
+        self.speed_slider.setRange(0, 100)
+        self.speed_slider.setValue(25)
+        self.speed_slider.setFocusPolicy(Qt.NoFocus)
+        self.speed_slider.setToolTip("主驱动输出幅度；0 仅停止主电机，滚刷和第五电推独立控制")
+        self.speed_value = QSpinBox()
+        self.speed_value.setRange(0, 100)
+        self.speed_value.setValue(25)
+        self.speed_value.setSuffix(" %")
+        self.speed_value.setKeyboardTracking(False)
+        self.speed_value.setToolTip("整数 0–100；编辑前停止手动输出，按 Enter 后返回驾驶焦点")
+        self.speed_slider.valueChanged.connect(self._set_speed)
+        self.speed_value.valueChanged.connect(self._set_speed)
+        self.speed_value.editingFinished.connect(self._finish_speed_edit)
+        percent_row.addWidget(self.speed_slider, 1)
+        percent_row.addWidget(self.speed_value)
+        box.addWidget(self.speed_controls)
+        self.speed_controls.hide()
         speeds = QHBoxLayout()
         self.speed_buttons = {}
         for value in (25, 50, 75):
-            button = QPushButton(f"{value}%"); button.setCheckable(True); button.clicked.connect(lambda checked, v=value: self._set_speed(v)); speeds.addWidget(button)
+            button = QPushButton(f"{value} 档"); button.setCheckable(True); button.setFocusPolicy(Qt.NoFocus)
+            button.clicked.connect(lambda checked, v=value: self._set_speed(v)); speeds.addWidget(button)
             self.speed_buttons[value] = button
             if value == 25: button.setChecked(True)
         box.addLayout(speeds)
-        box.addWidget(QLabel("驱动轮组")); self.mode_combo = QComboBox(); self.mode_combo.addItems(["前轮", "四轮", "后轮"]); self.mode_combo.currentTextChanged.connect(self._set_mode); box.addWidget(self.mode_combo)
+        box.addWidget(QLabel("驱动轮组")); self.mode_combo = QComboBox(); self.mode_combo.addItems(["前轮", "四轮", "后轮"]); self.mode_combo.setCurrentIndex(1); self.mode_combo.currentTextChanged.connect(self._set_mode); box.addWidget(self.mode_combo)
         grid = QGridLayout(); self.drive_buttons = {}
         for row, col, label, direction in ((0,1,"↑ W","FORWARD"),(1,0,"← A","LEFT"),(1,1,"停","STOP"),(1,2,"D →","RIGHT"),(2,1,"↓ S","REVERSE")):
             button = QPushButton(label); self.drive_buttons[direction] = button; grid.addWidget(button,row,col); button.pressed.connect(lambda d=direction: self._set_direction(d)); button.released.connect(lambda: self._set_direction("STOP"))
         box.addLayout(grid); box.addWidget(QLabel("按住运行，松开停止主轮"))
+        self.drive_feedback = QLabel("App 请求：STOP · 25 档\nF103 回报：等待新鲜状态")
+        self.drive_feedback.setWordWrap(True)
+        self.drive_feedback.setToolTip("显示请求与下位机接受的输出目标，不是电机实测转速、推力或船速")
+        box.addWidget(self.drive_feedback)
         box.addStretch()
         box.addWidget(QLabel("辅助执行器输出（-100% 到 100%）"))
         brush_row = QHBoxLayout()
@@ -309,11 +338,12 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         selecting = self.pose_button.isChecked()
         runtime = packet.get("runtime") or {}
         typing = isinstance(QApplication.focusWidget(), (QLineEdit, QAbstractSpinBox))
+        drive_block = self._drive_output_block_reason()
         lock_reasons = tuple(label for condition, label in (
             (busy, "自动任务占用"), (local_pending, "操作等待回复"),
             (selecting, "正在选择初始位姿"), (not fresh, "遥测未收到或超过 800 ms"),
             (not operator, "其他操作端占用"), (runtime.get("busy"), "建图/选图操作处理中"),
-            (typing, "输入框持有焦点")) if condition)
+            (typing, "输入框持有焦点"), (bool(drive_block), drive_block)) if condition)
         locked = bool(lock_reasons)
         self._log_change("manual_lock", lock_reasons, "App",
                          "手动按钮已禁用" if locked else "手动按钮已可用",
@@ -322,8 +352,10 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
                           if self.last_telemetry_at else None})
         self.mode_label.setText("手动不可用：" + "；".join(lock_reasons) if locked
                                 else "手动控制 · 网关自动管理会话")
+        self._refresh_drive_controls(fresh)
         if not fresh:
             self.diagnostic_summary.setText("遥测未收到或已过期；先前桥状态不能代表当前状态")
+        self._refresh_output_diagnostics(self.telemetry, fresh)
         was_locked = self.manual_locked
         self.manual_locked = locked
         if locked:
@@ -350,10 +382,10 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
             and not busy and not local_pending and not selecting
             and task.get("can_set_forward_boost") is True))
         self.forward_boost_button.setToolTip(task.get("forward_boost_setting_error") or
-            "只在任务开始前设置；运行中和暂停期间锁定。四电推最低档前进，纠偏优先。")
+            "只在任务开始前设置；运行中和暂停期间锁定。四电推以新标度 25% 前进辅助，纠偏优先。")
         boost_text = {
             "disabled": "提速已关闭，沿墙前进依靠滚刷",
-            "active": "已启用，正在输出最低档前进辅助",
+            "active": "已启用，正在输出新标度 25% 前进辅助",
             "inactive_task": "已启用，等待开始下一次任务",
             "endpoint_cutoff": "已启用，已进入近端区，本墙段保持滚刷推进",
             "heading_correction": "已启用，航向纠偏中，前进辅助关闭",
@@ -466,10 +498,93 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
                 break
 
     def _set_speed(self, value):
+        continuous = "continuous_drive_percent_v1" in self.capabilities
+        if type(value) is not int or not 0 <= value <= 100 or (not continuous and value not in (25, 50, 75)):
+            return
         self.speed = value
+        for widget in (self.speed_slider, self.speed_value):
+            blocked = widget.blockSignals(True)
+            widget.setValue(value)
+            widget.blockSignals(blocked)
         for speed, button in self.speed_buttons.items():
             button.setChecked(speed == value)
+        if value == 0:
+            # Do not retain a held key/button that a later increase could revive.
+            # Auxiliary actuators are deliberately independent of main output.
+            self.direction = "STOP"
+            self._pressed_keys.clear()
+            for button in self.drive_buttons.values():
+                button.setDown(False)
+        self._refresh_drive_feedback()
         self._submit_manual_intent()
+
+    def _finish_speed_edit(self):
+        # Enter commits the integer and returns WASD to the main window. A click
+        # into another editor may finish this edit too; do not steal that focus.
+        if self.speed_value.hasFocus() or self.speed_value.lineEdit().hasFocus():
+            self.setFocus(Qt.OtherFocusReason)
+        self._refresh_controls()
+
+    def _drive_output_block_reason(self):
+        if "continuous_drive_percent_v1" not in self.capabilities:
+            return ""
+        output = self.drive_output
+        if (not isinstance(output, dict)
+                or any(type(output.get(key)) is not int or output[key] != expected
+                       for key, expected in (("min", 0), ("max", 100), ("step", 1),
+                                             ("firmware_protocol_version", 3)))):
+            return "主驱动输出能力未确认，需要 F103 协议 v3"
+        if output.get("available") is not True:
+            return str(output.get("reason") or "F103 协议 v3 未就绪，主驱动输出不可用")
+        state = self.telemetry.get("state", {})
+        if self.telemetry.get("control_fresh") is not True or not self._firmware_ctrl_fresh(state):
+            return "F103 控制反馈未收到或已过期"
+        if state.get("source") != "NANO":
+            return f"控制源为 {state.get('source', '未知')}，等待 Nano 控制权"
+        if (state.get("state") not in ("READY", "ACTIVE") or state.get("armed") is not True
+                or state.get("result") != "OK"):
+            return "F103 尚未完成控制握手：" + str(state.get("reason") or state.get("state") or "未知")
+        ack_age = self._reported_age_sec(state, "ack_age_sec")
+        if ack_age is None or ack_age >= .4:
+            return "F103 ACK 确认未收到或已过期"
+        return ""
+
+    def _refresh_drive_controls(self, fresh):
+        continuous = "continuous_drive_percent_v1" in self.capabilities
+        if not continuous and self.speed not in (25, 50, 75):
+            self.speed = 25
+        for widget in (self.speed_slider, self.speed_value):
+            # A redundant setValue also replaces uncommitted spinbox text.
+            # Periodic telemetry must not interrupt an operator typing a value.
+            if widget.value() != self.speed:
+                blocked = widget.blockSignals(True)
+                widget.setValue(self.speed)
+                widget.blockSignals(blocked)
+        if not continuous and (self.speed_value.hasFocus() or self.speed_value.lineEdit().hasFocus()):
+            self.setFocus(Qt.OtherFocusReason)
+        self.speed_controls.setVisible(continuous)
+        self.speed_label.setText("主驱动输出幅度（0–100%）" if continuous else "主驱动档位（旧网关：25 / 50 / 75）")
+        for value, button in self.speed_buttons.items():
+            button.setText(f"{value}%" if continuous else f"{value} 档")
+            button.setChecked(value == self.speed)
+        self._refresh_drive_feedback(fresh)
+
+    def _refresh_drive_feedback(self, fresh=None):
+        if fresh is None:
+            fresh = bool(self.last_telemetry_at) and time.monotonic()-self.last_telemetry_at < .8
+        unit = "%" if "continuous_drive_percent_v1" in self.capabilities else " 档"
+        text = f"App 请求：{self.direction} · {self.speed}{unit} · {self.mode}"
+        state = self.telemetry.get("state", {})
+        if (not fresh or self.telemetry.get("control_fresh") is not True
+                or not self._firmware_ctrl_fresh(state)):
+            text += "\nF103 回报：状态未收到或已过期"
+        else:
+            source = state.get("source", "未知")
+            speed = state.get("speed_percent", "—")
+            scale = (f"遥控器 {speed} 档（独立标度）" if source == "RC" else
+                     f"{speed}%" if state.get("firmware_protocol_version") == 3 else f"{speed} 档")
+            text += f"\nF103 回报：{source} · {state.get('direction', '—')} · {scale}"
+        self.drive_feedback.setText(text)
 
     def _set_mode(self, text):
         self.mode = {"前轮": "FRONT", "四轮": "BOTH", "后轮": "BACK"}[text]
@@ -481,7 +596,8 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
 
     def _set_direction(self, direction):
         if not self.manual_locked:
-            self.direction = direction
+            self.direction = direction if self.speed else "STOP"
+            self._refresh_drive_feedback()
             self._submit_manual_intent()
     def _packet(self, op, **fields):
         self.seq += 1; return {"op": op, "seq": self.seq, **fields}
@@ -500,7 +616,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         if self._clearing_manual:
             return
         fresh = bool(self.last_telemetry_at) and time.monotonic() - self.last_telemetry_at < .8
-        if self.manual_locked or not fresh:
+        if self.manual_locked or not fresh or self._drive_output_block_reason():
             # Clear the GUI copy too: a telemetry recovery arriving before the
             # 100 ms controls timer must not restore a previously held action.
             self._clear_manual()
@@ -535,6 +651,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
             self.brush_button.setChecked(False)
             self.thrust_button.setChecked(False)
             self.brush = self.thrust = False
+            self._refresh_drive_feedback()
         finally:
             self._clearing_manual = False
 
@@ -559,14 +676,19 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
             self._clear_manual()
             self.pending_requests.clear()
             self.capabilities.clear()
+            self.drive_output = {}
+            self._control_identity = None
         self._refresh_controls()
 
     def _refresh_key_direction(self):
         self.direction = "STOP"
+        if self.speed == 0:
+            self._pressed_keys.clear()
         for key in (Qt.Key_W, Qt.Key_S, Qt.Key_A, Qt.Key_D):
             if key in self._pressed_keys:
                 self.direction = self._key_directions[key]
                 break
+        self._refresh_drive_feedback()
         self._submit_manual_intent()
 
     def _accept_gateway_session(self, session):
@@ -584,6 +706,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self._retired_runtime_sessions.clear()
         self._runtime_changed_at = 0.
         self.telemetry = {}
+        self._control_identity = None
         self.canvas.set_task_overlay({}, live=False)
         self.canvas.set_telemetry({"pose": None})
         self._clear_manual()
@@ -658,7 +781,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
                     return True
                 if self.manual_locked:
                     return True
-                if event.type() == QEvent.KeyPress:
+                if event.type() == QEvent.KeyPress and self.speed != 0:
                     self._pressed_keys.add(key)
                 else:
                     self._pressed_keys.discard(key)
@@ -706,6 +829,8 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
             self.last_telemetry_at = 0.
             self.client_id = packet.get("client_id")
             self.capabilities = set(packet.get("capabilities", []))
+            self.drive_output = packet.get("drive_output") or {}
+            self._control_identity = None
             self._log("连接", "网关握手完成", {"diagnostic_history": "diagnostic_history" in self.capabilities})
             if "diagnostic_history" not in self.capabilities:
                 self._log("App", "网关未声明诊断历史支持；仅记录本地事件与收到的桥状态，完整日志需更新 Nano 网关")
@@ -736,8 +861,17 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
                 self._telemetry_sequence = sequence
             self._last_received_at = received
             packet = self._attach_tracks(packet)
+            if "continuous_drive_percent_v1" in self.capabilities:
+                state = packet.get("state", {})
+                identity = tuple(state.get(key) for key in ("connection_id", "source", "epoch"))
+                if self._control_identity is not None and identity != self._control_identity:
+                    # Retire held input even if RC takeover/reconnect completed
+                    # between two GUI packets and the bridge is already READY.
+                    self._stop("control_identity_changed")
+                self._control_identity = identity
             self._diagnostic_telemetry(packet)
             self.telemetry = packet
+            self.drive_output = packet.get("drive_output") or {}
             self.last_telemetry_at = received - server_queue_ms / 1000.
             self._mapping_telemetry(packet)
             self.canvas.set_telemetry(packet if self._map_matches_runtime() else {"pose": None})

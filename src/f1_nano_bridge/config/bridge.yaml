@@ -4,7 +4,7 @@ nano_bridge:
     serial_enabled: false
     port: /dev/serial/by-id/usb-1a86_USB_Single_Serial_5761014804-if00
     motion_enabled: false
-    firmware_profile: f1_direction_gear_v2
+    firmware_profile: f1_direction_percent_v3
     direction_confirmed: false
     # The Qt App can use the signed -100..100 fifth-thruster command.
     # Set false when this actuator must be physically locked out.

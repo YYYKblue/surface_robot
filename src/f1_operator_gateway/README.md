@@ -1,6 +1,6 @@
 # f1_operator_gateway
 
-更新：2026-11-09，源码基线 `9db6798`。Windows Qt App 的 Nano 侧 WebSocket 入口，提供手动控制、双任务操作、初始位姿、状态转发，以及受管建图、地图保存与选择。模块职责与入口对比见[架构导读](../../docs/ARCHITECTURE.md)。
+更新：2026-11-11。Windows Qt App 的 Nano 侧 WebSocket 入口，提供手动控制、双任务操作、初始位姿、状态转发，以及受管建图、地图保存与选择。模块职责与入口对比见[架构导读](../../docs/ARCHITECTURE.md)。
 
 ## 构建
 
@@ -132,7 +132,31 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
 
 ## WebSocket 协议
 
-协议名仍为 `f1-operator-v1`；`hello` 新增 `client_id` 和 `capabilities`。手动消息字段与原版本一致。
+协议名仍为 `f1-operator-v1`；`hello` 包含 `client_id` 和 `capabilities`。手动消息字段保持一致，`speed_percent` 现接受 **0–100 的整数**，不再限制为 25/50/75。布尔值、浮点数（包括 `25.0`）、字符串和越界值均拒绝。该值是主电机输出百分比，不是实测船速；网关原样写入 ROS 指令，由 v3 串口桥编码并交给 F103 执行。
+
+```json
+{"op":"manual_input","seq":1,"direction":"FORWARD","speed_percent":37,"mode":"BOTH","brush_enabled":false,"brush_percent":0,"thrust_enabled":false,"thrust_percent":0}
+```
+
+`speed_percent=0` 表示主驱动中性输出，滚刷、第五电推仍按各自开关和百分比独立控制。仅主方向非 `STOP` 且输出大于 0，或已启用的辅助执行器输出非 0 时，才申请手动控制权；已有会话收到零输出仍会发送相应中性主驱动指令。`manual_stop` 则清除全部手动意图并释放手动租约，不等同于仅把主电机调到 0%。
+
+`hello.capabilities` 中的 `continuous_drive_percent_v1` 表示网关识别这项功能。`hello` 和每帧 `telemetry` 均包含：
+
+```json
+{"drive_output":{"min":0,"max":100,"step":1,"firmware_protocol_version":3,"available":true}}
+```
+
+这里的 `firmware_protocol_version` 是所需固件协议版本；实际观测版本在 `telemetry.state.firmware_protocol_version` 中，0 表示未知。`available=true` 仅在 bridge 确认实际版本为 3、`firmware_protocol_compatible=true`、串口已连接，且 ROS 桥状态接收年龄与源时间戳均小于 300 ms、CTRL 累计年龄小于 400 ms 时成立。它表示固件能力目前可用；运动仍需原有 `NANO/armed/OK/READY或ACTIVE`、ACK 新鲜度和单租约门控。
+
+CTRL/ACK 的累计年龄会加上 `max(ROS 当前时间−桥状态源时间戳, 网关收到该状态后的单调时间间隔)`，把 ROS 传输及排队时间计入同一阈值；该有效年龄以 `stream.control_age_ms` 上报。未来源时间戳视为无效，该字段为 `null`，`control_fresh=false`。
+
+缺少兼容信息、旧版固件或状态过期时，网关明确拒绝有输出的手动意图，撤销已有意图；租约申请完成和实际发布前再次检查，避免延迟响应恢复旧动作。中性输入和 `manual_stop` 仍可处理。网关升级并不证明 F103 已烧录：应先确认 v3 固件与 bridge，再开放 App 连续调节；旧 App 的 25/50/75 数值仍合法，但也必须通过同样的固件检查。新版 App 以动态 `drive_output.available` 为准，不能仅看到 capability 就开放输出。
+
+`connection_id/source/epoch` 变化、桥转为 RC/握手/失联/故障等不可手动控制状态，或新鲜状态确认原租约已经撤销时，网关清除缓存意图、待返回申请和旧 token。非零意图不会在握手期间排队等待恢复。发生过手动输出后，恢复新鲜 `READY/ACTIVE + NANO/armed/OK` 和 ACK 门控，还必须先收到一条中性手动输入，才能接受新的非零输入；RC/握手期间收到的中性不能提前解除此锁，持续发送旧“按住”动作不会自动重获控制。初次正常连接完成后，首个明确手动输入仍可使用。`manual_stop` 随时可停止，但不会绕过这项恢复条件。
+
+`telemetry.state` 原样传递桥状态，并包含 `rc_valid/rc_flags/rc_sequence/rc_age_sec/rc_channels`（14 路原始通道）用于 RC 诊断。RC 数组和四路目标 PWM 均转换为 JSON 数组。`speed_percent`、方向和 `target_pwm_bl_br_fl_fr` 来自 F103 状态；目标 PWM 不表示斜坡期间的实时 PWM、实测转速或推力。RC 数据的有效性与年龄应单独判断，不能用收到 App 遥测代替 RC 新鲜度。
+
+此扩展保持网关 250 ms 手动输入看门狗、250 ms ROS 指令有效期及既有停止/交接机制。Windows 打包与控件操作见 [App 说明](../../operator_app/README.md)；软件测试、ACK 和状态回显不替代实机输出测量。
 
 `forward_boost` capability 表示网关支持启动前提速设置。请求示例：
 

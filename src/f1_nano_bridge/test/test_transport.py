@@ -95,7 +95,7 @@ def test_real_serial_pty_deadline_stop_and_imu(firmware):
         token, _ = worker.acquire("pty-test")
         now = wall_clock_ns()
         assert worker.accept(Command(token, 0, now, now + 150_000_000, 1))
-        wait_until(lambda: (1625, 1625, 1375, 1375) in observed)
+        wait_until(lambda: (1600, 1600, 1400, 1600) in observed)
         wait_until(lambda: worker.snapshot()["state"] == "READY")
         assert observed[-1] == (1500,) * 4
         assert worker.take_imu()
@@ -159,7 +159,7 @@ def test_clock_recovery_closes_serial_with_neutral():
         assert worker.handle is None
         assert select.select([master], [], [], 1)[0]
         frame = os.read(master, 4096)
-        assert frame == encode(channels(0, 25, 1, False, 0, False, 0), 1, 0)
+        assert frame == encode(channels(0, 0, 1, False, 0, False, 0), 1, 0)
         assert not worker.acquire("new-task")[0]
     finally:
         worker.close()
@@ -307,7 +307,7 @@ def test_real_pty_disconnection_revokes_and_rejects_old_token():
                     wall_clock_ns=lambda: offset + time.monotonic_ns())
 
     def report(ms, have_sequence):
-        body = (f"CTRL,2,{ms},NANO,1,{have_sequence},0,OK,BOTH,1,0,0,0,0,"
+        body = (f"CTRL,3,{ms},NANO,1,{have_sequence},0,OK,BOTH,1,0,0,0,0,"
                 "1500,1500,1500,1500,25,STOP").encode()
         checksum = 0
         for byte in body:
@@ -379,7 +379,7 @@ def test_zero_byte_attempt_is_not_replayed_after_command_change(monkeypatch):
 
 def test_persistent_zero_byte_backpressure_closes_at_send_gap(monkeypatch):
     handle = ScriptedPort()
-    body = b"CTRL,2,100,NANO,1,1,0,OK,BOTH,1,0,0,0,0,1500,1500,1500,1500,25,STOP"
+    body = b"CTRL,3,100,NANO,1,1,0,OK,BOTH,1,0,0,0,0,1500,1500,1500,1500,25,STOP"
     check = 0
     for byte in body:
         check ^= byte
@@ -411,3 +411,90 @@ def test_persistent_zero_byte_backpressure_closes_at_send_gap(monkeypatch):
         worker.quit.set()
         worker.thread.join(1.)
     assert not worker.thread.is_alive()
+
+
+def telemetry_line(body):
+    raw = body.encode("ascii")
+    checksum = 0
+    for byte in raw:
+        checksum ^= byte
+    return raw + f"*{checksum:02X}\r\n".encode("ascii")
+
+
+def test_interleaved_remote_imu_and_control_are_dispatched_independently(monkeypatch):
+    worker = Worker("unused")
+    worker.core.opened()
+    now = [1.0]
+    monkeypatch.setattr(transport.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(transport.time, "monotonic_ns", lambda: int(now[0] * 1e9))
+    ctrl = telemetry_line("CTRL,3,100,NANO,1,0,0,WAIT_NANO,BOTH,0,0,0,0,0,1500,1500,1500,1500,25,STOP")
+    rc = telemetry_line("RC,2,100,7,1,0," + ",".join(map(str, [1050] + [1500] * 12 + [1950])))
+    imu = telemetry_line("IMU,1,100,0,0,9.8,0,0,0,1,0,0,0,0,0,0,0,6")
+    worker.handle = ScriptedPort(ctrl + rc + imu)
+    worker._read()
+    state = worker.snapshot()
+    assert state["invalid_lines"] == 0 and state["firmware_protocol_version"] == 3
+    assert state["rc_valid"] and state["rc_sequence"] == 7 and state["rc_flags"] == 0
+    assert state["rc_channels"] == [1050] + [1500] * 12 + [1950]
+    assert state["rc_age_sec"] == 0 and state["imu_age_sec"] == 0
+    samples = worker.take_imu()
+    assert len(samples) == 1 and samples[0][1]["kind"] == "IMU"
+    assert worker.core.ctrl_at == 1.0
+    # Duplicate RC wire time cannot refresh its age or the CTRL deadline.
+    now[0] = 1.2
+    worker.handle.report = rc
+    worker._read()
+    assert worker.snapshot()["rc_age_sec"] == pytest.approx(.2)
+    assert worker.core.ctrl_at == 1.0 and not worker.take_imu()
+    now[0] = 1.401
+    assert not worker.snapshot()["rc_valid"]
+    assert worker.core.frame(now[0]) is None
+    # An unchanged receiver sequence with newer firmware time is a valid
+    # no-signal report; it must replace the old active channel display.
+    worker.handle.report = telemetry_line("RC,2,200,7,0,8," + ",".join(["1500"] * 14))
+    worker._read()
+    state = worker.snapshot()
+    assert not state["rc_valid"] and state["rc_flags"] == 8 and state["rc_age_sec"] == 0
+    assert state["rc_channels"] == [1500] * 14 and state["invalid_lines"] == 0
+    worker._close()
+    assert worker.snapshot()["rc_age_sec"] == -1 and not worker.snapshot()["rc_valid"]
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_worker_reports_incompatible_protocol_without_misclassifying_valid_lines(version):
+    worker = Worker("unused", motion_enabled=True)
+    worker.core.opened()
+    now = time.monotonic()
+    worker.core.receive(Control(100, "NANO", 1, False, 0, "OK", "BOTH", True,
+                                False, 0, False, 0, (1500,) * 4), now)
+    worker.core.frame(now)
+    worker.core.sent(now)
+    worker.core.receive(Control(120, "NANO", 1, True, 0, "OK", "BOTH", True,
+                                False, 0, False, 0, (1500,) * 4), now)
+    token, _ = worker.acquire("compatibility-test")
+    assert token
+    worker.handle = ScriptedPort(telemetry_line(
+        f"CTRL,{version},140,NANO,1,1,0,OK,BOTH,1,0,0,0,0,1500,1500,1500,1500,25,STOP"))
+    worker._read()
+    state = worker.snapshot()
+    assert state["state"] == "INCOMPATIBLE"
+    assert state["firmware_protocol_version"] == version
+    assert not state["firmware_protocol_compatible"] and not state["motion_authorized"]
+    assert state["invalid_lines"] == 0 and not worker.core.token
+    assert worker.core.frame(time.monotonic()) is None
+    assert not worker.take_imu()
+
+
+def test_control_clock_reset_discards_previous_remote_channels():
+    worker = Worker("unused")
+    worker.core.opened()
+    worker.handle = ScriptedPort(telemetry_line(
+        "CTRL,3,1000,NANO,1,0,0,WAIT_NANO,BOTH,0,0,0,0,0,1500,1500,1500,1500,25,STOP") +
+        telemetry_line("RC,2,1000,7,1,0," + ",".join(["1950"] * 14)))
+    worker._read()
+    assert worker.snapshot()["rc_valid"]
+    worker.handle.report = telemetry_line(
+        "CTRL,3,10,NANO,1,0,0,WAIT_NANO,BOTH,0,0,0,0,0,1500,1500,1500,1500,25,STOP")
+    worker._read()
+    assert not worker.snapshot()["rc_valid"] and worker.snapshot()["rc_age_sec"] == -1
+    assert worker.snapshot()["rc_channels"] == [1500] * 14

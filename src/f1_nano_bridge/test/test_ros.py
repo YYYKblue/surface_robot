@@ -15,6 +15,7 @@ from sensor_msgs.msg import Imu
 from f1_interfaces.msg import ActuatorCommand, ControlState
 from f1_interfaces.srv import AcquireControl
 from nano_ros_bridge.node import Bridge
+from nano_ros_bridge.protocol import Control, Remote
 
 
 @pytest.fixture(autouse=True)
@@ -50,6 +51,9 @@ def test_ros_state_stop_and_unauthorized_commands():
     try:
         until(lambda: states and acquire.service_is_ready() and stop.service_is_ready())
         assert states[-1].state == "DISCONNECTED" and not states[-1].connected
+        assert states[-1].firmware_protocol_version == 0
+        assert not states[-1].firmware_protocol_compatible and not states[-1].rc_valid
+        assert states[-1].rc_age_sec == -1 and list(states[-1].rc_channels) == [1500] * 14
         assert not bridge.set_parameters([Parameter("use_sim_time", value=True)])[0].successful
         future = acquire.call_async(AcquireControl.Request(owner="test"))
         until(future.done)
@@ -75,6 +79,26 @@ def test_ros_state_stop_and_unauthorized_commands():
         until(lambda: bridge.converter.counts["status_rejected"] == 1)
         assert len(imu_messages) == 1
         assert sub is not None and imu_sub is not None
+        # Exercise generated ROS fields and publisher mapping, without serial
+        # or an actuator lease. Targets remain explicitly firmware targets.
+        bridge.worker.core.opened()
+        bridge.worker.core.receive(Control(
+            100, "NANO", 1, True, 0, "OK", "BOTH", True,
+            False, 0, False, 0, (1648, 1648, 1352, 1648),
+            speed_percent=37, direction="FORWARD"), time.monotonic())
+        bridge.worker.remote = Remote(100, 7, True, 0, tuple([1050] + [1500] * 12 + [1950]))
+        bridge.worker.remote_at = time.monotonic()
+        until(lambda: states[-1].firmware_protocol_version == 3 and states[-1].rc_sequence == 7)
+        assert states[-1].firmware_protocol_compatible and states[-1].rc_valid
+        assert states[-1].speed_percent == 37 and states[-1].direction == "FORWARD"
+        assert list(states[-1].target_pwm_bl_br_fl_fr) == [1648, 1648, 1352, 1648]
+        assert list(states[-1].rc_channels) == [1050] + [1500] * 12 + [1950]
+        assert states[-1].rc_flags == 0 and 0 <= states[-1].rc_age_sec < .4
+        assert not states[-1].motion_authorized
+        bridge.worker.core.protocol_mismatch(2)
+        until(lambda: states[-1].state == "INCOMPATIBLE")
+        assert states[-1].firmware_protocol_version == 2
+        assert not states[-1].firmware_protocol_compatible
     finally:
         executor.shutdown()
         client.destroy_node()

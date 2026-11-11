@@ -24,7 +24,8 @@ class Raw(c.Structure):
 class ReportTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        root = Path(os.environ.get("F1_FIRMWARE_DIR", Path(__file__).resolve().parents[4] / "firmware"))
+        root = Path(os.environ.get("F1_FIRMWARE_DIR",
+                                  Path(__file__).resolve().parents[3] / "under" / "F103firmware"))
         temporary = tempfile.TemporaryDirectory(prefix="f1_imu_formatter_")
         cls.addClassCleanup(temporary.cleanup)
         library = Path(temporary.name) / "imu_report.so"

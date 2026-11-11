@@ -134,9 +134,9 @@ class Bridge(Node):
         array = DiagnosticArray()
         array.header.stamp = state.stamp
         status = DiagnosticStatus()
-        status.name, status.hardware_id = "nano_bridge/f103", "F1_IMU_NEW _back2"
+        status.name, status.hardware_id = "nano_bridge/f103", "F103 direction/percent v3"
         status.level = DiagnosticStatus.OK if state.state in ("READY", "ACTIVE", "MONITOR") else DiagnosticStatus.WARN
-        if state.state == "FAULT":
+        if state.state in ("FAULT", "INCOMPATIBLE"):
             status.level = DiagnosticStatus.ERROR
         status.message = f"{state.state}: {state.reason}"
         status.values = [KeyValue(key=k, value=str(v)) for k, v in snap.items() if k != "ctrl"]

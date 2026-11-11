@@ -8,7 +8,7 @@ import pytest
 
 @pytest.fixture(scope="session")
 def firmware_library(tmp_path_factory):
-    default = Path(__file__).resolve().parents[4] / "firmware"
+    default = Path(__file__).resolve().parents[3] / "under" / "F103firmware"
     root = Path(os.environ.get("F1_FIRMWARE_DIR", default))
     if not (root / "tests/control_mux_harness.c").is_file():
         pytest.fail("Read-only firmware harness missing; set F1_FIRMWARE_DIR")
@@ -17,7 +17,8 @@ def firmware_library(tmp_path_factory):
         "cc", "-std=c99", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC",
         *[f"-I{root / p}" for p in ("USER", "SYSTEM/sbus", "HARDWARE/Motor")],
         *[str(root / p) for p in ("tests/control_mux_harness.c", "USER/host_protocol.c",
-                                  "USER/control_mux.c", "USER/rc_control.c", "SYSTEM/sbus/sbus_protocol.c")],
+                                  "USER/control_mux.c", "USER/rc_control.c", "USER/rc_telemetry.c",
+                                  "SYSTEM/sbus/sbus_protocol.c")],
         "-o", str(output)], check=True, capture_output=True)
     return output
 
@@ -32,5 +33,7 @@ def firmware(firmware_library):
     lib.test_get.restype = c.c_uint32
     lib.test_report.argtypes = [c.c_uint32, c.c_void_p, c.c_uint16]
     lib.test_report.restype = c.c_uint16
+    lib.test_rc_report.argtypes = [c.c_uint32, c.c_void_p, c.c_uint16]
+    lib.test_rc_report.restype = c.c_uint16
     lib.test_init()
     return lib

@@ -193,3 +193,54 @@ def test_conflict_revokes_lease_and_requires_neutral_barrier():
     core.receive(report(40, result="DIR_CONFLICT"), .04)
     assert not core.token and not core.ready
     assert not core.acquire("wall", .04)[0]
+
+
+@pytest.mark.parametrize("version", [1, 2, 4])
+def test_protocol_mismatch_revokes_lease_and_v3_needs_new_neutral_ack(version):
+    core = ready()
+    token, _ = core.acquire("wall", .02)
+    assert core.accept(command(token, speed_percent=37, brush_enabled=True, brush_percent=50),
+                       .02, 1_000_000_000)
+    core.protocol_mismatch(version)
+    state = core.snapshot(.04)
+    assert state["state"] == "INCOMPATIBLE"
+    assert state["firmware_protocol_version"] == version
+    assert not state["firmware_protocol_compatible"]
+    assert not core.token and core.command is None and not core.ready
+    assert core.frame(.04) is None
+    assert not core.acquire("wall", .04)[0]
+    # A compatible report alone cannot reuse the old barrier or lease.
+    core.receive(report(40), .04)
+    assert not core.ready and not core.token
+    assert core.snapshot(.04)["firmware_protocol_compatible"]
+    assert not core.accept(command(token, 1), .04, 1_020_000_000)
+    packet = core.frame(.06)
+    assert packet is not None and packet[:4] == b"\xa5\x5a\x03\x19"
+    core.sent(.06)
+    core.receive(report(80, ack=0), .08)
+    assert core.ready and core.command is None
+    new_token, _ = core.acquire("wall", .08)
+    assert new_token and new_token != token
+    assert core.snapshot(.08)["firmware_protocol_version"] == 3
+
+
+@pytest.mark.parametrize("speed", [0, 1, 20, 37, 99, 100])
+def test_continuous_main_percent_is_not_quantized_and_zero_keeps_brush(speed):
+    core = ready()
+    token, _ = core.acquire("wall", .02)
+    assert core.accept(command(token, speed_percent=speed, brush_enabled=True, brush_percent=50),
+                       .02, 1_000_000_000)
+    packet = core.frame(.04)
+    bits = int.from_bytes(packet[13:35], "little")
+    values = [(((bits >> (i * 11)) & 2047) * 5 + 6994) // 8 for i in range(16)]
+    assert values[5] == 1050 + 9 * speed
+    assert values[2:4] == ([1950, 1500] if speed else [1500, 1500])
+    assert values[9] == 1950 and values[7] > 1500
+
+
+@pytest.mark.parametrize("speed", [-1, 101, 25.0, True])
+def test_invalid_main_percent_revokes_lease(speed):
+    core = ready()
+    token, _ = core.acquire("wall", .02)
+    assert not core.accept(command(token, speed_percent=speed), .02, 1_000_000_000)
+    assert not core.token and not core.ready
