@@ -1,6 +1,6 @@
 # 工作空间与桥接包改名
 
-**当前 Nano 已删除全部旧工作空间，不适用下面的目录迁移命令。请直接使用[Nano 从零部署指南](DEPLOY_NANO.md)。** 本文仅保留给其他仍有旧目录的环境作为历史迁移参考。新部署统一只使用 `surface_ws`。
+**目标 Nano 已使用 `/home/nvidia/surface_ws`，不适用下面的旧目录改名命令。请使用[Nano 部署指南](DEPLOY_NANO.md)。** 本文仅保留给其他仍有旧 ROS 工作空间的环境作为历史迁移参考；不表示设备上所有旧程序或旧 H7 桥备份都已删除。
 
 | 项目 | 原名称 | 新名称 |
 | --- | --- | --- |
@@ -9,6 +9,8 @@
 | ROS 桥接包 | `nano_bridge` | `f1_nano_bridge` |
 
 Python 模块仍为 `nano_ros_bridge`，原生桥节点仍为 `/nano_bridge`，配置文件顶层键仍为 `nano_bridge`。话题、服务、参数与执行器协议保持原样。
+
+以上改名仅指水面 ROS 桥。2026-11-12 新增的水下 [`under_control/`](under_control/README.md) 是工作空间根目录下的独立 Python 服务，不属于这八个 ROS 包，不由 colcon 构建。双机部署需保留并另行同步该目录；移动工作空间时还需更新 `under-control.service` 的工作目录与启动脚本路径。旧 `nano-h7-bridge.service` 是另一套历史 H7 服务，不能按本页的 ROS 包改名替换；其停用、备份和回退见[水下部署记录](docs/UNDER_CONTROL_NANO_DEPLOYMENT.md)。
 
 PC 源码目录已改名。下面步骤仅适用于仍保留旧目录、已按[从零部署指南](DEPLOY_NANO.md)准备好系统 ROS 和工具的 Nano；不依赖其他已删除的用户工作空间。
 

@@ -20,18 +20,22 @@ try:
     from .task_state import PHASES, TASK_NAMES, blocker_text
     from .mapping_panel import MappingPanel
     from .diagnostics import DiagnosticPanel
+    from .underwater import UnderwaterPanel
 except ImportError:
     from map_canvas import MapCanvas
     from transport import SocketWorker
     from task_state import PHASES, TASK_NAMES, blocker_text
     from mapping_panel import MappingPanel
     from diagnostics import DiagnosticPanel
+    from underwater import UnderwaterPanel
 
 
 class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
-    def __init__(self, url, *, mock=False):
+    def __init__(self, url, *, mock=False, under_url=None):
         super().__init__()
-        self.setWindowTitle("F1 水面机器人控制台")
+        self.under_url, self.under_mock = under_url, mock
+        self.under_panel = None
+        self.setWindowTitle("水面 / 水下机器人控制台" if under_url else "F1 水面机器人控制台")
         self.resize(1500, 920)
         self.setFocusPolicy(Qt.StrongFocus)
         self.worker = SocketWorker(url, mock=mock, parent=self)
@@ -101,12 +105,12 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         root = QWidget(); self.setCentralWidget(root)
         layout = QVBoxLayout(root); layout.setContentsMargins(18, 14, 18, 14)
         top = QHBoxLayout()
-        title = QLabel("F1  水面机器人控制台"); title.setObjectName("title")
+        title = QLabel("水面 / 水下机器人控制台" if self.under_url else "F1  水面机器人控制台"); title.setObjectName("title")
         top.addWidget(title); top.addSpacing(20)
         self.connection = QLabel("连接中…"); self.connection.setObjectName("muted"); top.addWidget(self.connection)
         top.addStretch()
-        self.stop_button = QPushButton("■  停止手动输出"); self.stop_button.setObjectName("stop")
-        self.stop_button.clicked.connect(lambda: self._stop("button")); top.addWidget(self.stop_button)
+        self.stop_button = QPushButton("■  两台手动停止（空格）" if self.under_url else "■  停止手动输出"); self.stop_button.setObjectName("stop")
+        self.stop_button.clicked.connect(lambda: self._stop_all_manual("button")); top.addWidget(self.stop_button)
         layout.addLayout(top)
         body = QHBoxLayout(); body.setSpacing(14); layout.addLayout(body, 1)
         map_card = QFrame(); map_card.setObjectName("card"); map_layout = QVBoxLayout(map_card)
@@ -122,7 +126,10 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.canvas.map_changed.connect(self._map_changed)
         side = QFrame(); side.setObjectName("card"); side_layout = QVBoxLayout(side); body.addWidget(side, 1)
         tabs = QTabWidget(); side_layout.addWidget(tabs)
-        manual = QWidget(); tabs.addTab(manual, "手动控制"); self._build_manual(manual)
+        manual_content = QWidget(); self._build_manual(manual_content)
+        manual = QScrollArea(); manual.setWidgetResizable(True); manual.setFrameShape(QFrame.NoFrame)
+        manual.setFocusPolicy(Qt.NoFocus); manual.viewport().setFocusPolicy(Qt.NoFocus)
+        manual.setWidget(manual_content); tabs.addTab(manual, "手动控制")
         task_content = QWidget(); self._build_task(task_content)
         task = QScrollArea(); task.setWidgetResizable(True); task.setFrameShape(QFrame.NoFrame)
         task.setWidget(task_content); tabs.addTab(task, "清洗任务")
@@ -130,11 +137,16 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         mapping = QScrollArea(); mapping.setWidgetResizable(True); mapping.setFrameShape(QFrame.NoFrame)
         mapping.setWidget(mapping_content); tabs.addTab(mapping, "建图与选图")
         self._build_diagnostics(tabs)
+        if self.under_url:
+            self.under_panel = UnderwaterPanel(self.under_url, mock=self.under_mock,
+                                              log=self._log, parent=self)
+            body.addWidget(self.under_panel, 1)
         camera = QFrame(); camera.setObjectName("card"); camera_layout = QVBoxLayout(camera); camera_layout.addWidget(QLabel("前向摄像头")); camera_label = QLabel("摄像头画面预留\n接入 WebRTC 后显示"); camera_label.setAlignment(Qt.AlignCenter); camera_label.setMinimumHeight(125); camera_label.setStyleSheet("background:#172a39;color:#a9bdc9;border-radius:8px;"); camera_layout.addWidget(camera_label); side_layout.addWidget(camera)
         self.status_bar = QLabel("等待网关状态"); self.status_bar.setObjectName("muted"); layout.addWidget(self.status_bar)
 
     def _build_manual(self, parent):
         box = QVBoxLayout(parent); box.setContentsMargins(4, 8, 4, 8)
+        box.addWidget(QLabel("水面机器人 · W / A / S / D"))
         self.mode_label = QLabel("手动控制 · 网关自动管理会话"); self.mode_label.setWordWrap(True); box.addWidget(self.mode_label)
         self.speed_label = QLabel("主驱动档位（旧网关）")
         box.addWidget(self.speed_label)
@@ -176,6 +188,11 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.drive_feedback.setWordWrap(True)
         self.drive_feedback.setToolTip("显示请求与下位机接受的输出目标，不是电机实测转速、推力或船速")
         box.addWidget(self.drive_feedback)
+        if self.under_url:
+            surface_stop = QPushButton("■  水面手动停止")
+            surface_stop.setFocusPolicy(Qt.NoFocus)
+            surface_stop.clicked.connect(lambda: self._stop("surface_button"))
+            box.addWidget(surface_stop)
         box.addStretch()
         box.addWidget(QLabel("辅助执行器输出（-100% 到 100%）"))
         brush_row = QHBoxLayout()
@@ -665,6 +682,11 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self._clear_manual()
         self.worker.send_packet(self._packet("manual_stop", reason=reason))
 
+    def _stop_all_manual(self, reason):
+        self._stop(reason)
+        if self.under_panel is not None:
+            self.under_panel.stop(reason)
+
     def _task(self, action):
         if not self.task_buttons[action].isEnabled():
             return
@@ -776,15 +798,18 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.TouchCancel and hasattr(self, "brush_button"):
-            self._stop("touch_cancelled")
+            self._stop_all_manual("touch_cancelled")
         if event.type() == QEvent.FocusIn and isinstance(obj, (QLineEdit, QAbstractSpinBox)) and hasattr(self, "brush_button"):
-            self._stop("text_input")
+            self._stop_all_manual("text_input")
         if event.type() == QEvent.WindowDeactivate and obj is self:
-            self._stop("window_deactivated")
+            self._stop_all_manual("window_deactivated")
         if self.isActiveWindow() and event.type() in (QEvent.KeyPress, QEvent.KeyRelease):
             if isinstance(QApplication.focusWidget(), (QLineEdit, QAbstractSpinBox)):
                 return super().eventFilter(obj, event)
             key = event.key()
+            if self.under_panel is not None and self.under_panel.key(
+                    key, event.type() == QEvent.KeyPress, event.isAutoRepeat()):
+                return True
             if key in self._key_directions:
                 # Queued auto-repeat events must not revive an expired hold.
                 if event.isAutoRepeat():
@@ -798,7 +823,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
                 self._refresh_key_direction()
                 return True
             if event.type() == QEvent.KeyPress and key == Qt.Key_Space and not event.isAutoRepeat():
-                self._stop("keyboard")
+                self._stop_all_manual("keyboard")
                 return True
         return super().eventFilter(obj, event)
     def _message(self, packet):
@@ -942,4 +967,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
 
     def closeEvent(self, event):
         QApplication.instance().removeEventFilter(self)
-        self._stop("window_closed"); self.worker.close(); self.worker.wait(1000); event.accept()
+        self._stop("window_closed")
+        if self.under_panel is not None:
+            self.under_panel.shutdown()
+        self.worker.close(); self.worker.wait(1000); event.accept()

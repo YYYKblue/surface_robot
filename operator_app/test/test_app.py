@@ -24,6 +24,15 @@ def app():
     yield instance
 
 
+def wait_until(predicate, timeout=3.):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if predicate():
+            return
+        QTest.qWait(20)
+    assert predicate(), "UI state did not arrive before deadline"
+
+
 def mapping(yaw=0.):
     return dict(type="map", map=dict(resolution=.1, width=40, height=20, revision=1,
         origin=dict(x=-2., y=3., yaw=yaw), frame_id="map", data=[0]*800))
@@ -81,11 +90,11 @@ def test_mock_workflow_localization_start_completion_and_stale_gate(app, kind, e
     window = OperatorWindow("unused", mock=True)
     window.show()
     try:
-        QTest.qWait(250)
+        wait_until(lambda: bool(window.telemetry) and window.forward_boost_button.isEnabled())
         window.task_combo.setCurrentIndex(window.task_combo.findData(kind))
         assert window.forward_boost_button.isEnabled()
         window.forward_boost_button.click()
-        QTest.qWait(250)
+        wait_until(lambda: window.forward_boost_button.isChecked() and not window.pending_requests)
         assert window.forward_boost_button.isChecked()
         assert not window.task_buttons["start"].isEnabled()
         window.pose_button.setChecked(True)
@@ -93,13 +102,13 @@ def test_mock_workflow_localization_start_completion_and_stale_gate(app, kind, e
         assert window.publish_pose_button.isEnabled()
         window._publish_pose()
         assert not window.task_buttons["start"].isEnabled()
-        QTest.qWait(1400)
+        wait_until(lambda: window.task_buttons["start"].isEnabled(), timeout=4.)
         assert window.task_buttons["start"].isEnabled()
         window._task("start")
         assert not window.forward_boost_button.isEnabled()
         assert not window.task_buttons["start"].isEnabled()
         assert not window.drive_buttons["FORWARD"].isEnabled()
-        QTest.qWait(8500)
+        wait_until(lambda: "任务完成" in window.task_status.text(), timeout=12.)
         assert "任务完成" in window.task_status.text()
         assert "完成时间" in window.result_label.text()
         assert len(window.seen_completions) == 1

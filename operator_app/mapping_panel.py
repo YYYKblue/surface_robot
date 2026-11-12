@@ -81,7 +81,7 @@ class MappingPanel:
         if action == "delete":
             entry = self.saved_maps.currentData() or {}
             fields["snapshot_id"] = entry.get("snapshot_id", "")
-            self._stop("confirm_delete_map")
+            self._stop_all_manual("confirm_delete_map")
             answer = QMessageBox.question(self, "删除所选地图",
                 "确认删除“" + fields["name"] + ("”的待导出快照？" if fields["snapshot_id"] else "”及其地图文件？"),
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
@@ -89,7 +89,7 @@ class MappingPanel:
                 return
             fields["confirm"] = True
         if action == "discard":
-            self._stop("confirm_discard_mapping")
+            self._stop_all_manual("confirm_discard_mapping")
             answer = QMessageBox.question(self, "放弃本次建图", "退出当前建图并放弃尚未保存的内容？此前保存的地图会保留。",
                                           QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if answer != QMessageBox.Yes:

@@ -2,11 +2,11 @@
 
 人工暂停续跑、取消及地图删除／卸载的接口和使用边界见[功能说明](TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
 
-核对日期：2026-11-09，源码基线 `9db6798`。本文依据当前源码、launch、YAML 与测试整理。操作入口见[根 README](../README.md)，目标机安装见[部署指南](../DEPLOY_NANO.md)。历史验证记录只说明当时的测试结果，不能用来证明当前实船状态。
+核对日期：2026-11-12；`9db6798` 为历史配置修复基线，不代表本次双机代码版本。本文依据当前源码、launch、YAML 与测试整理。操作入口见[根 README](../README.md)，目标机安装见[部署指南](../DEPLOY_NANO.md)。历史验证记录只说明当时的测试结果，不能用来证明当前实船状态。
 
 ## 1. 项目组成与依赖
 
-项目是 ROS 2 Humble 水面清洗机器人系统：Nano 执行传感器接入、建图定位、任务控制和串口通信；Windows Qt App 通过 WebSocket 操作 Nano，不需要 ROS。底层 F103 固件不在本仓库，`maps/` 也不纳入 Git。
+项目包含 ROS 2 Humble 水面清洗系统与独立 H7 水下手动控制：同一 Nano 执行两条控制链，Windows Qt App 通过两个 WebSocket 连接同时操作两台，不需要 ROS。底层固件本地位于 `under/F103firmware`、`under/H7firmware`；`under/` 与 `maps/` 不纳入 Git，克隆后需另行准备。
 
 | 包或目录 | 主要代码 | 职责 |
 |---|---|---|
@@ -19,6 +19,8 @@
 | `f1_interfaces` | `msg/`、`srv/` | 公共消息与服务定义；修改后需要重建使用方 |
 | `f1_operator_gateway` | [node.py](../src/f1_operator_gateway/operator_gateway/node.py)、`task_control.py`、`runtime.py`、`map_store.py`、`tracks.py`、`diagnostics.py` | 手动会话、任务操作、受管进程、地图保存、轨迹遥测与诊断历史 |
 | `operator_app` | [window.py](../operator_app/window.py)、`transport.py`、`map_canvas.py`、`mapping_panel.py`、`diagnostics.py` | Qt 界面、WebSocket、地图交互、建图选图与诊断日志；不持有硬件 token |
+| `operator_app/underwater.py` | [underwater.py](../operator_app/underwater.py) | 独立水下连接、箭头面板、控制代次和新鲜度门控 |
+| `under_control` | [server.py](../under_control/server.py)、`session.py`、`serial_worker.py`、`protocol.py` | H7 网络网关、会话与串口请求/回包；独立 Python 服务，不是 ROS 包 |
 
 `f1_localization` 依赖接口和建图配置包，建图配置包再依赖雷达驱动。因此 `--packages-up-to f1_localization` 当前构建四个仓库包；`--packages-up-to f1_operator_gateway` 构建全部八包。构建依赖并不意味着 launch 会启动所有依赖节点：雷达始终独立运行。
 
@@ -34,7 +36,9 @@ flowchart LR
     P -->|WallObservation| C
     C -->|EdgeTarget| P
     N --> C
-    APP[Qt App] <-->|WebSocket| G[操作员网关]
+    APP[Qt App] <-->|WebSocket 8765| G[水面操作员网关]
+    APP <-->|WebSocket 8766| U[under_control]
+    U <-->|USB 转 RS485| H7[水下 H7 V6]
     G -->|任务服务| C
     G -->|初始位姿服务| LOC
     G -->|手动租约与命令| B[串口桥]
@@ -43,6 +47,10 @@ flowchart LR
 ```
 
 图中的网关任务服务调用与初始位姿调用分别进入控制器和定位管理器。IMU 由桥发布，但当前建图和固定地图定位均不融合 IMU 或轮速。TF 链为 `map → odom → base_link → pavo2s_frame`；雷达静态安装参数来自 `f1_mapping_bringup/config/lidar_planar.yaml`。建图 Lua 的跟踪帧为 `pavo2s_frame`，纯定位 Lua 的跟踪帧为 `base_link`，对外船体位姿都使用 `map → base_link`。
+
+水下仅需要前后与转向手动控制，网关和串口桥合并在 `under_control` 进程中，无须接入 ROS 话题、地图或任务租约。`server.py` 处理 `under-operator-v1`，`session.py` 负责控制权、代次和停止握手，`serial_worker.py` 独立检查输入期限并串行完成半双工请求/回包，`protocol.py` 对接 H7 V6。App 两个 worker 独立运行；水面自动任务锁、某一连接断线或过期仅影响对应设备。全局手动停止、窗口失焦和进入文本/数值编辑会清除两台手动意图，不能取消自动任务或覆盖 H7 遥控优先权。
+
+水下 GUI 意图、服务输入与串口反馈新鲜度分别受 250 ms 门限约束，串口完整回包超时 150 ms；H7 自身看门狗为 300 ms。水面 App 的 800 ms 遥测门控不能套用于水下。各局部期限不等于任意端到端故障的统一停车时限，详细协议及验收边界见[水下服务说明](../under_control/README.md)。
 
 2026-11-11 起桥接使用 F103 v3，主电机输出为整数 0–100，固件按方向和电机组混控，CH06=`1050+9*p`、PWM 偏移=`4*p` μs。网关/Windows 通过 `continuous_drive_percent_v1` 与动态 `drive_output.available` 表示连续输出能力；实际使能还需新鲜且兼容的 CTRL、ACK、中性握手和租约。版本不匹配进入 `INCOMPATIBLE`，恢复后重新申请，旧动作不会恢复。RC v2 原始14通道独立进入诊断，不作为 Nano 控制输入；CTRL 保留目标 PWM 与接受 ACK 的语义。新 25% 输出比旧 25 档的 PWM 偏移小，自主动作首批固定新25%，尚未拆分各动作参数或加入变力度控制。
 
@@ -58,6 +66,9 @@ flowchart LR
 | `f1_operator_gateway operator_gateway.launch.py` | 仅网关 | 复用已运行的 ROS 节点 |
 | `f1_operator_gateway operator_bringup.launch.py` | 共享定位、bridge、可用任务及网关 | 指定已有地图，任务能力按几何校验决定 |
 | `f1_operator_gateway operator_system.launch.py` | 常驻 bridge/网关，按 App 操作启动模式子进程 | 指定绝对 `workspace_root:=`，可无地图待机 |
+| `under-control.service` / `python3 -m under_control` | 独立水下网关及 H7 串口线程 | 配置独立 RS485 设备；设备可缺席，不依赖 ROS launch |
+
+`under-control.service` 与 `f1-operator.service`、雷达服务独立。H7 缺席时服务仍监听 8766，每秒检查设备且仅在状态变化时记录日志；插入后发现并停止握手，拔插撤销旧操作。进程异常退出才由 systemd 按 `Restart=on-failure` 恢复（2 秒间隔，60 秒内最多启动 5 次）；设备缺席由进程内部等待，不依靠反复重启。安装配置与回退见[部署指南](../DEPLOY_NANO.md#水下-h7独立服务与可选设备自启动)。
 
 清洗包的 `pool_cleaning.launch.py` / `l_cleaning.launch.py` 仅启动感知与控制器，默认配置仍需 `map:=`，并复用外部定位和 bridge。单独矩形定位前缀为 `/pool_cleaning`，单独 L 为 `/l_cleaning`，网关组合与受管入口为 `/f1_localization`。
 
@@ -111,7 +122,7 @@ Windows App 仅绘制底图、实时船体位姿和实际任务轨迹。网关�
 
 ## 7. 验证和维护入口
 
-ROS 包通过 `CMakeLists.txt` 注册 pytest/GoogleTest，使用 `colcon test` 执行；Qt 测试单独运行。仓库现有测试包含纯逻辑、模拟 ROS 服务、localhost DDS、WebSocket 以及合成扫描的 Cartographer 集成。固件测试默认读取 `under/F103firmware`，可用 `F1_FIRMWARE_DIR` 指定同版本源码，见[部署测试说明](../DEPLOY_NANO.md#7-nano离线测试)。
+ROS 包通过 `CMakeLists.txt` 注册 pytest/GoogleTest，使用 `colcon test` 执行；Qt 与 `under_control` 测试分别运行，不由 colcon 收集。仓库现有测试包含纯逻辑、模拟 ROS 服务、localhost DDS、WebSocket 以及合成扫描的 Cartographer 集成。水面固件测试默认读取 `under/F103firmware`，可用 `F1_FIRMWARE_DIR` 指定同版本源码，见[部署测试说明](../DEPLOY_NANO.md#7-nano离线测试)。水下测试包含 H7 C 源码离线联测和 PTY 模拟拔插，依赖本地 `under/H7firmware` 与 gcc；测试命令、跳过条件及分阶段结果见[水下验证](../under_control/README.md#验证)。
 
 以下为可按需执行的几何与任务逻辑检查命令；本次文档更新未重新运行它们：
 

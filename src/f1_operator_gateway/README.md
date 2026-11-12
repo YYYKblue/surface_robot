@@ -2,7 +2,9 @@
 
 人工暂停续跑、取消及地图删除／卸载的接口和使用边界见[功能说明](../../docs/TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
 
-更新：2026-11-11。Windows Qt App 的 Nano 侧 WebSocket 入口，提供手动控制、双任务操作、初始位姿、状态转发，以及受管建图、地图保存与选择。模块职责与入口对比见[架构导读](../../docs/ARCHITECTURE.md)。
+更新：2026-11-12。Windows Qt App 的水面 Nano 侧 WebSocket 入口（默认 `:8765`），提供手动控制、双任务操作、初始位姿、状态转发，以及受管建图、地图保存与选择。模块职责与入口对比见[架构导读](../../docs/ARCHITECTURE.md)。
+
+同一 App 的水下箭头控制另连 [`under_control`](../../under_control/README.md)（默认 `:8766`），该服务自行管理 H7 会话及 USB 转 RS485，不经过本 ROS 网关或 `f1_nano_bridge`。本页的租约、地图、任务锁与 `manual_stop` 均属于水面链路；顶部“两台手动停止”由 App 分别向两个服务发送停止，不取消自动任务。水下服务由独立 `under-control.service` 托管，水面 launch 不会启动它。
 
 ## 构建
 

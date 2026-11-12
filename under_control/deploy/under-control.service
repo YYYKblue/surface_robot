@@ -1,0 +1,23 @@
+[Unit]
+Description=H7 underwater manual control (independent of ROS)
+After=network.target
+# H7 is optional at boot. Do not add a device Requires/BindsTo or ConditionPathExists.
+# The running process waits for the adapter and reconnects without replaying motion.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=nvidia
+SupplementaryGroups=dialout
+WorkingDirectory=/home/nvidia/surface_ws
+EnvironmentFile=/etc/under-control.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash /home/nvidia/surface_ws/under_control/deploy/start-under-control.sh
+Restart=on-failure
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

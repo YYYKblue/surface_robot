@@ -1,8 +1,10 @@
 # surface_ws：水面清洗机器人 ROS 2 工作空间
 
+2026-11-12：Windows App 新增水下 H7 的独立箭头控制，可与水面 W/A/S/D 同时操作。Nano 水下服务使用 `:8766`、USB 转 RS485，不依赖 ROS；水面链路保持 `:8765`。部署、协议和双机操作见 [under_control](under_control/README.md)。
+
 人工暂停续跑、取消及地图删除／卸载的接口和使用边界见[功能说明](docs/TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
 
-更新：2026-11-11，依据当前源码、启动文件和默认配置整理。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
+更新：2026-11-12，依据当前源码、启动文件和默认配置整理。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
 
 F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主电机输出支持整数 0–100，Windows App 提供滑条、数值输入和快捷值，反馈区分设定值、固件报告值与目标 PWM；RC 原始通道独立用于诊断。旧固件协议会明确阻止控制。新标度 25% 为 PWM 偏移 100 μs，旧 25 档为 125 μs；自主清洗首批仍固定使用新 25%，动作状态机未变，需重新进行实船标定。接口包、桥接、网关、依赖节点和 Windows App 应一起升级，见[协议与迁移](src/f1_nano_bridge/README.md#f103-v3-连续输出2026-11-11)。
 
@@ -21,12 +23,13 @@ F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主�
 | [`f1_localization`](src/f1_localization/README.md) | 固定地图定位、初始位姿、轨迹管理和定位就绪门控 |
 | [`f1_pool_cleaning`](src/f1_pool_cleaning/README.md) | 墙感知、简单动作靠近、沿墙控制、矩形四边任务及覆盖记录 |
 | [`f1_l_cleaning`](src/f1_l_cleaning/README.md) | 开放多段直墙路线，复用右转并支持前行出墙端、左移、左转 |
-| [`f1_operator_gateway`](src/f1_operator_gateway/README.md) | App 的 WebSocket 手动控制、任务服务和遥测入口 |
+| [`f1_operator_gateway`](src/f1_operator_gateway/README.md) | 水面 App 的 WebSocket 手动控制、任务服务和遥测入口（8765） |
+| [`under_control/`](under_control/README.md) | 独立水下 H7 网关、会话与 RS485 桥（8766），由 systemd 托管，不依赖 ROS |
 | [`operator_app/`](operator_app/README.md) | Qt 操作员界面，包含建图/选图、底图、实时位姿、实际轨迹、手动输入和任务按钮 |
 | `maps/` | 地图三件套直接存放于此；被 Git 忽略，克隆仓库不包含，当前部署同步命令会传输 |
 | `docs/`、`tools/` | 开发验收、历史试验记录和离线路线示意工具 |
 
-仓库共有八个 ROS 功能包。PAVO2 驱动与 SDK 已迁入 `f1_lidar_driver`；本地 F103 固件源码位于 `under/F103firmware`。`under/` 和地图目录被 Git 忽略，重新克隆后需另行准备；本页测试使用当前 PC 本地固件副本。Nano 日常部署仅同步 `src/`、文档和工具，不需要 Windows App 或固件工程，命令见 [Nano 部署指南](DEPLOY_NANO.md#3-pc把源码和文档传到-nano)。Nano 编译与旧雷达服务迁移流程见[驱动说明](src/f1_lidar_driver/README.md)。旧 ZMQ 网关和旧 UI 协议已移除。
+仓库共有八个 ROS 功能包，另有独立的 `under_control/` Python 服务。PAVO2 驱动与 SDK 已迁入 `f1_lidar_driver`；本地固件源码位于 `under/F103firmware` 与 `under/H7firmware`。`under/` 和地图目录被 Git 忽略，重新克隆后需另行准备；本页测试使用当前 PC 本地固件副本。Nano 双机部署同步 `src/`、`under_control/`、文档和工具，不需要 Windows App 或固件工程，命令见 [Nano 部署指南](DEPLOY_NANO.md#3-pc把源码和文档传到-nano)。Nano 编译与旧雷达服务迁移流程见[驱动说明](src/f1_lidar_driver/README.md)。旧 ZMQ 网关和旧 UI 协议已移除。
 
 ## 数据与控制链路
 
@@ -39,7 +42,10 @@ PAVO2 驱动 → /pavo2_scan → Cartographer → /map、map → base_link TF
                             │ /f1/* 租约与执行器命令
                             ▼
 Qt App ←→ WebSocket :8765 ←→ 网关 → f1_nano_bridge ←→ F103
+   └───←→ WebSocket :8766 ←→ under_control ←→ USB-RS485 ←→ H7
 ```
+
+同一 App 可同时操作水面 W/A/S/D 与水下箭头；两条连接和控制状态独立。水下 ←/→ 为左转/右转；顶部“两台手动停止”仅撤销两台手动输出，不取消水面自动任务。H7 不接入时 `under-control.service` 常驻等待，接入后自动发现并停止握手，重连不恢复旧运动。2026-11-12 已在 Nano 启用新服务并禁用旧 H7 桥，当时 H7 缺席，实机动作尚未验收，见[部署记录](docs/UNDER_CONTROL_NANO_DEPLOYMENT.md)。
 
 建图使用纯雷达，不融合桥发布的 IMU。清洗使用已有 `.pbstream` 冻结地图，操作者先在 Windows App 地图中发布初始位姿，或在 RViz 的 `map` 坐标系设置 `2D Pose Estimate`，定位达到 `LOCALIZATION_READY` 后才可开始任务。建图与固定地图定位应择一运行，避免重复发布地图和 TF。
 
@@ -72,7 +78,7 @@ App 的[诊断日志](operator_app/README.md#诊断日志)保留最近 2000 条�
 
 ## 构建
 
-在工作空间根目录执行；Nano 的依赖安装和源码同步见[完整部署指南](DEPLOY_NANO.md)。
+以下仅构建 ROS 包，在工作空间根目录执行；Nano 的依赖安装和源码同步见[完整部署指南](DEPLOY_NANO.md)。`under_control` 不由 colcon 构建或测试，使用独立的 Python 依赖与 systemd 启动流程，见[水下服务说明](under_control/README.md)。
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -86,7 +92,7 @@ colcon list --names-only
 
 ## 启动入口
 
-Nano 每个运行终端先加载同一环境：
+Nano 执行以下 ROS 命令的终端先加载同一环境；水下独立服务无需加载 ROS：
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -172,6 +178,8 @@ colcon test-result --verbose
 |---|---|
 | 代码职责、入口选择、参数与状态流 | [项目架构与代码导读](docs/ARCHITECTURE.md) |
 | Nano 首次部署、依赖和故障处理 | [DEPLOY_NANO.md](DEPLOY_NANO.md) |
+| 水下 H7 协议、双机按键、可缺席自启动 | [under_control README](under_control/README.md) |
+| 水下 Nano 部署状态、验证边界与旧桥回退 | [2026-11-12 部署记录](docs/UNDER_CONTROL_NANO_DEPLOYMENT.md) |
 | 日常建图、扫描检查、保存地图 | [START_LIDAR.md](START_LIDAR.md) |
 | 矩形清洗部署与实船验收 | [DEPLOY_TEST_NANO.md](src/f1_pool_cleaning/DEPLOY_TEST_NANO.md) |
 | 大 L 路线、参数与操作 | [f1_l_cleaning README](src/f1_l_cleaning/README.md) |

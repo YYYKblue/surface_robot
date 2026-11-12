@@ -117,7 +117,7 @@ class DiagnosticPanel:
     def _export_diagnostics(self):
         # Native save dialogs may block GUI timers. Revoke held output before
         # entering the dialog; the independent sender can deliver this stop.
-        self._stop("diagnostics_export")
+        self._stop_all_manual("diagnostics_export")
         filename, _ = QFileDialog.getSaveFileName(
             self, "导出诊断日志", datetime.now().strftime("F1-diagnostics-%Y%m%d-%H%M%S.txt"),
             "文本日志 (*.txt)")

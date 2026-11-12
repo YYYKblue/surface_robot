@@ -1,6 +1,6 @@
 # Nano 从零部署 surface_ws
 
-更新：2026-11-11。适用于 Nano 首次部署或已有 `surface_ws` 升级。当前包含 PAVO2 驱动、建图与定位、硬件桥、两种清洗任务及 Qt App 网关。PC 与 Nano 分别构建；下面每节标明执行设备。2026-11-09 控制器配置加载修复已部署到 Nano 并验证，见[故障排查](#定位正常但开放任务不能启动)。这项修复不涉及雷达驱动迁移；雷达旧服务迁移见第 8 节，旧清洗包升级见[清洗包迁移说明](src/f1_pool_cleaning/MIGRATION.md)。
+更新：2026-11-12。适用于 Nano 首次部署或已有 `surface_ws` 升级。包含水面 ROS 系统及独立水下 H7 服务。仅部署水下控制时直接阅读[水下服务章节](#水下-h7独立服务与可选设备自启动)，无需构建 ROS。PC 与 Nano 分别构建；下面每节标明执行设备。2026-11-09 控制器配置加载修复已部署到 Nano 并验证，见[故障排查](#定位正常但开放任务不能启动)。这项修复不涉及雷达驱动迁移；雷达旧服务迁移见第 8 节，旧清洗包升级见[清洗包迁移说明](src/f1_pool_cleaning/MIGRATION.md)。
 
 | 项目 | 统一约定 |
 | --- | --- |
@@ -14,8 +14,65 @@
 | 沿边清洗功能包 | `f1_pool_cleaning` |
 | 大 L 清洗功能包 | `f1_l_cleaning` |
 | 操作员网关 | `f1_operator_gateway` |
+| 水下独立服务 | 根目录 `under_control/`，systemd unit 为 `under-control.service` |
 
 PC 和 Nano 分别编译，不传 PC 的生成目录。部署状态以各项验证记录为准，文档中的操作命令不表示全部步骤均已在目标设备执行。
+
+## 水下 H7：独立服务与可选设备自启动
+
+Windows App 同时连接水面 `ws://Nano地址:8765` 与水下 `ws://Nano地址:8766`。水下服务自行承担网关、会话和 USB 转 RS485 桥接，不依赖 ROS，不加入水面 launch，也无需 colcon。箭头控制、协议及软件测试见 [under_control README](under_control/README.md)。
+
+**2026-11-12 已部署到 `192.168.1.188`**：新服务 enabled/active，旧 `nano-h7-bridge.service` disabled/inactive，水面与雷达服务未重启。当时 H7 适配器缺席，仅验证了稳定待机和网络遥测，尚未实测 H7 握手、物理拔插、运动或整机重启自启动。完整现场快照、备份和回退见[部署记录](docs/UNDER_CONTROL_NANO_DEPLOYMENT.md)。
+
+### 首次安装到另一台 Nano
+
+先在 PC 同步服务；工作目录固定为 `/home/nvidia/surface_ws`，不同用户名或路径需同步修改 unit：
+
+```bash
+cd /home/bboss/new-nano/surface_ws
+ssh nvidia@192.168.1.188 'mkdir -p /home/nvidia/surface_ws'
+rsync -av --exclude='__pycache__/' --exclude='.pytest_cache/' --exclude='*.pyc' --exclude='test/' \
+  under_control nvidia@192.168.1.188:/home/nvidia/surface_ws/
+```
+
+以下在 Nano 以 `nvidia` 用户执行。依赖必须能被 unit 使用的 `/usr/bin/python3` 导入；无需安装 Qt 或传输固件源码。若缺少 pip，先 `sudo apt-get install python3-pip`。首次安装依赖使用：
+
+```bash
+cd /home/nvidia/surface_ws
+/usr/bin/python3 -m pip install --user -r under_control/requirements.txt
+/usr/bin/python3 -c 'import serial, websockets; print(serial.__version__, websockets.__version__)'
+if [ ! -e /etc/under-control.env ]; then
+  sudo install -m 0644 under_control/deploy/under-control.env.example /etc/under-control.env
+fi
+sudoedit /etc/under-control.env
+sudo install -m 0644 under_control/deploy/under-control.service /etc/systemd/system/under-control.service
+```
+
+将 `UNDER_SERIAL_PORT` 改为实际 H7 适配器的 `/dev/serial/by-id/...`，不能使用水面 F103 的端口，也不要自动选取任意 ttyUSB/ttyACM。模板的运动许可为 `false`；只会发现和停止握手，核验板端反馈后再改为 `true` 并重启服务。只要配置了串口，停止握手就会写串口，不是被动监听。现有 `192.168.1.188` 的现场配置已为 `true`，设备仍须就绪且收到新的人工输入才会运动；升级时保留现场 env，不用模板覆盖。
+
+核对已有服务和端口占用后释放同一 H7 串口。如果确认旧服务确实是被替换的独立 H7 桥，先 `sudo systemctl disable --now nano-h7-bridge.service`；不停止水面 `f1-operator.service` 或雷达服务。然后执行：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now under-control.service
+systemctl is-enabled under-control.service
+systemctl status under-control.service --no-pager
+journalctl -u under-control.service -n 80 --no-pager
+```
+
+### 缺席、接入与故障处理
+
+- H7 可不随 Nano 开机连接。服务保持运行并监听 8766；缺席时每秒检查路径，日志仅在状态变化时记录。App 水下区显示 OFFLINE/不可控制，水面链路独立运行。
+- 插入设备后自动发现并完成停止握手；掉线清除旧输入，重连后必须重新按方向。USB 适配器仍在但 H7 未上电、接线异常或无有效回包时，也不能控制。
+- 不给 unit 增加设备 `Requires`、`BindsTo` 或 `ConditionPathExists`。设备等待由程序处理；进程异常才由 systemd 每隔 2 秒尝试恢复，60 秒内最多启动 5 次。
+- `active` 仅表示进程在运行，不代表 H7 已就绪。结合日志与 App 的串口连接、协议、控制源、armed、停止确认和新鲜反馈核验。设备仍缺席时不能验收运动。
+- 同一适配器再次插入无需重启服务。更换适配器后核对身份，修改 `/etc/under-control.env` 并 `sudo systemctl restart under-control.service`。因配置错误达到启动限额时，修正后执行 `sudo systemctl reset-failed under-control.service`，再 start。
+
+### 升级与回退
+
+水下停机后先停止 `under-control.service`，备份现有 `under_control/`、unit 和 `/etc/under-control.env`，再同步服务源码；更新 unit 后 daemon-reload 并启动。无需重建 ROS，修改 App 则需另行分发 Windows 包。使用本页第 3 节整套同步时，也应先停止正在更新的水下服务，避免其重启时加载不完整的文件。
+
+回退旧桥时先 `sudo systemctl disable --now under-control.service`，确认串口释放，再 `sudo systemctl enable --now nano-h7-bridge.service`。旧桥依赖原程序与配置，不能删除备份或同时启动两个桥。实际备份位置见[部署记录](docs/UNDER_CONTROL_NANO_DEPLOYMENT.md)。
 
 ## 2026-11-11 F103 v3 升级
 
@@ -84,11 +141,11 @@ ssh nvidia@192.168.1.188 'mkdir -p /home/nvidia/surface_ws/src'
 
 rsync -av --progress \
   --exclude='__pycache__/' --exclude='.pytest_cache/' --exclude='*.pyc' \
-  src docs tools README.md DEPLOY_NANO.md \
+  src under_control docs tools README.md DEPLOY_NANO.md \
   nvidia@192.168.1.188:/home/nvidia/surface_ws/
 ```
 
-这里只同步 Nano 使用的 `src/`、文档和工具；不传 `under/` 下位机工程、`operator_app/` Windows App、历史备份、开发环境配置及 PC 的生成目录。`src/f1_operator_gateway/` 是 Nano 必需的网关，仍会同步。没有使用 `--delete`，远端独有文件保留，同名文件会更新。已误传的目录不会被此命令自动删除，见第 10 节。
+这里只同步 Nano 使用的 `src/`、`under_control/`、文档和工具；不传 `under/` 下位机工程、`operator_app/` Windows App、历史备份、开发环境配置及 PC 的生成目录。`src/f1_operator_gateway/` 是水面网关；`under_control/` 是独立水下服务，不由后面的 ROS 构建和测试覆盖。仅部署水面时可从同步列表省略 `under_control`。没有使用 `--delete`，远端独有文件保留，同名文件会更新；同步不会自动重启服务或更新 `/etc/under-control.env`。已误传的目录不会被此命令自动删除，见第 10 节。
 
 日常代码同步不覆盖 Nano 地图。首次部署或明确需要更新地图时，另行执行：
 
@@ -296,7 +353,7 @@ export ROSDISTRO_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/rosdistro/index-
 
 如果 `colcon build` 报 `Duplicate package names`，且两个路径分别位于 `backups/.../src/` 和 `src/`，原因是默认递归扫描把备份也识别成了源码。备份应放在工作空间外；尚需留在工作空间内时，至少在备份根目录添加 `COLCON_IGNORE`。日常构建仍使用第 5 节的 `--base-paths src`。
 
-以下一次性整理命令只在 **Nano** 执行：历史备份移到工作空间外，删除误传的 Windows 与下位机源码，保留 `src/`、地图和日志。执行前确认这两份工程在 PC 有原件，且 Nano 中没有独有修改。
+以下一次性整理命令只在 **Nano** 执行：历史备份移到工作空间外，删除误传的 Windows 与下位机源码，保留 `src/`、`under_control/`、地图和日志。`under/` 是固件源码，`under_control/` 是运行中的水下服务，不能混淆删除。执行前确认这两份工程在 PC 有原件，且 Nano 中没有独有修改。
 
 ```bash
 set -e
