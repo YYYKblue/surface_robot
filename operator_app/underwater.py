@@ -16,8 +16,10 @@ except ImportError:
 
 try:
     from .transport import SocketWorker
+    from .network_latency import LatencyLabel
 except ImportError:
     from transport import SocketWorker
+    from network_latency import LatencyLabel
 
 PROTOCOL = "under-operator-v1"
 DEVICE = "h7_under_original_v6"
@@ -101,6 +103,8 @@ class UnderwaterPanel(QFrame):
         title = QLabel("水下机器人 · 方向键"); title.setObjectName("title"); box.addWidget(title)
         self.connection = QLabel("连接中…"); self.connection.setWordWrap(True)
         self.connection.setToolTip(url); box.addWidget(self.connection)
+        self.network_latency = LatencyLabel(self.worker.latency, "", url)
+        box.addWidget(self.network_latency)
         self.gate = QLabel("等待水下服务"); self.gate.setWordWrap(True); box.addWidget(self.gate)
         box.addWidget(QLabel("行走输出幅度（0–100%）"))
         row = QHBoxLayout()
@@ -186,6 +190,7 @@ class UnderwaterPanel(QFrame):
         return ""
 
     def refresh(self):
+        self.network_latency.refresh()
         reason = self.block_reason()
         locked = bool(reason)
         if locked and (not self.locked or self.direction != "STOP"):

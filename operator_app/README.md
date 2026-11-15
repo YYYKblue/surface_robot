@@ -4,7 +4,15 @@
 
 水下使用 Nano 独立的 `under_control` 服务，不依赖 ROS。两台各自维护连接、百分比、控制权与超时；水面任务锁不锁定水下。空格和顶部按钮停止两台**手动输出**，不取消水面自动任务，也不覆盖 H7 遥控接管。详见[水下部署、协议与验证](../under_control/README.md)。旧 `dist/f103-v3` 包不包含此功能；本次新版为 [双机 Windows 分发包](dist/dual-control/F1Operator-dual-control-windows-x64.zip)。
 
-## 2026-11-12 双机控制构建与验证
+## 2026-11-15 网络 RTT 显示与验证
+
+本次新增水面／水下独立网络 RTT 和绿黄红提示，详见[延迟定义与阈值](#windows--nano-网络延迟)。此次功能无需部署 Nano；Windows exe 需使用重新构建的分发包。
+
+- Linux App、ROS 网关、水下服务联合回归 **367 项通过，无跳过**；最后的显示文字及集成测试断言调整后，相关 **17 项复核通过**。覆盖 Ping/Pong、超时恢复、迟到回复、重连、双连接独立显示，以及慢速完整消息期间手动发送和优先停止。
+- Windows Python 3.13.1 / PySide6 6.12.0：App **122 项通过，无跳过**，包含真实本机 WebSocket 网关集成；Qt 旧接口弃用提示不影响测试结果。
+- 测试只使用本机服务、mock 和编译后的 H7 源码模拟，不代表现场 Wi-Fi 或实际电机验收。
+
+## 2026-11-12 双机控制构建与验证（历史记录）
 
 - 初始双机版本 Linux 联合验证：`under_control/test` 34 项与 `operator_app/test` 110 项共 **144 项通过，无跳过**，其中包括 Qt ↑ 按键→本机 WebSocket→真实 pyserial PTY→编译后的 H7 C 源码的全链路，以及松键停车、水面离线时水下独立操作、串口回包丢失和恢复后不重放。后续增加 H7 缺席启动/模拟拔插处理，单独重跑水下服务为 **35 项通过**。
 - Windows：Python 3.13.1 / PySide6 6.12.0 下 App **110 项通过，无跳过**。旧 mock 用例的固定 250 ms 启动等待改为有截止时间的实际状态等待；没有放宽产品控制超时。
@@ -12,11 +20,11 @@
 - [ZIP](dist/dual-control/F1Operator-dual-control-windows-x64.zip) 约 45.3 MiB；[校验文件](dist/dual-control/SHA256SUMS.txt)。**完整解压 F1Operator 目录并保留 `_internal`，不要单独复制 exe。**
 - 构建验证时未连接电机或烧录，H7 与水面 F103 固件未修改。之后的 Nano 部署状态见[部署记录](../docs/UNDER_CONTROL_NANO_DEPLOYMENT.md)；部署时 H7 适配器缺席，实机运动尚未验收。包内 `BUILD_INFO.json` 的 `nano_deployed=false` 与 `APP_README.md` 是构建时快照，后续部署情况以部署记录为准。
 
-重新构建需先在 Windows 运行 `python -m pytest operator_app/test -q`，再从仓库根目录运行 `python operator_app/tools/build_windows.py --tests-passed 110`（数字使用该次实际通过数）。构建脚本只运行无硬件 mock；全部产物写入 Git 忽略的 `operator_app/dist/dual-control/`。
+重新构建需先在 Windows 的仓库根目录设置 `$env:PYTHONPATH = "$PWD\src\f1_operator_gateway"`（使真实网关集成测试可导入），运行 `python -m pytest operator_app/test -q`，再运行 `python operator_app/tools/build_windows.py --tests-passed 122`（数字使用该次实际通过数）。构建脚本只运行无硬件 mock；全部产物写入 Git 忽略的 `operator_app/dist/dual-control/`。
 
 人工暂停续跑、取消及地图删除／卸载的接口和使用边界见[功能说明](../docs/TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
 
-更新：2026-11-12。App 分别通过 WebSocket 连接 Nano 水面网关与水下服务，不需要安装 ROS，不管理水面控制 token。下文地图、定位、清洗任务、滚刷与第五电推独立控制均属于水面机器人；水下仅提供方向和百分比控制。
+更新：2026-11-15。App 分别通过 WebSocket 连接 Nano 水面网关与水下服务，不需要安装 ROS，不管理水面控制 token。下文地图、定位、清洗任务、滚刷与第五电推独立控制均属于水面机器人；水下仅提供方向和百分比控制。
 
 当前功能包括建图、地图命名保存、地图列表/预览/加载、手动控制、底图与实时船体位姿、开放多边／矩形任务选择、地图初始位姿发布、启动条件显示、任务完成结果、实际轨迹、任务停止/取消、船体中心距左墙显示及诊断日志导出。App 不再显示雷达点、预期轨迹、起始范围框或停车点；ROS 雷达和任务控制算法继续正常运行。
 
@@ -40,6 +48,23 @@ pyinstaller --noconsole --name F1Operator main.py
 ```
 
 分发整个 `dist/F1Operator/` 目录。`--onefile` 可生成单文件版本。
+
+## Windows ↔ Nano 网络延迟
+
+顶部显示水面连接的“网络 RTT”，水下控制区显示独立水下连接的“网络 RTT”，单位 ms。两者分别通过实际控制 WebSocket（默认 8765 / 8766）每 500 ms 发送一次标准 Ping，收到匹配 Pong 后，用 Windows 本机单调时钟计算往返时间，不需要 Nano 与 Windows 对时。它包含网络传输、套接字排队和两端调度，不是单程延迟、遥测年龄或 Nano 到 F103/H7 的串口延迟。[Ping/Pong RTT 机制](https://websockets.readthedocs.io/en/stable/topics/keepalive.html)。
+
+| 颜色 | RTT / 状态 | 显示含义 |
+|---|---|---|
+| 绿 | <100 ms | 健康，保留一定抖动余量 |
+| 黄 | 100–<250 ms | 可接受提示，但控制余量减少 |
+| 红 | ≥250 ms，或探测发出 250 ms 未收到匹配回复 | 超时提示 |
+| 红 | 未连接，或发送停顿使读数过期 | 不再显示旧延迟为当前值 |
+
+分界参考当前项目的 50 ms 手动指令周期、Nano 250 ms 输入看门狗和桥 250 ms 指令有效期。100 ms 是工程提示线；RTT 与看门狗检查的输入到达间隔不是同一指标，因此黄色不保证可持续控制，红色也不代表已经触发看门狗。不能用 App 的 800 ms 遥测过期门限作为可接受网络延迟上限。
+
+探测独立于 GUI 收包队列计时，控制消息和待发送停止先于探测发送，最多保留一个待匹配探测。超时后持续显示红色直到收到当前探测的有效回复；迟到旧回复不能覆盖新探测。重连清空读数；发送停止超过 750 ms 时读数也会过期。首个测量等待时为黄色，“模拟模式”为灰色且没有虚构数值。GUI 正常运行时，水面显示每 100 ms、水下每 50 ms 刷新；GUI 本身卡住期间不能保证屏幕及时更新。
+
+颜色只用于提示，不修改现有看门狗、遥测新鲜度、控制权或动作恢复规则。网关网络线程仍响应 Ping 时，ROS 状态可能已过期；应同时查看原有控制状态。此次 RTT 功能无需更新或重启 Nano，已有两个 `websockets` 服务自动回复 Ping；Windows 需更新整个 `operator_app`，使用 exe 时重新打包。
 
 ## 建图与选图
 

@@ -6,6 +6,8 @@
 
 同一 App 的水下箭头控制另连 [`under_control`](../../under_control/README.md)（默认 `:8766`），该服务自行管理 H7 会话及 USB 转 RS485，不经过本 ROS 网关或 `f1_nano_bridge`。本页的租约、地图、任务锁与 `manual_stop` 均属于水面链路；顶部“两台手动停止”由 App 分别向两个服务发送停止，不取消自动任务。水下服务由独立 `under-control.service` 托管，水面 launch 不会启动它。
 
+Windows App 的[网络 RTT 显示](../../operator_app/README.md#windows--nano-网络延迟)使用当前 WebSocket 的标准 Ping/Pong，由 `websockets` 自动响应，不进入 ROS 操作队列，不刷新手动输入看门狗或租约。无需为此升级或重启网关；显示的绿 <100 ms、黄 100–<250 ms、红 ≥250 ms 是 App 提示线，不是新增控制门控，也不表示 ROS/串口反馈就绪。
+
 ## 构建
 
 ```bash

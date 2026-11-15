@@ -21,6 +21,7 @@ try:
     from .mapping_panel import MappingPanel
     from .diagnostics import DiagnosticPanel
     from .underwater import UnderwaterPanel
+    from .network_latency import LatencyLabel
 except ImportError:
     from map_canvas import MapCanvas
     from transport import SocketWorker
@@ -28,6 +29,7 @@ except ImportError:
     from mapping_panel import MappingPanel
     from diagnostics import DiagnosticPanel
     from underwater import UnderwaterPanel
+    from network_latency import LatencyLabel
 
 
 class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
@@ -108,6 +110,8 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         title = QLabel("水面 / 水下机器人控制台" if self.under_url else "F1  水面机器人控制台"); title.setObjectName("title")
         top.addWidget(title); top.addSpacing(20)
         self.connection = QLabel("连接中…"); self.connection.setObjectName("muted"); top.addWidget(self.connection)
+        self.network_latency = LatencyLabel(self.worker.latency, "水面", self.worker.url)
+        top.addWidget(self.network_latency)
         top.addStretch()
         self.stop_button = QPushButton("■  两台手动停止（空格）" if self.under_url else "■  停止手动输出"); self.stop_button.setObjectName("stop")
         self.stop_button.clicked.connect(lambda: self._stop_all_manual("button")); top.addWidget(self.stop_button)
@@ -337,6 +341,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self._refresh_controls()
 
     def _refresh_controls(self, *args):
+        self.network_latency.refresh()
         if self._processing_incoming:
             return
         if not hasattr(self, "task_buttons"):

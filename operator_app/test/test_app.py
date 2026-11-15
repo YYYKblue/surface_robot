@@ -341,9 +341,11 @@ def test_reconnect_queries_state_without_replaying_old_commands(app, monkeypatch
             pass
         def send(self, value):
             self.sent.append(json.loads(value))
+        def ping(self, payload):
+            pass
         def close(self, **kwargs):
             pass
-        def recv(self):
+        def recv_data(self, control_frame=False):
             if len(connections) == 1:
                 worker.send_packet(dict(op='mapping', action='load', request_id='old', name='old-map'))
             else:

@@ -8,8 +8,10 @@ from collections import deque
 
 try:
     from .map_decoder import MapDecoder, prepare_map
+    from .network_latency import NetworkLatency
 except ImportError:
     from map_decoder import MapDecoder, prepare_map
+    from network_latency import NetworkLatency
 
 try:
     from PySide6.QtCore import QThread, Signal
@@ -28,6 +30,7 @@ class SocketWorker(QThread):
     def __init__(self, url, *, mock=False, parent=None):
         super().__init__(parent)
         self.url, self.mock = url, mock
+        self.latency = NetworkLatency(mock=mock)
         self.commands = deque()
         self.urgent_stop = None
         self.latest_manual = None
@@ -236,6 +239,7 @@ class SocketWorker(QThread):
             # A posted Qt wakeup stays armed until take_incoming consumes it.
 
     def _begin_connection(self, ws):
+        self.latency.connect()
         with self.queue_lock:
             self.connection_generation += 1
             self._connected = True
@@ -248,6 +252,7 @@ class SocketWorker(QThread):
             return self.connection_generation
 
     def _end_connection(self):
+        self.latency.disconnect()
         with self.queue_lock:
             self._connected = False
             self._active_socket = None
@@ -273,6 +278,7 @@ class SocketWorker(QThread):
                 pass
 
     def close(self):
+        self.latency.disconnect()
         self.stop_requested.set()
         self.send_wake.set()
         with self.queue_lock:
@@ -301,6 +307,12 @@ class SocketWorker(QThread):
                     self._send_now(ws, dict(op="manual_stop", reason="app_closed"))
                     return
                 self._flush(ws)
+                # Control/STOP gets the first write; a probe never cancels an
+                # intent, renews a lease, or occupies the command queue.
+                payload = self.latency.probe()
+                if payload is not None:
+                    self._flush_urgent_stop(ws)
+                    ws.ping(payload)
                 self.send_wake.wait(self._sender_wait())
         except Exception as error:
             errors.append(error)
@@ -326,12 +338,17 @@ class SocketWorker(QThread):
         try:
             while not self.stop_requested.is_set() and not done.is_set():
                 try:
-                    raw = ws.recv()
+                    opcode, raw = ws.recv_data(control_frame=True)
                 except websocket.WebSocketTimeoutException:
                     continue
-                if not raw:
-                    raise ConnectionError("网关已关闭连接")
                 received_at = time.monotonic()
+                if opcode == websocket.ABNF.OPCODE_PONG:
+                    self.latency.pong(raw, received_at)
+                    continue
+                if opcode == websocket.ABNF.OPCODE_PING:
+                    continue  # websocket-client has already sent the Pong.
+                if opcode == websocket.ABNF.OPCODE_CLOSE:
+                    raise ConnectionError("网关已关闭连接")
                 try:
                     packet = json.loads(raw)
                     parse_ms = round((time.monotonic() - received_at) * 1000, 2)
@@ -385,6 +402,7 @@ class SocketWorker(QThread):
                 self.status.emit("已连接")
                 self._run_connection(ws, websocket)
             except Exception as error:
+                self.latency.disconnect()
                 self._reset_incoming()
                 if not self.stop_requested.is_set():
                     self.status.emit("连接失败：" + str(error) + "；正在重连")

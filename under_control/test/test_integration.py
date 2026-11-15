@@ -257,6 +257,8 @@ def test_qt_arrow_to_websocket_to_real_h7_while_surface_disconnected(board):
         window = OperatorWindow("ws://127.0.0.1:1", under_url=f"ws://127.0.0.1:{port}")
         window.show()
         qt_wait(lambda: not window.under_panel.locked)
+        qt_wait(lambda: " ms" in window.under_panel.network_latency.text())
+        assert window.network_latency.property("latencyState") == "disconnected"
         QTest.keyPress(window, Qt.Key_Up)
         qt_wait(lambda: board["output"][0] > 0)
         assert window.direction == "STOP" and window.manual_locked

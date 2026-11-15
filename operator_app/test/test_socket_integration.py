@@ -58,9 +58,15 @@ def test_real_socket_compact_map_pose_tracks_and_burst_recovery():
                 send_telemetry()
             QTest.qWait(20)
             if (window.canvas.map_image is not None and window.last_telemetry_at
-                    and window.canvas.task_overlay.get("actual_track", {}).get("point_count") == 2):
+                    and window.canvas.task_overlay.get("actual_track", {}).get("point_count") == 2
+                    and window.worker.latency.snapshot()[1] is not None):
                 break
         assert window.canvas.map_image is not None, window.log_view.toPlainText()
+        # Host scheduling (especially Qt offscreen on Windows) is part of the
+        # measured RTT. Color boundaries are checked with an injected clock.
+        assert window.worker.latency.snapshot()[1] is not None
+        window.network_latency.refresh()
+        assert "ms" in window.network_latency.text()
         assert window.canvas.map_image.width() == 1000
         assert window.canvas.map_image.pixelIndex(0, 999) == 0
         assert window.canvas.telemetry["map"]["origin"] == mapping["origin"]

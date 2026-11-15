@@ -5,6 +5,7 @@ make progress inside the 50 ms timeout while the whole message takes >800 ms.
 """
 from contextlib import contextmanager
 import json
+import queue
 import socket
 import threading
 import time
@@ -52,8 +53,25 @@ class Peer:
         self.condition = threading.Condition()
         self.messages = []
         self.errors = []
+        # A real server serializes whole frames. Queue automatic Pong writes
+        # separately so a deliberately slow downlink doesn't block its reader.
+        self.pongs = queue.Queue()
+        self.ws.pong = self.pongs.put
+        self.pong_sender = threading.Thread(target=self._send_pongs, daemon=True)
+        self.pong_sender.start()
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
+
+    def _send_pongs(self):
+        try:
+            while not self.done.is_set():
+                try:
+                    payload = self.pongs.get(timeout=.05)
+                except queue.Empty:
+                    continue
+                self.ws.send(payload, websocket.ABNF.OPCODE_PONG)
+        except (OSError, websocket.WebSocketException):
+            pass
 
     def _read(self):
         try:
@@ -80,7 +98,8 @@ class Peer:
         frame = websocket.ABNF.create_frame(json.dumps(packet),
                                            websocket.ABNF.OPCODE_TEXT)
         frame.mask_value = 0
-        self.socket.sendall(frame.format())
+        with self.ws.lock:
+            self.socket.sendall(frame.format())
 
     def drip(self, packet, *, chunk=128, interval=.03):
         started, finished = threading.Event(), threading.Event()
@@ -91,13 +110,14 @@ class Peer:
 
         def run():
             try:
-                for offset in range(0, len(frame), chunk):
-                    if self.done.is_set():
-                        return
-                    self.socket.sendall(frame[offset:offset + chunk])
-                    started.set()
-                    if offset + chunk < len(frame) and self.done.wait(interval):
-                        return
+                with self.ws.lock:
+                    for offset in range(0, len(frame), chunk):
+                        if self.done.is_set():
+                            return
+                        self.socket.sendall(frame[offset:offset + chunk])
+                        started.set()
+                        if offset + chunk < len(frame) and self.done.wait(interval):
+                            return
             except (OSError, websocket.WebSocketException):
                 # Closing the client intentionally interrupts unfinished frames.
                 pass
@@ -115,6 +135,7 @@ class Peer:
         except OSError:
             pass
         self.reader.join(1)
+        self.pong_sender.join(1)
         self.socket.close()
 
 
@@ -156,6 +177,7 @@ def connected_worker(monkeypatch):
 
 def test_slow_complete_message_does_not_starve_manual_input_or_stop(app, monkeypatch):
     with connected_worker(monkeypatch) as (worker, peer, _, _):
+        wait_until(lambda: worker.latency.snapshot()[0] == "healthy")
         assert worker.update_manual_intent(manual())
         wait_until(lambda: any(p.get("op") == "manual_input" for _, p in peer.snapshot()))
         # Model GUI liveness updates with 150 ms jitter, while the sender must
@@ -204,6 +226,7 @@ def test_slow_complete_message_does_not_starve_manual_input_or_stop(app, monkeyp
 
             wait_until(got_telemetry)
             assert received[-1]["padding"] == packet["padding"]
+            wait_until(lambda: worker.latency.snapshot()[0] == "healthy")
             assert not any(p.get("op") == "manual_input" for t, p in peer.snapshot() if t > stop_received)
         finally:
             producer_done.set()
@@ -231,7 +254,7 @@ def test_sender_failure_interrupts_receiver_and_retires_connection(app, monkeypa
         original = client.send
 
         def send(raw, *args, **kwargs):
-            if json.loads(raw).get("op") == "manual_input":
+            if not args and json.loads(raw).get("op") == "manual_input":
                 failed.set()
                 raise OSError("injected sender failure")
             return original(raw, *args, **kwargs)
@@ -243,3 +266,20 @@ def test_sender_failure_interrupts_receiver_and_retires_connection(app, monkeypa
         assert not worker.update_manual_intent(manual())
         peer.done.set()
         dripper.join(1)
+
+
+def test_ping_timeout_and_recovery_without_control_or_qt_events(app, monkeypatch):
+    with connected_worker(monkeypatch) as (worker, peer, _, _):
+        wait_until(lambda: worker.latency.snapshot()[0] == "healthy")
+        # Telemetry is not required for network RTT. Missing Pongs must not
+        # retain a previous green number or manufacture an application packet.
+        monkeypatch.setattr(peer.ws, "pong", lambda payload: None)
+        wait_until(lambda: worker.latency.snapshot()[0] == "timeout")
+        assert worker.latency.snapshot()[1] is None
+        assert worker._connected
+        assert all(packet["op"] == "hello" for _, packet in peer.snapshot())
+        monkeypatch.setattr(peer.ws, "pong", peer.pongs.put)
+        wait_until(lambda: worker.latency.snapshot()[0] == "healthy")
+        assert worker.latency.snapshot()[1] >= 0
+        worker.close()
+        assert worker.latency.snapshot() == ("disconnected", None)
