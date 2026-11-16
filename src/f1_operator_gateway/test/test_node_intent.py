@@ -458,7 +458,7 @@ def test_diagnostics_send_each_new_event_and_hello_replays_history_map_and_track
     packets = {packet["type"]: packet for _, packet in node.hub.sent}
     assert packets["map"]["map"] is node.map_data
     assert packets["map"]["runtime_session_id"] == "runtime-map-session"
-    assert {"compact_stream_v1", "indexed8_map", "continuous_drive_percent_v1"} <= set(packets["hello"]["capabilities"])
+    assert {"compact_stream_v1", "indexed8_map", "continuous_drive_percent_v1", "cleaning_speed_v1"} <= set(packets["hello"]["capabilities"])
     assert packets["hello"]["drive_output"] == node._drive_output()
     assert [e["id"] for e in packets["diagnostics"]["diagnostics"]["events"]] == [1, 2]
     assert packets["tracks"]["session_id"] == packets["hello"]["session_id"] == node.diagnostic_history.session

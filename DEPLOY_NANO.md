@@ -1,6 +1,6 @@
 # Nano 从零部署 surface_ws
 
-更新：2026-11-12。适用于 Nano 首次部署或已有 `surface_ws` 升级。包含水面 ROS 系统及独立水下 H7 服务。仅部署水下控制时直接阅读[水下服务章节](#水下-h7独立服务与可选设备自启动)，无需构建 ROS。PC 与 Nano 分别构建；下面每节标明执行设备。2026-11-09 控制器配置加载修复已部署到 Nano 并验证，见[故障排查](#定位正常但开放任务不能启动)。这项修复不涉及雷达驱动迁移；雷达旧服务迁移见第 8 节，旧清洗包升级见[清洗包迁移说明](src/f1_pool_cleaning/MIGRATION.md)。
+更新：2026-11-16。适用于 Nano 首次部署或已有 `surface_ws` 升级。包含水面 ROS 系统及独立水下 H7 服务。仅部署水下控制时直接阅读[水下服务章节](#水下-h7独立服务与可选设备自启动)，无需构建 ROS。PC 与 Nano 分别构建；下面每节标明执行设备。2026-11-09 控制器配置加载修复已部署到 Nano 并验证，见[故障排查](#定位正常但开放任务不能启动)。这项修复不涉及雷达驱动迁移；雷达旧服务迁移见第 8 节，旧清洗包升级见[清洗包迁移说明](src/f1_pool_cleaning/MIGRATION.md)。
 
 | 项目 | 统一约定 |
 | --- | --- |
@@ -17,6 +17,8 @@
 | 水下独立服务 | 根目录 `under_control/`，systemd unit 为 `under-control.service` |
 
 PC 和 Nano 分别编译，不传 PC 的生成目录。部署状态以各项验证记录为准，文档中的操作命令不表示全部步骤均已在目标设备执行。
+
+**2026-11-16 清洗速度已部署到指定 Nano。** `f1_interfaces`、`f1_pool_cleaning`、`f1_l_cleaning`、`f1_operator_gateway` 四包构建成功，Nano 隔离测试 267 项通过，operator 已恢复待机并确认 `cleaning_speed_v1`。按用户要求未备份原代码，地图和 YAML 未覆盖，Windows 只更新源码、不打包 exe。部署时 F103 串口缺失、雷达无新鲜数据，所以结果仅证明软件部署及接口链路；详见[当次验证快照](docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#2026-11-16-nano-部署验证)。下文首次安装和其他设备升级步骤不需要在这台 Nano 上重复执行。
 
 ## 水下 H7：独立服务与可选设备自启动
 
@@ -78,14 +80,14 @@ journalctl -u under-control.service -n 80 --no-pager
 
 此版桥接仅支持仓库 `under/F103firmware` 的 v3 协议。部署前核对实机已烧录的版本，收到旧版 CTRL 时会显示 `INCOMPATIBLE` 并拒绝控制。自定义 bridge YAML 的 `firmware_profile` 应为 `f1_direction_percent_v3`。先停止现有 operator 节点，更新源码并重建 `f1_interfaces` 及其依赖节点，完成检查后一同重启；旧生成消息不能与新增协议/RC字段混用。Windows 同步更新整个 `operator_app`，exe 在 Windows 重新打包。此节是升级步骤，编译或启动上位机服务不会自动烧录下位机。
 
-主输出为整数 0–100；0 仅停止主电机，辅助独立。新 25% 为 PWM 偏移 100 μs，旧最低档为 125 μs，默认自主动作仍用新 25%。检查四电机当前极性 BL/BR/FL/FR=`+,+,-,+`、零主输出时辅助独立、手动全停、断线、RC接管与归还后重新握手；再验证纠偏、固定时间后退换边和前进辅助。CTRL/ACK/PWM 目标不能证明船体达到速度或停止。完整契约见[桥接说明](src/f1_nano_bridge/README.md#f103-v3-连续输出2026-11-11)。
+主输出为整数 0–100；0 仅停止主电机，辅助独立。新 25% 为 PWM 偏移 100 μs，旧最低档为 125 μs，纠偏、靠近和换边仍用新 25%；沿墙前进辅助由 App 整数 0–100 按 `(value + 1) // 2` 映射为 0–50，默认 0 关闭辅助。检查四电机当前极性 BL/BR/FL/FR=`+,+,-,+`、零主输出时辅助独立、手动全停、断线、RC接管与归还后重新握手；再验证纠偏、固定时间后退换边和前进辅助。CTRL/ACK/PWM 目标不能证明船体达到速度或停止。完整契约见[桥接说明](src/f1_nano_bridge/README.md#f103-v3-连续输出2026-11-11)。
 
 ### 2026-11-11 Nano 实际执行记录
 
 - `192.168.1.188` 全量构建成功：8 个包，耗时约 1 分 28 秒；全部 CMake 安装模式统一为 `OFF`（复制安装）。
 - `backups/` 与 `deploy_backups/` 已移到 `/home/nvidia/surface_ws_backups/pre-v3-20261111-105419/`。同目录保存构建前安装快照 `install-before-build.tar.gz`、源码快照及服务配置。快照保存当时磁盘文件；此前 Python 安装软链接已指向同步后的 v3 源码，因此它不等同于完整旧 v2 可运行版本。
 - Nano 的 `under/`、`operator_app/` 已删除，PC 原件保留；地图和运行日志保留。默认 `colcon list` 也仅发现 8 个项目包。
-- 已启动新版 `f1-operator.service`；雷达服务保持运行，PID 未变化。12 秒内收到 121 条遥测，均为 `INCOMPATIBLE`：实际报告固件 v2，要求 v3，`motion_authorized=false`、`drive_output.available=false`。因此当前不可通过新版 App 控制，需另行烧录配套 v3 固件。本次未烧录、未发送运动或清洗任务命令。
+- 已启动新版 `f1-operator.service`；雷达服务保持运行，PID 未变化。12 秒内收到 121 条遥测，均为 `INCOMPATIBLE`：实际报告固件 v2，要求 v3，`motion_authorized=false`、`drive_output.available=false`。因此当时不可通过新版 App 控制，需要配套 v3 固件。该条是 2026-11-11 启动时快照，不表示后续固件状态；该次未烧录、未发送运动或清洗任务命令。
 - 精简部署测试排除两组固件 C 测试及一个依赖该 C 库的 PTY 集成用例。首次运行暴露 PTY 源码依赖，修正测试选择后补跑传输组通过；最终 xUnit 为 770 个用例、0 错误、0 失败，`colcon test-result` 含 CTest 汇总计为 808 tests。该结果不表示新版固件已通过实机验收。
 
 ## 1. Nano：检查系统与 ROS
@@ -470,11 +472,11 @@ ros2 launch f1_operator_gateway operator_bringup.launch.py \
 
 该入口默认预览，不会自动 start。已有完整 bringup 时不要再运行它；仅启动网关即可，已有 L 定位使用 `localization_prefix:=/l_cleaning`。两类任务接口不再重映射。完整操作与验收边界见[网关](src/f1_operator_gateway/README.md)和 [App](operator_app/README.md)文档。
 
-### 当前版本升级核对（2026-11-09，`9db6798`）
+### 升级核对（含 2026-11-09 配置修复与 2026-11-16 调速）
 
 - `l` 任务已扩展为开放多段墙链，App 显示“开放多边清洗”。同步两个清洗包、网关及整个 Windows App；使用 exe 时重新打包。先运行 `ros2 run f1_pool_cleaning map_profile <现场地图> --json` 核对墙链和边编号，原示例大 L 的两条边现为 `edge_3/edge_4`。默认最长链，其他候选通过 `l_config` 的 `route_chain_index` 选择。
-- 现场自定义 YAML 不会自动获得新默认值。核对 `wall_target_m=0.33`、墙距区间 `0.32–0.36` m、`front_stop_m=0.40`、`brush_percent=50.0`、`side_percent=50.0` 和独立的 `transfer_side_percent=50.0`；感知配置的 `brush_max_compression_m=0.02`。沿墙默认由滚刷推进，主电机提速需在启动前单独启用，实船预期见[矩形验收步骤](src/f1_pool_cleaning/DEPLOY_TEST_NANO.md)。
-- 2026-11-09 显示链路更新需要同步 Nano 网关和整个 Windows `operator_app`，exe 重新打包。App 只显示底图、实时位姿与实际轨迹，网关停止上报显示用雷达点和预期轨迹；地图改为后台压缩，受管定位底图首次加载后冻结，建图默认最多每 2 秒更新一次。实际轨迹与诊断使用独立消息，旧 App 不兼容新版压缩地图。控制器仍使用 `front_stop_m=0.40`、`wall_band_min_m=0.32`、`wall_band_max_m=0.36`；本文更新不表示已执行远端部署。
+- 现场自定义 YAML 不会自动获得新默认值。核对 `wall_target_m=0.33`、墙距区间 `0.32–0.36` m、`front_stop_m=0.40`、`brush_percent=50.0`、`side_percent=50.0` 和独立的 `transfer_side_percent=50.0`；感知配置的 `brush_max_compression_m=0.02`。沿墙默认由滚刷推进，启动前可通过 App 清洗速度 0–100 设置前进辅助，控制器按 `(value + 1) // 2` 映射为 0–50 输出。新增 `SetCleaningSpeed` 服务需重建接口包、清洗控制器和网关；指定 Nano 已完成此次构建。Windows 更新源码后从命令行启动，本次不打包 exe。实船预期见[矩形验收步骤](src/f1_pool_cleaning/DEPLOY_TEST_NANO.md)。
+- 2026-11-09 显示链路更新需要同步 Nano 网关和整个 Windows `operator_app`，exe 重新打包。App 只显示底图、实时位姿与实际轨迹，网关停止上报显示用雷达点和预期轨迹；地图改为后台压缩，受管定位底图首次加载后冻结，建图默认最多每 2 秒更新一次。实际轨迹与诊断使用独立消息，旧 App 不兼容新版压缩地图。控制器仍使用 `front_stop_m=0.40`、`wall_band_min_m=0.32`、`wall_band_max_m=0.36`；该项的历史升级说明不代替文首所列最新部署验证。
 - 定位 Lua 当前为 `motion_filter.max_time_seconds=0.3`、`optimize_every_n_nodes=5`；更频繁优化不等于定位就绪，需观察 Nano 负载与定位状态，见[定位调优说明](src/f1_localization/README.md)。
 - 网关新增可补读的停止诊断历史，App 支持日志导出。更换工作空间内服务模板不会自动更新 `/etc/systemd/system/` 中已安装的副本；采用当前校时与恢复策略时，按下节重新安装模板并 `daemon-reload`。
 - 控制器配置加载修复位于 `f1_operator_gateway/launch/operator_bringup.launch.py`。受管模式和直接组合启动均在传入清洗 launch 前解析默认 YAML；无效的显式路径会报错。升级后核对两个控制器的实际参数，不能只看源码 YAML 或 App 的定位提示，详见下节。
@@ -543,7 +545,7 @@ App 将多种 `pose` 原因合并为“位姿数据未就绪”，应结合原�
 
 ## App 建图选图与开机服务
 
-本次新增受管入口，允许没有地图时开机待机，日常在 Windows App 完成建图、保存和选图。先同步源码并重新构建 `--packages-up-to f1_operator_gateway`，Windows 同步整个 `operator_app/` 并重新打包。先以前台预览模式验证：
+受管入口允许没有地图时开机待机，日常在 Windows App 完成建图、保存和选图。首次部署时同步源码并重新构建 `--packages-up-to f1_operator_gateway`；Windows 更新整个 `operator_app/` 后从命令行启动，本次不打包 exe。已有 `f1-operator.service` 时不要另启重复入口。首次安装可先以前台预览模式验证：
 
 ```bash
 source /opt/ros/humble/setup.bash

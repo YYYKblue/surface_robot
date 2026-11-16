@@ -32,7 +32,7 @@
 
 ## PC / Nano 分别构建
 
-在各自主机的 `surface_ws` 根目录构建，不复制 PC 的 `build/install/log` 到 Nano：
+在各自主机的 `surface_ws` 根目录构建，不复制 PC 的 `build/install/log` 到 Nano。下面命令适用于采用符号链接安装的 PC 开发工作空间；已部署 Nano 使用复制安装，应按 [Nano 编译步骤](../../DEPLOY_NANO.md#5-nano编译)设置 `AMENT_CMAKE_SYMLINK_INSTALL=OFF`，不要直接混用 `--symlink-install`：
 
 ```bash
 source /opt/ros/humble/setup.bash

@@ -65,7 +65,7 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 ### 3.1 检查雷达服务
 
-雷达驱动继续由 `pavo2-scan.service` 常驻提供。按[驱动迁移说明](DEPLOY_NANO.md#8-实机雷达单独恢复驱动)在 Nano 构建并将服务改为启动 `f1_lidar_driver`；建图入口不会额外启动驱动。PC 端的源码迁移不会自动修改 Nano 现有服务。
+雷达驱动由 `pavo2-scan.service` 常驻提供；建图入口不会额外启动驱动。尚未迁移的设备按[驱动迁移说明](DEPLOY_NANO.md#8-实机雷达切换到项目内驱动)构建并切换服务到 `f1_lidar_driver`。已经完成迁移的 Nano 只需检查服务和实际扫描，无需重复安装服务；PC 端的源码变更不会自动修改 Nano 的 systemd 配置。
 
 ```bash
 systemctl status pavo2-scan.service --no-pager

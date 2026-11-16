@@ -15,7 +15,9 @@
 | 75 | 375 μs | 300 μs |
 | 100 | 不适用 | 400 μs |
 
-这些是 PWM 幅度，不能推导实际转速、推力或船速。自主任务第一阶段仍固定使用新标度的 25%，需要重新验证纠偏、接近、换边和前进辅助。固件负责四电机混控，当前前进极性按 BL/BR/FL/FR 为 `+,+,-,+`；升级后需逐路核对实际方向。
+这些是 PWM 幅度，不能推导实际转速、推力或船速。自主任务的纠偏、接近和换边使用新标度 25%；沿墙前进辅助由清洗控制器将 App 整数 0–100 按 `(value + 1) // 2` 映射为 0–50 输出。该设置复用本包现有连续输出能力，无需修改固件协议；实际推进、纠偏和换边效果仍需实船验证。固件负责四电机混控，当前前进极性按 BL/BR/FL/FR 为 `+,+,-,+`；升级后需逐路核对实际方向。
+
+2026-11-16 数值清洗速度已部署至 Nano，本包执行代码和固件未修改；当时桥因配置的串口设备缺失报告 `DISCONNECTED`，未获得本次改动的实际 CTRL/ACK 或电机输出证据。该描述是部署时快照，后续设备状态需重新检查，见[部署记录](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#2026-11-16-nano-部署验证)。
 
 桥接分别解析 CTRL、IMU 与 `RC,2,...,CH1..CH14`，正常 RC 报告不再计为无效行。`ControlState` 新增固件版本/兼容状态及 RC 原始通道、flags、sequence、接收年龄和有效性；重复 RC 时间戳不能刷新年龄，超过 0.4 s 或报文标明失联时 `rc_valid=false`。RC 通道仅用于诊断，执行状态和控制源以 CTRL 为准。兼容标志不代表遥测新鲜、握手完成或已取得控制权。
 
@@ -46,10 +48,11 @@ App 的启动方式和协议见 [`f1_operator_gateway`](../f1_operator_gateway/R
 
 ## 启动
 
+以下为 Nano 独立调试入口。先按 [Nano 构建步骤](../../DEPLOY_NANO.md#5-nano编译) 完成复制安装；已有 `f1-operator.service` 已包含 bridge 和网关，通常直接使用该服务。只有确认无任务及手动控制并停止现有 operator 后，才运行下面的独立入口，避免串口和端口争用。
+
 ```bash
 source /opt/ros/humble/setup.bash
 cd /home/nvidia/surface_ws
-colcon build --symlink-install --packages-up-to f1_nano_bridge f1_operator_gateway
 source install/local_setup.bash
 
 ros2 launch f1_nano_bridge bridge.launch.py \
@@ -72,6 +75,8 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py bind_address:=0.0.0.0
 - 系统时间相对启动基准偏移超过 50 ms，或 IMU 检测到时间跳变时，先撤销租约并锁定故障，串口线程尽力发送中性帧、关闭串口，主进程以 75 退出。只有时间故障请求这种恢复，其他故障不会被它自动清除。`f1-operator.service` 会重新检查时间并重启整套 operator 为待机；直接运行本包没有自动重启。恢复不沿用旧 token、命令或任务，必须重新选图和定位。详见[三层恢复策略](../../DEPLOY_NANO.md#app-建图选图与开机服务)。
 
 ## 验证
+
+以下在 PC 开发机运行，使用符号链接安装。Nano 沿用复制安装，构建命令及固件测试依赖见[部署文档](../../DEPLOY_NANO.md#7-nano离线测试)。
 
 ```bash
 source /opt/ros/humble/setup.bash

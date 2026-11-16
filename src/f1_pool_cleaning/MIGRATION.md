@@ -1,5 +1,7 @@
 # 两个清洗包合并为 f1_pool_cleaning
 
+本页保留旧清洗包首次迁移的步骤。`192.168.1.188` 的工作空间已完成迁移，2026-11-16 数值清洗速度也已部署，无需重复执行下方旧包移动或备份命令；当前状态见[部署验证](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#2026-11-16-nano-部署验证)。
+
 2026-10-30 补充：定位实现已进一步迁至 [`f1_localization`](../f1_localization/README.md)，下表的 `pool_localization.launch.py` 现为兼容转发；Lua/RViz 使用新包的 `config/localization.*`。首次升级按[定位拆包部署步骤](../../DEPLOY_NANO.md#定位拆包升级)处理旧安装残留。
 
 2026-10-23：`f1_rectangle_cleaning` 的当前单边控制和 `f1_wall_cleaning` 的墙线感知合并到本包。旧脉冲控制器、旧试跑配置及其专用测试删除；保留感知、连续纠偏、双向侧推、丢墙恢复、定位、租约和对应回归测试。合并当时尚未新增自动换边或四边清洗；当前版本已在此基础上实现矩形四边自动清洁一周，详见[开发与验收文档](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md)。
@@ -21,7 +23,7 @@
 
 不保留旧包或旧控制入口。自定义 YAML 顶层节点名必须同步更新；原控制参数名和数值不变。感知参数中的 `brush_allowed` 及旧脉冲/试跑参数已移除。话题、服务、RViz 配置、录包命令和外部订阅者也需更新；历史录包中的名称不自动变化。
 
-`f1_interfaces` 中的消息/服务定义不变。当前预览仍为 `ActuatorCommand`，状态仍为 JSON `String`；旧 `EffortPreview` / `CleaningStatus` 类型保留兼容，但新包不发布。硬件桥、固件与建图入口不变。
+2026-10-23 合并当时没有改变 `f1_interfaces` 的消息/服务定义；后续协议 v3 和数值清洗速度接口扩展见[接口说明](../f1_interfaces/README.md)。当前预览仍为 `ActuatorCommand`，状态仍为 JSON `String`；旧 `EffortPreview` / `CleaningStatus` 类型保留兼容，但新包不发布。硬件桥、固件与建图入口不变。
 
 ## 首次升级 PC 或 Nano
 
@@ -43,13 +45,14 @@ echo "旧包备份：$cleaning_backup"
 
 PC 工作空间为 `/home/bboss/new-nano/surface_ws`，替换上面的 `cd`。如果通过版本更新已经删除旧源码，仍需检查 build/install。普通 rsync 新包不会删除 Nano 遗留的两个旧包；不要把备份放回 `src/`，否则 colcon 仍会发现旧包。
 
-同步新源码后，重新构建整个工作空间以刷新安装环境：
+同步新源码后，重新构建整个工作空间以刷新安装环境。以下沿用 Nano 的复制安装；PC 若已有符号链接构建，保持其原安装方式，勿直接混用：
 
 ```bash
 source /opt/ros/humble/setup.bash
 colcon list --names-only
-colcon build --symlink-install --parallel-workers 1 \
-  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
+CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
+  colcon build --base-paths src --executor sequential \
+  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 -DAMENT_CMAKE_SYMLINK_INSTALL=OFF
 source install/local_setup.bash
 ros2 pkg prefix f1_pool_cleaning
 ros2 pkg executables f1_pool_cleaning

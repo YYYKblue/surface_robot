@@ -445,7 +445,7 @@ class SocketWorker(QThread):
         self._receive({"type": "hello", "client_id": "mock", "session_id": "mock-stream",
                        "drive_output": dict(drive_output), "capabilities": ["task_selection", "initial_pose",
                        "start_conditions", "task_stop", "task_resume", "task_tracks", "mapping", "map_catalog", "map_delete", "map_unload",
-                       "forward_boost", "continuous_drive_percent_v1"]})
+                       "forward_boost", "cleaning_speed_v1", "continuous_drive_percent_v1"]})
         control = dict(state="READY", connected=True, source="NANO", motion_authorized=False,
             connection_id="mock-serial", epoch=1, armed=True,
             allow_fifth_thruster=True, firmware_protocol_version=3, firmware_protocol_compatible=True,
@@ -465,6 +465,7 @@ class SocketWorker(QThread):
         active = None
         started = None
         tasks = {kind: dict(task_type=kind, phase="IDLE", run_id="", output_enabled=False,
+                           cleaning_speed=0, forward_boost_percent=0,
                            forward_boost_enabled=False, forward_boost_active=False,
                            map_id="mock-map", edge_count=2 if kind == "l" else 4) for kind in ("l", "rectangle")}
         pose = dict(x=1.15, y=1., yaw=0.)
@@ -542,7 +543,7 @@ class SocketWorker(QThread):
                         mock_map["revision"] += 1
                         self._receive(dict(type="map", map=dict(mock_map), runtime_session_id=runtime["session_id"]))
                         for task in tasks.values():
-                            task.update(phase="IDLE", run_id="", forward_boost_enabled=False)
+                            task.update(phase="IDLE", run_id="", cleaning_speed=0, forward_boost_percent=0, forward_boost_enabled=False)
                             task["actual_track"].update(run_id="", segments=[], point_count=0)
                     else:
                         success, message = False, "当前模式不支持此操作"
@@ -551,11 +552,15 @@ class SocketWorker(QThread):
                     pose = {key: packet[key] for key in ("x", "y", "yaw")}
                 elif op == "task":
                     kind, action = packet["task_type"], packet["action"]
-                    if action == "set_forward_boost":
-                        if occupied is None and tasks[kind]["phase"] in ("IDLE", "CANCELLED", "STOPPED", "COMPLETE"):
-                            tasks[kind]["forward_boost_enabled"] = packet["enabled"]
+                    if action == "set_cleaning_speed":
+                        value = packet.get("value")
+                        if type(value) is not int or not 0 <= value <= 100:
+                            success, message = False, "清洗速度必须为 0–100 整数"
+                        elif occupied is None and tasks[kind]["phase"] in ("IDLE", "CANCELLED", "STOPPED", "COMPLETE"):
+                            tasks[kind].update(cleaning_speed=value, forward_boost_percent=(value+1)//2,
+                                               forward_boost_enabled=value > 0)
                         else:
-                            success, message = False, "只能在任务开始前设置提速"
+                            success, message = False, "只能在任务开始前设置清洗速度"
                     elif action == "start" and ready and occupied is None:
                         active, started = kind, now
                         region = dict(edge_id="edge_0", reference_wall_point=[.2, 2.],
@@ -619,6 +624,7 @@ class SocketWorker(QThread):
                                 and not task.get("forward_boost_cutoff_reached", False))
                 task.update(forward_boost_editable=editable,
                     can_set_forward_boost=editable and occupied is None,
+                    can_set_cleaning_speed=editable and occupied is None, cleaning_speed_setting_error="",
                     forward_boost_active=boost_active,
                     forward_boost_reason=("disabled" if not task["forward_boost_enabled"] else
                         "active" if boost_active else "inactive_task" if editable else

@@ -4,7 +4,7 @@ import math
 import time
 from collections import OrderedDict
 
-from f1_interfaces.srv import SetInitialPose
+from f1_interfaces.srv import SetInitialPose, SetCleaningSpeed
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 from std_srvs.srv import Trigger, SetBool
@@ -37,6 +37,8 @@ class TaskControl:
         for kind, namespace in TASK_PREFIXES.items():
             self.task_clients[kind]["set_forward_boost"] = self.create_client(
                 SetBool, f"{namespace}/set_forward_boost")
+            self.task_clients[kind]["set_cleaning_speed"] = self.create_client(
+                SetCleaningSpeed, f"{namespace}/set_cleaning_speed")
         self.tasks, self.task_received = {}, {}
         self.task_tracks = {kind: TaskTrack() for kind in TASK_PREFIXES}
         self.localization, self.localization_received = {}, 0.
@@ -156,6 +158,9 @@ class TaskControl:
         boost_error = self._forward_boost_error(kind)
         value.update(can_set_forward_boost=not boost_error and not self.command_pending,
                      forward_boost_setting_error=boost_error)
+        speed_error = self._forward_boost_error(kind, numeric=True)
+        value.update(can_set_cleaning_speed=not speed_error and not self.command_pending,
+                     cleaning_speed_setting_error=speed_error)
         return value
 
     def _resume_error(self, kind):
@@ -178,7 +183,14 @@ class TaskControl:
             return "; ".join(b.get("message", "") for b in task.get("resume_blockers", [])) or "控制器未确认可以继续"
         return ""
 
-    def _forward_boost_error(self, kind):
+    @staticmethod
+    def _cleaning_speed_status_valid(task):
+        value, percent = task.get("cleaning_speed"), task.get("forward_boost_percent")
+        return (type(value) is int and 0 <= value <= 100
+                and type(percent) is int and percent == (value + 1) // 2
+                and task.get("forward_boost_enabled") is (value > 0))
+
+    def _forward_boost_error(self, kind, *, numeric=False):
         if not self._runtime_task_allowed() or self._runtime_busy():
             return "请先加载地图，等待地图操作结束"
         if self.task_locks or self.uncertain_tasks:
@@ -192,8 +204,10 @@ class TaskControl:
         if (task.get("phase") not in ("IDLE", "CANCELLED", "STOPPED", "COMPLETE")
                 or task.get("forward_boost_editable") is not True):
             return "只能在任务开始前设置提速；暂停后请先取消任务"
+        action = "set_cleaning_speed" if numeric else "set_forward_boost"
         if (type(task.get("forward_boost_enabled")) is not bool
-                or not self.task_clients[kind]["set_forward_boost"].service_is_ready()):
+                or (numeric and not self._cleaning_speed_status_valid(task))
+                or not self.task_clients[kind][action].service_is_ready()):
             return "提速设置服务不可用，请升级清洗控制器"
         return ""
 
@@ -256,8 +270,9 @@ class TaskControl:
             error = self._resume_error(packet["task_type"])
             if packet.get("run_id") != self.tasks.get(packet["task_type"], {}).get("run_id"):
                 error = "任务已变化，请刷新后继续"
-        elif packet["action"] == "set_forward_boost":
-            error = self._forward_boost_error(packet["task_type"])
+        elif packet["action"] in ("set_forward_boost", "set_cleaning_speed"):
+            error = self._forward_boost_error(packet["task_type"],
+                numeric=packet["action"] == "set_cleaning_speed")
         else:
             # Route cancellation to the requested actual controller even if
             # its telemetry is stale; discovery/service response is authoritative.
@@ -267,6 +282,7 @@ class TaskControl:
             return
         self._stop_manual("operator_" + packet["op"])
         self.command_pending = dict(client=client_id, packet=packet, stage="handover", since=time.monotonic(),
+                                    map_id=self.tasks.get(packet.get("task_type"), {}).get("map_id"),
                                     old_run=self.tasks.get(packet.get("task_type"), {}).get("run_id"),
                                     old_resume=self.tasks.get(packet.get("task_type"), {}).get("resume_sequence", 0))
         self._task_tick()
@@ -308,6 +324,17 @@ class TaskControl:
                     and task.get("stamp_ns", 0) >= pending["sent_ns"]
                     and task.get("forward_boost_enabled") is packet["enabled"]):
                 self._finish_operation(pending, True, "主电机提速设置已确认")
+            return
+        if pending["stage"] == "cleaning_speed_status":
+            packet = pending["packet"]
+            kind = packet["task_type"]
+            task = self.tasks.get(kind, {})
+            if (self._source_fresh(task, self.task_received.get(kind, 0))
+                    and task.get("stamp_ns", 0) >= pending["sent_ns"]
+                    and task.get("task_type") == kind and task.get("map_id") == pending["map_id"]
+                    and self._cleaning_speed_status_valid(task)
+                    and task["cleaning_speed"] == packet["value"]):
+                self._finish_operation(pending, True, "清洗速度设置已确认")
             return
         if pending["stage"] == "status":
             kind = pending["packet"]["task_type"]
@@ -351,12 +378,13 @@ class TaskControl:
                 if error or self.tasks.get(kind, {}).get("run_id") != pending["old_run"]:
                     self._finish_operation(pending, False, error or "任务已变化")
                     return
-            if action == "set_forward_boost":
-                error = self._forward_boost_error(kind)
+            if action in ("set_forward_boost", "set_cleaning_speed"):
+                error = self._forward_boost_error(kind, numeric=action == "set_cleaning_speed")
                 if error:
                     self._finish_operation(pending, False, error)
                     return
-                request = SetBool.Request(data=packet["enabled"])
+                request = (SetCleaningSpeed.Request(value=packet["value"])
+                           if action == "set_cleaning_speed" else SetBool.Request(data=packet["enabled"]))
             else:
                 request = Trigger.Request()
             client = self.task_clients[kind][action]
@@ -406,6 +434,9 @@ class TaskControl:
         action = pending["packet"].get("action")
         if result.success and action == "set_forward_boost":
             pending["stage"] = "boost_status"
+            return
+        if result.success and action == "set_cleaning_speed":
+            pending["stage"] = "cleaning_speed_status"
             return
         if kind and ((action == "start" and not result.success)
                      or (action in ("pause", "stop", "cancel") and result.success)):

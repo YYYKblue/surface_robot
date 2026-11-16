@@ -69,6 +69,24 @@ def test_cutoff_revokes_on_pose_without_new_scan_and_never_extends_deadline(miss
     assert m.phase == "PAUSED" and m.last_effort is None
 
 
+def test_maximum_speed_cutoff_revokes_snapshot_without_new_scan(mission):
+    m = mission
+    m.halt("configure next run", "CANCELLED")
+    assert m.set_cleaning_speed(100)[0]
+    original = feedback(m, .82)
+    assert m.start(original, NOW)[0]
+    first = m.update(original, NOW)
+    assert command_fields(first, m.c)["speed_percent"] == 50
+    now = NOW + 20_000_000
+    updated = replace(feedback(m, .8, now), wall=original.wall)
+    revoked = m.update(updated, now)
+    assert revoked.direction == 0 and not revoked.forward_boost
+    assert revoked.forward_boost_percent == 0
+    assert revoked.brush_percent == 50
+    assert revoked.valid_until_ns == first.valid_until_ns
+    assert m.cleaning_speed == 100  # Cutoff is not a settings change.
+
+
 @pytest.mark.parametrize("distance,angle", [(.319, 0.), (.361, 0.), (.33, .20)])
 def test_unstable_wall_or_heading_never_boosts(mission, distance, angle):
     e = mission.update(feedback(mission, 1.5, distance=distance, angle=angle), NOW)
@@ -121,8 +139,8 @@ def test_rectangle_prefix_uses_actual_completion_gate_instead_of_wall_end():
     c = Config(0., 0., 0., 4., 3.)
     m = AutonomousMission(c, PoolModel.rectangle(c))
     m.edge = m.pool.edges[0]
+    assert m.set_cleaning_speed(50)[0]
     m.phase = "FOLLOW"
-    m.forward_boost_enabled = True
     m.returning_to_start, m.prefix_end = True, 2.2
     # Prefix completion is triggered by brush contact >= 2.2 - .025.
     # At 0 heading the centre therefore stops at s = 2.075, far before the wall end.
@@ -134,3 +152,62 @@ def test_rectangle_prefix_uses_actual_completion_gate_instead_of_wall_end():
         e = m._update_edge(f, now)
         assert e.forward_boost is expected
         assert m.edge.length_m-m.edge.project(f.pose).s_m > 2.
+
+
+@pytest.mark.parametrize("value,percent", [(0, 0), (1, 1), (2, 1), (25, 13),
+                                          (50, 25), (75, 38), (99, 50), (100, 50)])
+def test_numeric_speed_only_changes_forward_assistance(mission, value, percent):
+    m = mission
+    m.halt("configure next run", "CANCELLED")
+    assert m.set_cleaning_speed(value)[0]
+    assert m.start(feedback(m, 1.5), NOW)[0]
+    e = m.update(feedback(m, 1.5), NOW)
+    fields = command_fields(e, m.c)
+    assert fields["direction"] == (1 if value else 0)
+    assert fields["speed_percent"] == (percent if value else 25)
+    assert fields["brush_percent"] == 50
+    assert fields["mode"] == 1
+    status = m.forward_boost_status(NOW)
+    assert status["cleaning_speed"] == value
+    assert status["forward_boost_percent"] == percent
+    assert status["forward_boost_active"] is bool(value)
+    now = NOW + 50_000_000
+    corrected = m.update(feedback(m, 1.4, now, angle=.07), now)
+    assert corrected.direction == 3 and not corrected.forward_boost
+    assert command_fields(corrected, m.c)["speed_percent"] == 25
+    # Returning to stable follow restores the selected amplitude, not 25.
+    now += 50_000_000
+    resumed = m.update(feedback(m, 1.3, now), now)
+    assert command_fields(resumed, m.c)["speed_percent"] == (percent if value else 25)
+
+
+@pytest.mark.parametrize("value", [-1, 101, 1.0, True, False, "50", None])
+def test_invalid_speed_never_changes_confirmed_value(value):
+    m = Mission(Config(0., 0., 0., 4., 3.))
+    assert m.set_cleaning_speed(75)[0]
+    assert not m.set_cleaning_speed(value)[0]
+    assert m.cleaning_speed == 75 and m.forward_boost_percent == 38
+
+
+@pytest.mark.parametrize("phase", ["FOLLOW", "CORRECT_HEADING", "ACQUIRING", "PAUSED",
+                                   "APPROACH_START", "WAIT_WALL", "LEFT_EXIT_WALL"])
+def test_numeric_speed_locks_and_retains_raw_value(phase):
+    m = Mission(Config(0., 0., 0., 4., 3.))
+    assert m.set_cleaning_speed(75)[0]
+    m.phase = phase
+    assert not m.set_cleaning_speed(0)[0]
+    assert m.cleaning_speed == 75
+    m.halt("cancel", "CANCELLED")
+    assert m.cleaning_speed == 75
+    assert m.set_cleaning_speed(100)[0]
+    # Each new controller session starts with assistance disabled.
+    assert Mission(m.c).cleaning_speed == 0
+
+
+def test_legacy_boolean_service_preserves_original_amplitude():
+    m = Mission(Config(0., 0., 0., 4., 3.))
+    assert m.set_cleaning_speed(75)[0]
+    assert m.set_forward_boost(True)[0]
+    assert m.cleaning_speed == 50 and m.forward_boost_percent == 25
+    assert m.set_forward_boost(False)[0]
+    assert m.cleaning_speed == 0 and not m.forward_boost_enabled

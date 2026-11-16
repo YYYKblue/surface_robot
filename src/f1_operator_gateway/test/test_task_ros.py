@@ -14,7 +14,7 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger, SetBool
 from nav_msgs.msg import OccupancyGrid
 from f1_interfaces.msg import ActuatorCommand, ControlState
-from f1_interfaces.srv import AcquireControl, ReleaseControl, SetInitialPose
+from f1_interfaces.srv import AcquireControl, ReleaseControl, SetInitialPose, SetCleaningSpeed
 import websockets
 
 from operator_gateway.node import OperatorGateway
@@ -208,7 +208,7 @@ def test_websocket_initial_pose_task_routing_completion_and_localization_loss():
     state = dict(initial=False, pose_stamp=0, publish_loc=True, started=None, auto_complete=True)
     calls = []
     statuses = {kind: dict(task_type=kind, phase="IDLE", run_id="", can_start=True,
-        forward_boost_enabled=False, forward_boost_editable=True,
+        forward_boost_enabled=False, forward_boost_editable=True, cleaning_speed=0, forward_boost_percent=0,
         start_blockers=[], map_id="test-map", output_enabled=False, edge_count=2 if kind == "l" else 4)
         for kind in ("l", "rectangle")}
     qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -253,10 +253,18 @@ def test_websocket_initial_pose_task_routing_completion_and_localization_loss():
             peer.create_service(Trigger, prefix + "/" + action, task_callback(kind, action))
         def boost_callback(request, response, k=kind):
             calls.append((k, "set_forward_boost"))
-            statuses[k]["forward_boost_enabled"] = request.data
+            statuses[k].update(forward_boost_enabled=request.data, cleaning_speed=50 if request.data else 0,
+                               forward_boost_percent=25 if request.data else 0)
             response.success, response.message = True, "setting accepted"
             return response
         peer.create_service(SetBool, prefix + "/set_forward_boost", boost_callback)
+        def speed_callback(request, response, k=kind):
+            calls.append((k, "set_cleaning_speed"))
+            statuses[k].update(cleaning_speed=request.value, forward_boost_percent=(request.value+1)//2,
+                               forward_boost_enabled=request.value > 0)
+            response.success, response.message = True, "setting accepted"
+            return response
+        peer.create_service(SetCleaningSpeed, prefix + "/set_cleaning_speed", speed_callback)
 
     def publish():
         now = peer.get_clock().now().nanoseconds
@@ -294,6 +302,12 @@ def test_websocket_initial_pose_task_routing_completion_and_localization_loss():
             await until(lambda p: p.get("request_id") == "boost" and p.get("success") and not p.get("pending"))
             assert statuses["l"]["forward_boost_enabled"] is True
             assert statuses["rectangle"]["forward_boost_enabled"] is False
+            await until(lambda p: p.get("type") == "telemetry" and p["tasks"]["l"]["can_set_cleaning_speed"])
+            await send(dict(op="task", request_id="speed", task_type="l", action="set_cleaning_speed", value=75))
+            await until(lambda p: p.get("request_id") == "speed" and p.get("success") and not p.get("pending"))
+            confirmed = await until(lambda p: p.get("type") == "telemetry" and p["tasks"]["l"]["cleaning_speed"] == 75)
+            assert confirmed["tasks"]["l"]["forward_boost_percent"] == 38
+            assert confirmed["tasks"]["rectangle"]["cleaning_speed"] == 0
             await send(dict(op="task", request_id="start", task_type="l", action="start"))
             await until(lambda p: p.get("request_id") == "start" and p.get("success"))
             done = await until(lambda p: p.get("type") == "telemetry" and p["tasks"]["l"].get("phase") == "COMPLETE")
@@ -304,11 +318,18 @@ def test_websocket_initial_pose_task_routing_completion_and_localization_loss():
             await send(dict(op="task", request_id="locked-boost", task_type="l", action="set_forward_boost", enabled=False))
             rejected = await until(lambda p: p.get("request_id") == "locked-boost")
             assert not rejected["success"] and statuses["l"]["forward_boost_enabled"]
+            await send(dict(op="task", request_id="locked-speed", task_type="l", action="set_cleaning_speed", value=100))
+            rejected = await until(lambda p: p.get("request_id") == "locked-speed")
+            assert not rejected["success"] and statuses["l"]["cleaning_speed"] == 75
             await send(dict(op="task", request_id="pause", task_type="l", action="pause"))
             await until(lambda p: p.get("request_id") == "pause" and p.get("success"))
             paused = await until(lambda p: p.get("type") == "telemetry" and p["tasks"]["l"].get("can_resume"))
             run_id = paused["tasks"]["l"]["run_id"]
             assert paused["task_busy"] and not paused["can_set_initial_pose"]
+            assert not paused["tasks"]["l"]["can_set_cleaning_speed"]
+            await send(dict(op="task", request_id="paused-speed", task_type="l", action="set_cleaning_speed", value=0))
+            rejected = await until(lambda p: p.get("request_id") == "paused-speed")
+            assert not rejected["success"] and statuses["l"]["cleaning_speed"] == 75
             await send(dict(op="task", request_id="resume", task_type="l", action="resume", run_id=run_id))
             await until(lambda p: p.get("request_id") == "resume" and p.get("success") and not p.get("pending"))
             assert statuses["l"]["run_id"] == run_id and statuses["l"]["phase"] == "FOLLOW"

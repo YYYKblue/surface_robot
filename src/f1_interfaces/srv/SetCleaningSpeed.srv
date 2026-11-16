@@ -1,0 +1,7 @@
+# Operator scale, integer 0..100. Controller maps to (value + 1) // 2
+# main-motor PWM percent (0..50), for stable along-wall assistance only.
+# Zero disables assistance, not brush propulsion or heading correction.
+int32 value
+---
+bool success
+string message

@@ -5,13 +5,15 @@ import time
 import pytest
 
 try:
-    from PySide6.QtCore import QPointF, QPoint, Qt
+    from PySide6.QtCore import QPointF, QPoint, Qt, QEvent
+    from PySide6.QtGui import QMouseEvent
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication, QTabWidget
+    from PySide6.QtWidgets import QApplication, QTabWidget, QStyle, QStyleOptionSlider
 except ImportError:
-    from PyQt5.QtCore import QPointF, QPoint, Qt
+    from PyQt5.QtCore import QPointF, QPoint, Qt, QEvent
+    from PyQt5.QtGui import QMouseEvent
     from PyQt5.QtTest import QTest
-    from PyQt5.QtWidgets import QApplication, QTabWidget
+    from PyQt5.QtWidgets import QApplication, QTabWidget, QStyle, QStyleOptionSlider
 
 from operator_app.map_canvas import MapCanvas
 from operator_app.transport import SocketWorker
@@ -90,12 +92,14 @@ def test_mock_workflow_localization_start_completion_and_stale_gate(app, kind, e
     window = OperatorWindow("unused", mock=True)
     window.show()
     try:
-        wait_until(lambda: bool(window.telemetry) and window.forward_boost_button.isEnabled())
+        wait_until(lambda: bool(window.telemetry) and window.cleaning_speed_slider.isEnabled())
         window.task_combo.setCurrentIndex(window.task_combo.findData(kind))
-        assert window.forward_boost_button.isEnabled()
-        window.forward_boost_button.click()
-        wait_until(lambda: window.forward_boost_button.isChecked() and not window.pending_requests)
-        assert window.forward_boost_button.isChecked()
+        assert window.cleaning_speed_slider.isEnabled()
+        window.cleaning_speed_slider.setValue(75)
+        window.cleaning_speed_slider.sliderReleased.emit()
+        wait_until(lambda: window.telemetry["tasks"][kind]["cleaning_speed"] == 75 and not window.pending_requests)
+        assert window.cleaning_speed_slider.value() == 75
+        assert window.telemetry["tasks"][kind]["forward_boost_percent"] == 38
         assert not window.task_buttons["start"].isEnabled()
         window.pose_button.setChecked(True)
         window._pose_selected(dict(x=1., y=1., yaw=0., map_revision=1))
@@ -105,7 +109,7 @@ def test_mock_workflow_localization_start_completion_and_stale_gate(app, kind, e
         wait_until(lambda: window.task_buttons["start"].isEnabled(), timeout=4.)
         assert window.task_buttons["start"].isEnabled()
         window._task("start")
-        assert not window.forward_boost_button.isEnabled()
+        assert not window.cleaning_speed_slider.isEnabled()
         assert not window.task_buttons["start"].isEnabled()
         assert not window.drive_buttons["FORWARD"].isEnabled()
         wait_until(lambda: "任务完成" in window.task_status.text(), timeout=12.)
@@ -233,49 +237,171 @@ def test_pause_resume_cancel_follow_robot_state(app, monkeypatch):
         window.close()
 
 
-def test_forward_boost_button_tracks_confirmed_state_and_locks(app, monkeypatch):
+def speed_window(monkeypatch):
     monkeypatch.setattr(SocketWorker, "start", lambda self: None)
     window = OperatorWindow("unused")
+    window._message(dict(type="hello", client_id="test", capabilities=[
+        "task_selection", "initial_pose", "start_conditions", "cleaning_speed_v1"]))
+    task = dict(map_id="map-a", fresh=True, phase="IDLE", run_id="", can_start=True,
+                cleaning_speed=0, forward_boost_percent=0,
+                forward_boost_enabled=False, forward_boost_active=False,
+                forward_boost_reason="disabled", can_set_cleaning_speed=True)
+    state = dict(type="telemetry", active_client="test", task_busy=False, active_tasks=[],
+                 localization=dict(map_id="map-a", fresh=True), tasks=dict(l=task))
+    window._message(state)
+    window.worker._take_outgoing()
+    return window, task, state
+
+
+def test_cleaning_speed_tracks_confirmed_state_and_locks(app, monkeypatch):
+    window, task, state = speed_window(monkeypatch)
     try:
-        window._message(dict(type="hello", client_id="test", capabilities=[
-            "task_selection", "initial_pose", "start_conditions", "forward_boost"]))
-        task = dict(map_id="map-a", fresh=True, phase="IDLE", run_id="", can_start=True,
-                    forward_boost_enabled=False, forward_boost_active=False,
-                    forward_boost_reason="disabled", can_set_forward_boost=True)
-        state = dict(type="telemetry", active_client="test", task_busy=False, active_tasks=[],
-                     localization=dict(map_id="map-a", fresh=True), tasks=dict(l=task))
-        window._message(state)
-        assert window.forward_boost_button.isEnabled()
-        window.forward_boost_button.click()
+        assert window.cleaning_speed_slider.isEnabled()
+        assert window.cleaning_speed_slider.minimum() == 0
+        assert window.cleaning_speed_slider.maximum() == 100
+        assert window.cleaning_speed_slider.focusPolicy() == Qt.NoFocus
+        window.cleaning_speed_slider.setValue(75)
+        window.cleaning_speed_slider.sliderReleased.emit()
         sent = window.worker._take_outgoing()[-1]
-        assert sent["task_type"] == "l" and sent["action"] == "set_forward_boost" and sent["enabled"] is True
-        assert not window.forward_boost_button.isChecked()  # Not optimistic.
-        assert not window.forward_boost_button.isEnabled()
+        assert sent["task_type"] == "l" and sent["action"] == "set_cleaning_speed" and sent["value"] == 75
+        assert "已确认：0 / 100" in window.cleaning_speed_confirmed.text()
+        assert "等待机器人确认" in window.forward_boost_status.text()
+        assert not window.cleaning_speed_slider.isEnabled()
         assert not window.task_buttons["start"].isEnabled()
         window._message(dict(type="reply", request_id=sent["request_id"], success=False, message="rejected"))
-        assert not window.forward_boost_button.isChecked()
-        task.update(forward_boost_enabled=True, forward_boost_reason="inactive_task")
+        assert window.cleaning_speed_slider.value() == 0
+        task.update(cleaning_speed=75, forward_boost_percent=38,
+                    forward_boost_enabled=True, forward_boost_reason="inactive_task")
         window._message(state)  # Also represents readback after reconnect.
-        assert window.forward_boost_button.isChecked()
+        assert window.cleaning_speed_slider.value() == 75
+        assert "38 挡" in window.cleaning_speed_confirmed.text()
         for phase in ("ACQUIRING", "FOLLOW", "PAUSED"):
-            task.update(phase=phase, can_set_forward_boost=False)
+            task.update(phase=phase, can_set_cleaning_speed=False)
             state.update(task_busy=phase != "PAUSED")
             window._message(state)
-            assert not window.forward_boost_button.isEnabled()
-            assert window.forward_boost_button.isChecked()
-        task.update(phase="CANCELLED", can_set_forward_boost=True)
+            assert not window.cleaning_speed_slider.isEnabled()
+            assert window.cleaning_speed_slider.value() == 75
+        task.update(phase="CANCELLED", can_set_cleaning_speed=True)
         state.update(task_busy=False)
         window._message(state)
-        assert window.forward_boost_button.isEnabled()
+        assert window.cleaning_speed_slider.isEnabled()
         window.last_telemetry_at = time.monotonic()-2
         window._refresh_controls()
-        assert not window.forward_boost_button.isEnabled()
-        assert "未知" in window.forward_boost_button.text()
+        assert not window.cleaning_speed_slider.isEnabled()
+        assert "未知" in window.cleaning_speed_confirmed.text()
         window._message(state)
-        window.capabilities.discard("forward_boost")
+        window.capabilities.discard("cleaning_speed_v1")
+        window.capabilities.add("forward_boost")
         window._refresh_controls()
-        assert not window.forward_boost_button.isEnabled()
+        assert not window.cleaning_speed_slider.isEnabled()
         assert "更新" in window.forward_boost_status.text()
+    finally:
+        window.close()
+
+
+def test_cleaning_speed_drag_previews_once_then_waits_for_both_reply_and_readback(app, monkeypatch):
+    window, task, state = speed_window(monkeypatch)
+    try:
+        window.cleaning_speed_slider.setSliderDown(True)
+        for value in (20, 37, 51, 75):
+            window.cleaning_speed_slider.setValue(value)
+            window._message(state)
+            assert window.cleaning_speed_slider.value() == value
+            assert "已确认：0 / 100" in window.cleaning_speed_confirmed.text()
+        assert not window.worker._take_outgoing()
+        assert not window.task_buttons["start"].isEnabled()
+        window.cleaning_speed_slider.setSliderDown(False)
+        requests = [p for p in window.worker._take_outgoing() if p.get("action") == "set_cleaning_speed"]
+        assert len(requests) == 1 and requests[0]["value"] == 75
+        sent = requests[0]
+        window._message(dict(type="reply", request_id=sent["request_id"], success=True))
+        assert window.pending_requests and not window.task_buttons["start"].isEnabled()
+        assert window.cleaning_speed_slider.value() == 75
+        task.update(cleaning_speed=74, forward_boost_percent=37)
+        window._message(state)
+        assert window.pending_requests  # A different raw value cannot confirm it.
+        task.update(cleaning_speed=75, forward_boost_percent=38)
+        window._message(state)
+        assert not window.pending_requests and window.task_buttons["start"].isEnabled()
+        assert window.cleaning_speed_slider.value() == 75
+    finally:
+        window.close()
+
+
+def test_cleaning_speed_mouse_drag_submits_only_on_release(app, monkeypatch):
+    window, task, state = speed_window(monkeypatch)
+    try:
+        window.show()
+        window.findChild(QTabWidget).setCurrentIndex(1)
+        QTest.qWait(20)
+        slider = window.cleaning_speed_slider
+        option = QStyleOptionSlider()
+        slider.initStyleOption(option)
+        handle = slider.style().subControlRect(QStyle.CC_Slider, option, QStyle.SC_SliderHandle, slider)
+        start = handle.center()
+        end = QPoint(slider.width() - handle.width(), start.y())
+        QTest.mousePress(slider, Qt.LeftButton, pos=start)
+        assert slider.isSliderDown()
+        # The offscreen platform does not retain button state for QTest's
+        # cursor-only mouseMove. Deliver the real drag event with LeftButton.
+        app.sendEvent(slider, QMouseEvent(QEvent.MouseMove, QPointF(end),
+                                         Qt.NoButton, Qt.LeftButton, Qt.NoModifier))
+        window._message(state)
+        assert slider.value() > 50
+        value = slider.value()
+        assert window.cleaning_speed_value.value() == value
+        assert not any(p.get("action") == "set_cleaning_speed" for p in window.worker._take_outgoing())
+        QTest.mouseRelease(slider, Qt.LeftButton, pos=end)
+        requests = [p for p in window.worker._take_outgoing() if p.get("action") == "set_cleaning_speed"]
+        assert len(requests) == 1 and requests[0]["value"] == value
+        assert not slider.isEnabled()
+    finally:
+        window.close()
+
+
+def test_cleaning_speed_typed_text_survives_telemetry_until_enter(app, monkeypatch):
+    window, task, state = speed_window(monkeypatch)
+    try:
+        window.show()
+        window.findChild(QTabWidget).setCurrentIndex(1)
+        window.cleaning_speed_value.setFocus()
+        QTest.qWait(20)
+        window.cleaning_speed_value.lineEdit().selectAll()
+        QTest.keyClicks(window.cleaning_speed_value.lineEdit(), "7")
+        window._message(state)
+        QTest.qWait(120)
+        assert window.cleaning_speed_value.lineEdit().text().startswith("7")
+        QTest.keyClicks(window.cleaning_speed_value.lineEdit(), "5")
+        window._message(state)
+        assert window.cleaning_speed_value.lineEdit().text().startswith("75")
+        assert not any(p.get("action") == "set_cleaning_speed" for p in window.worker._take_outgoing())
+        QTest.keyClick(window.cleaning_speed_value, Qt.Key_Return)
+        requests = [p for p in window.worker._take_outgoing() if p.get("action") == "set_cleaning_speed"]
+        assert len(requests) == 1 and requests[0]["value"] == 75
+    finally:
+        window.close()
+
+
+@pytest.mark.parametrize("value", [0, 1, 50, 99, 100])
+def test_cleaning_speed_numeric_commit_sends_raw_integer(app, monkeypatch, value):
+    window, task, state = speed_window(monkeypatch)
+    try:
+        task.update(cleaning_speed=42, forward_boost_percent=21)
+        window._message(state)
+        window.cleaning_speed_value.setValue(value)
+        assert not window.worker._take_outgoing()
+        window.cleaning_speed_value.editingFinished.emit()
+        sent = window.worker._take_outgoing()[-1]
+        assert sent["action"] == "set_cleaning_speed" and sent["value"] == value
+        window._message(dict(type="reply", request_id=sent["request_id"], success=False, pending=True))
+        assert window.pending_requests and not window.cleaning_speed_slider.isEnabled()
+        window._status("连接失败：测试断线")
+        assert not window.pending_requests
+        window._message(dict(type="hello", client_id="test", capabilities=["cleaning_speed_v1"]))
+        task.update(cleaning_speed=37, forward_boost_percent=19)
+        window._message(state)
+        assert window.cleaning_speed_slider.value() == 37
+        assert not any(p.get("action") == "set_cleaning_speed" for p in window.worker._take_outgoing())
     finally:
         window.close()
 

@@ -1,12 +1,14 @@
 # surface_ws：水面清洗机器人 ROS 2 工作空间
 
+2026-11-16：清洗速度已改为 App 0–100 滑条，由控制器映射为 0–50 挡。已同步 Nano 并编译四个相关包，Nano 无硬件验证 267 项通过，运行网关已提供 `cleaning_speed_v1`。Windows 使用源码命令行启动，本次未生成 exe。部署时设备连接情况和验证边界见[清洗速度部署记录](docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#2026-11-16-nano-部署验证)。
+
 2026-11-12：Windows App 新增水下 H7 的独立箭头控制，可与水面 W/A/S/D 同时操作。Nano 水下服务使用 `:8766`、USB 转 RS485，不依赖 ROS；水面链路保持 `:8765`。部署、协议和双机操作见 [under_control](under_control/README.md)。
 
 人工暂停续跑、取消及地图删除／卸载的接口和使用边界见[功能说明](docs/TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
 
-更新：2026-11-12，依据当前源码、启动文件和默认配置整理。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
+更新：2026-11-16，依据当前源码、启动文件和默认配置整理。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
 
-F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主电机输出支持整数 0–100，Windows App 提供滑条、数值输入和快捷值，反馈区分设定值、固件报告值与目标 PWM；RC 原始通道独立用于诊断。旧固件协议会明确阻止控制。新标度 25% 为 PWM 偏移 100 μs，旧 25 档为 125 μs；自主清洗首批仍固定使用新 25%，动作状态机未变，需重新进行实船标定。接口包、桥接、网关、依赖节点和 Windows App 应一起升级，见[协议与迁移](src/f1_nano_bridge/README.md#f103-v3-连续输出2026-11-11)。
+F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主电机输出支持整数 0–100，Windows App 提供滑条、数值输入和快捷值，反馈区分设定值、固件报告值与目标 PWM；RC 原始通道独立用于诊断。旧固件协议会明确阻止控制。新标度 25% 为 PWM 偏移 100 μs，旧 25 档为 125 μs；自主清洗的纠偏、靠近和换边保留新 25% 输出，沿墙前进辅助由 App 0–100 设置映射为 0–50 输出，实际效果需实船验证。接口包、桥接、网关、依赖节点和 Windows App 应一起升级，见[协议与迁移](src/f1_nano_bridge/README.md#f103-v3-连续输出2026-11-11)。
 
 项目包含 PAVO2 纯雷达建图、固定地图定位、F103 串口控制、矩形四边清洗、开放多段直墙清洗和 WebSocket 操作员网关。历史配置加载修复基线为 `9db6798`。已记录的软件回归、现场反馈及后续验收项见[开发与验收记录](docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#7-测试和证据要求)；历史基本测试反馈不代表新增左转换边或本次v3输出已完成实船验收。
 
@@ -26,7 +28,7 @@ F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主�
 | [`f1_operator_gateway`](src/f1_operator_gateway/README.md) | 水面 App 的 WebSocket 手动控制、任务服务和遥测入口（8765） |
 | [`under_control/`](under_control/README.md) | 独立水下 H7 网关、会话与 RS485 桥（8766），由 systemd 托管，不依赖 ROS |
 | [`operator_app/`](operator_app/README.md) | Qt 操作员界面，包含建图/选图、底图、实时位姿、实际轨迹、手动输入和任务按钮 |
-| `maps/` | 地图三件套直接存放于此；被 Git 忽略，克隆仓库不包含，当前部署同步命令会传输 |
+| `maps/` | 地图三件套直接存放于此；被 Git 忽略，克隆仓库不包含；日常同步保留 Nano 地图，首次部署或明确更新地图时单独传输 |
 | `docs/`、`tools/` | 开发验收、历史试验记录和离线路线示意工具 |
 
 仓库共有八个 ROS 功能包，另有独立的 `under_control/` Python 服务。PAVO2 驱动与 SDK 已迁入 `f1_lidar_driver`；本地固件源码位于 `under/F103firmware` 与 `under/H7firmware`。`under/` 和地图目录被 Git 忽略，重新克隆后需另行准备；本页测试使用当前 PC 本地固件副本。Nano 双机部署同步 `src/`、`under_control/`、文档和工具，不需要 Windows App 或固件工程，命令见 [Nano 部署指南](DEPLOY_NANO.md#3-pc把源码和文档传到-nano)。Nano 编译与旧雷达服务迁移流程见[驱动说明](src/f1_lidar_driver/README.md)。旧 ZMQ 网关和旧 UI 协议已移除。
@@ -70,7 +72,7 @@ App 的受管入口支持无地图待机、纯雷达建图、命名保存、地�
 
 受管模式下，`rectangle_config` / `l_config` 留空会加载各清洗包的默认 YAML。标准配置中两个控制器都使用 `map → base_link` TF 并要求定位就绪；App 的共享定位正常不代表每个控制器已取得有效位姿。2026-11-09 已修复空参数导致 YAML 被跳过的问题并在 Nano 验证，操作者随后反馈“目前测试正常”。参数核对与排查见[定位正常但开放任务不能启动](DEPLOY_NANO.md#定位正常但开放任务不能启动)，具体证据范围见[修复验证记录](src/f1_operator_gateway/README.md#控制器配置加载修复验证2026-11-09)。
 
-当前沿墙默认中心墙距为 **32–36 cm**、目标 **33 cm**，滚刷与第五路侧推幅度均为 **50%**。默认沿墙前进依靠滚刷，四主电机作航向纠偏。Windows App 可在任务开始前开启“主电机提速”：稳定沿墙且船中心沿墙方向距当前墙端大于 **80 cm** 时，四电推以 **25% 输出、BOTH** 辅助前进；进入 80 cm 内（含边界）后本墙段不再提速，纠偏仍保留。运行中及暂停时不能修改开关，控制器重启/重新加载地图后默认关闭。船中心距当前墙端 **40 cm** 时关刷并进入换边，末段结束任务。App 只绘制实际轨迹，显示精简不改变这些控制参数。具体规则见[清洗控制说明](src/f1_pool_cleaning/README.md)。
+当前沿墙默认中心墙距为 **32–36 cm**、目标 **33 cm**，滚刷与第五路侧推幅度均为 **50%**。默认沿墙前进依靠滚刷，四主电机作航向纠偏。Windows App 的“清洗速度”滑条在任务开始前选择 **0–100**，Nano 控制器按 **`(value + 1) // 2`** 映射为 **0–50** 挡：50 对应原提速输出 25，100 对应输出 50，默认 0 关闭辅助。稳定沿墙且船中心沿墙方向距当前墙端大于 **80 cm** 时，四电推以所选映射值、BOTH 辅助前进；进入 80 cm 内（含边界）后本墙段不再提速，纠偏仍保留。运行中及暂停时不能调整，控制器重启/重新加载地图后恢复 0。纠偏、靠近和换边仍使用原有 25 输出，滑条数值不表示实测船速。本次 Windows 更新使用源码命令行启动，不打包 exe，见 [App 启动说明](operator_app/README.md#命令行启动)。船中心距当前墙端 **40 cm** 时关刷并进入换边，末段结束任务。App 只绘制实际轨迹，显示精简不改变这些控制参数。具体规则见[清洗控制说明](src/f1_pool_cleaning/README.md)。
 
 App 的[诊断日志](operator_app/README.md#诊断日志)保留最近 2000 条记录并支持导出，网关暂存最近 50 条停止/桥状态事件供重连补读。开机服务先等待校时，允许稳定的离线本地时间回退；运行中时钟故障触发停机、重启至无地图待机，不恢复旧任务，详见[服务部署](DEPLOY_NANO.md#app-建图选图与开机服务)。
 
@@ -78,7 +80,7 @@ App 的[诊断日志](operator_app/README.md#诊断日志)保留最近 2000 条�
 
 ## 构建
 
-以下仅构建 ROS 包，在工作空间根目录执行；Nano 的依赖安装和源码同步见[完整部署指南](DEPLOY_NANO.md)。`under_control` 不由 colcon 构建或测试，使用独立的 Python 依赖与 systemd 启动流程，见[水下服务说明](under_control/README.md)。
+以下为 PC 开发工作空间的 ROS 符号链接构建示例，在工作空间根目录执行。Nano 已使用复制安装，应按[完整部署指南](DEPLOY_NANO.md#5-nano编译)构建，不直接套用下面的 `--symlink-install`。`under_control` 不由 colcon 构建或测试，使用独立的 Python 依赖与 systemd 启动流程，见[水下服务说明](under_control/README.md)。
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -178,6 +180,7 @@ colcon test-result --verbose
 |---|---|
 | 代码职责、入口选择、参数与状态流 | [项目架构与代码导读](docs/ARCHITECTURE.md) |
 | Nano 首次部署、依赖和故障处理 | [DEPLOY_NANO.md](DEPLOY_NANO.md) |
+| 清洗速度映射、当前 Nano 部署和验证结果 | [2026-11-16 部署记录](docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#2026-11-16-nano-部署验证) |
 | 水下 H7 协议、双机按键、可缺席自启动 | [under_control README](under_control/README.md) |
 | 水下 Nano 部署状态、验证边界与旧桥回退 | [2026-11-12 部署记录](docs/UNDER_CONTROL_NANO_DEPLOYMENT.md) |
 | 日常建图、扫描检查、保存地图 | [START_LIDAR.md](START_LIDAR.md) |

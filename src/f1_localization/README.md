@@ -4,6 +4,8 @@
 
 ## 独立构建与启动
 
+下面为 PC 开发工作空间的符号链接安装示例。Nano 沿用复制安装，构建方式见 [Nano 编译步骤](../../DEPLOY_NANO.md#5-nano编译)；两种方式不要在同一已有构建目录中直接混用。
+
 ```bash
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-up-to f1_localization \
@@ -61,15 +63,18 @@ ros2 launch f1_l_cleaning l_bringup.launch.py \
 
 本次保留运动过滤的距离/角度阈值、扫描采样率、约束采样率及就绪门槛，便于对照效果。更频繁的节点插入和优化会增加计算负担，需在 Nano 上实测。调优不需要机器人自动转动。
 
-部署时在目标机器重新构建本包并重启定位：
+在已有依赖已安装的 Nano 更新定位包时，先确认无任务和手动控制并停止拥有该定位进程的 operator 服务，再从新终端构建；这里只加载系统 ROS：
 
 ```bash
+cd /home/nvidia/surface_ws
 source /opt/ros/humble/setup.bash
-source install/local_setup.bash
-colcon build --symlink-install --packages-select f1_localization \
-  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
+CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
+  colcon build --base-paths src --executor sequential --packages-select f1_localization \
+  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 -DAMENT_CMAKE_SYMLINK_INSTALL=OFF
 source install/local_setup.bash
 ```
+
+验证通过后恢复 operator 服务，重新加载地图和初始位姿；独立启动的定位则重新运行原 launch。这里只说明定位包更新流程，本次清洗速度部署没有修改或重启单独的雷达服务。
 
 launch 使用安装目录中的 Lua 配置；`localization_config:=...yaml` 只覆盖定位管理器参数，不能覆盖上述 Cartographer 参数。已有定位进程不会自动重载配置。
 

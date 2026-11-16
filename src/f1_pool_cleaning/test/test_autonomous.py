@@ -7,7 +7,7 @@ import pytest
 from f1_pool_cleaning.autonomous import AutonomousMission, ApproachConfig
 from f1_pool_cleaning.config import Config
 from f1_pool_cleaning.geometry import PoolModel, wrap
-from f1_pool_cleaning.mission import Feedback, Pose
+from f1_pool_cleaning.mission import Feedback, Pose, command_fields
 from f1_pool_cleaning.perception import Observation
 
 
@@ -44,6 +44,8 @@ def run_boat(mission, initial, maximum=8000):
             visits.append(mission.edge.id)
         if effort:
             motions.append((before, effort.direction, effort.side_left_percent, effort.brush_percent))
+            assert command_fields(effort, mission.c)["speed_percent"] == (
+                mission.forward_boost_percent if effort.forward_boost else 25)
             if before in mission.APPROACH_PHASES + ('ACQUIRE_WALL',):
                 assert effort.brush_percent == 0
             forward = .25 if effort.direction == 1 else -.25 if effort.direction == 2 else 0.
@@ -334,7 +336,7 @@ def test_resume_at_each_route_phase_preserves_progress_and_completes(closed):
     """Run the kinematic route with a 60 s pause in every encountered phase."""
     m = (system() if closed else AutonomousMission(system().c,
          PoolModel.from_polyline([(0., 0.), (4., 0.), (4., 4.)])))
-    m.set_forward_boost(True)
+    assert m.set_cleaning_speed(75)[0]
     original = m.update
     offset, paused = 0, set()
 
@@ -350,6 +352,7 @@ def test_resume_at_each_route_phase_preserves_progress_and_completes(closed):
             progress = deepcopy((m.remaining_edges, m.cleaned_by_edge, m.finished_edges,
                                  m.forward_boost_cutoff_reached, m.start_s))
             assert m.pause(f, now)[0]
+            assert not m.set_cleaning_speed(100)[0]
             assert original(f, now+10_000_000_000) is None
             offset += 60_000_000_000
             now += 60_000_000_000
@@ -357,6 +360,7 @@ def test_resume_at_each_route_phase_preserves_progress_and_completes(closed):
                         wall=replace(f.wall, stamp_ns=now) if f.wall else None)
             assert m.resume(f, now)[0], m.resume_error(f, now)
             assert m.phase == phase
+            assert m.cleaning_speed == 75 and m.forward_boost_percent == 38
             assert progress == (m.remaining_edges, m.cleaned_by_edge, m.finished_edges,
                                 m.forward_boost_cutoff_reached, m.start_s)
         return original(f, now)

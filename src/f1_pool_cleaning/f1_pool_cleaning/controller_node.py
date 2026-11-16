@@ -15,7 +15,7 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_msgs.msg import String
 from std_srvs.srv import Trigger, SetBool
 from f1_interfaces.msg import ActuatorCommand, EdgeTarget, WallObservation
-from f1_interfaces.srv import SetEdge
+from f1_interfaces.srv import SetEdge, SetCleaningSpeed
 from f1_pool_cleaning.ros_support import stamp, stamp_ns, from_observation_message
 
 from .config import Config
@@ -148,6 +148,7 @@ class PoolController(Node):
             self.create_service(Trigger, "/pool_cleaning/cancel", self._cancel),
             self.create_service(SetEdge, "/pool_cleaning/set_edge", self._set_edge),
             self.create_service(SetBool, "/pool_cleaning/set_forward_boost", self._set_forward_boost),
+            self.create_service(SetCleaningSpeed, "/pool_cleaning/set_cleaning_speed", self._set_cleaning_speed),
         ]
         steady = Clock(clock_type=ClockType.STEADY_TIME)
         self.timer = self.create_timer(.02, self._tick, clock=steady)
@@ -480,6 +481,11 @@ class PoolController(Node):
 
     def _set_forward_boost(self, request, response):
         response.success, response.message = self.mission.set_forward_boost(request.data)
+        self._status()
+        return response
+
+    def _set_cleaning_speed(self, request, response):
+        response.success, response.message = self.mission.set_cleaning_speed(request.value)
         self._status()
         return response
 

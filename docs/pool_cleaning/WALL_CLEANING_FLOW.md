@@ -2,9 +2,9 @@
 
 2026-11-08 开放路线扩展：地图可生成多段直墙链；原右转保持不变，左转新增 `LEFT_EXIT_WALL → LEFT_SHIFT_TO_ENTRY → TURN_LEFT_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`。换边期间关刷、旧墙目标无效，平移用位姿闭环，转后重新关联墙。未增加相邻转角和船体空间检查，原定位/租约/期限保护保留。下图的后退右推路径对应右转；开放路线遇左转走新增分支，详见 [开放任务说明](../../src/f1_l_cleaning/README.md)。
 
-2026-11-08 增加沿墙前进辅助；2026-11-11 适配 F103 v3，本文主电机 25% 指新标度 PWM 偏移100 μs，旧25档为125 μs，需重新实船标定。沿墙默认由 50% 滚刷前向推进；任务开始前可启用四主电机 25% 输出前进辅助。仅稳定 `FOLLOW`、无需纠偏且船中心距当前墙端大于 0.80 m 时提速；进入近端后本墙段锁定关闭，矩形起始边补洗同时检查实际结束位置。运行中和暂停时开关锁定；控制器重启/换图后默认关闭。纠偏、起点接近及换边保留原逻辑。
+2026-11-16 清洗速度改为 App 整数 0–100，由控制器按 `(value + 1) // 2` 映射为沿墙前进辅助输出 0–50。默认 0 关闭辅助，沿墙由 50% 滚刷前向推进；App 50 对应原提速输出 25，100 对应 50。本文主电机 25% 指 F103 v3 新标度 PWM 偏移 100 μs，旧 25 档为 125 μs，数值不表示实测船速。仅稳定 `FOLLOW`、无需纠偏且船中心距当前墙端大于 0.80 m 时提速；进入近端后本墙段锁定关闭，矩形起始边补洗同时检查实际结束位置。仅任务开始前可设置，运行和暂停时锁定；控制器重启/换图后恢复 0。纠偏、起点接近及换边保留原逻辑和 25 输出。
 
-核对：2026-11-08，源码基线 `0c0e4e2`。带地图任务使用 `AutonomousMission` 射线选墙及简单靠近，随后复用 `Mission` 沿墙与相邻换边。没有路径搜索、地图足迹或雷达环境碰撞门控，靠近阶段不绕障；定位、控制租约、通信期限、停止和取消仍生效。基本测试反馈与软件回归记录见[开发与验收记录](DEVELOPMENT_AND_ACCEPTANCE.md#7-测试和证据要求)。
+清洗速度接口核对：2026-11-16；`0c0e4e2` 为 2026-11-08 路线说明的历史源码基线。带地图任务使用 `AutonomousMission` 射线选墙及简单靠近，随后复用 `Mission` 沿墙与相邻换边。没有路径搜索、地图足迹或雷达环境碰撞门控，靠近阶段不绕障；定位、控制租约、通信期限、停止和取消仍生效。基本测试反馈见[开发与验收记录](DEVELOPMENT_AND_ACCEPTANCE.md#7-测试和证据要求)，本次数值功能已完成[Nano 部署验证](DEVELOPMENT_AND_ACCEPTANCE.md#2026-11-16-nano-部署验证)，实机辅助推进效果仍待验收。
 
 ## 总体流程
 
@@ -89,8 +89,8 @@ flowchart TD
     WALL -- 是 --> DIST{墙距是否在\n0.32–0.36 m?}
     DIST -- 否 --> AW
     DIST -- 是 --> HEADING{航向误差处于哪个区间?}
-    HEADING -- 绝对角度 ≤ 3° --> BOOST{提速已启用且距结束位置 > 80 cm\n本墙段尚未进入近端区?}
-    BOOST -- 是 --> ASSIST[FOLLOW\n滚刷 50%\n四主电机 FORWARD 25% 输出 BOTH]
+    HEADING -- 绝对角度 ≤ 3° --> BOOST{清洗速度 > 0 且距结束位置 > 80 cm\n本墙段尚未进入近端区?}
+    BOOST -- 是 --> ASSIST[FOLLOW\n滚刷 50%\n四主电机 FORWARD 映射输出 1–50 BOTH]
     BOOST -- 否 --> FOLLOW[FOLLOW\n滚刷 50%\n主电机 STOP\n第五路关闭]
     HEADING -- 3° < 绝对角度 ≤ 10° --> CORRECT1[CORRECT_HEADING\n纠偏 + 滚刷 50%]
     HEADING -- 绝对角度 > 10° --> CORRECT2[CORRECT_HEADING\n纠偏，滚刷关闭]
@@ -133,7 +133,7 @@ flowchart TD
 | 起始点侧移 | `AutonomousMission._approach()`：第五路按侧移方向输出 ±50%；到达范围或切换动作时仍先停止。 |
 | 左墙距离控制 | `Mission._update_edge()`：墙距大于 `0.36 m` 时第五路 `+50%`，小于 `0.32 m` 时 `-50%`，在区间内关闭第五路。 |
 | 航向纠偏 | `Mission._update_edge()`：墙角绝对值超过 `3°` 进入 `CORRECT_HEADING`；正角发 `direction=3`，负角发 `direction=4`。 |
-| 直行推进 | 默认 `50%` 滚刷；启动前启用提速后，仅稳定 `FOLLOW` 且距墙端 > 0.80 m 时主电机 FORWARD 25% 输出、BOTH。进入近端后本墙段锁定关闭；新位姿可在没有新雷达帧时撤销辅助，旧命令期限不延长。矩形补洗以墙端和实际完成位置中的较近者门控。超过 `3°` 时 LEFT/RIGHT 纠偏优先；起点接近及换边保持原逻辑。 |
+| 直行推进 | 默认 `50%` 滚刷；启动前清洗速度可选整数 0–100，控制器按 `(value + 1) // 2` 映射为辅助输出 0–50，0 为关闭。非零设置仅在稳定 `FOLLOW` 且距墙端 > 0.80 m 时用于主电机 FORWARD、BOTH。进入近端后本墙段锁定关闭；新位姿可在没有新雷达帧时撤销辅助，旧命令期限不延长。矩形补洗以墙端和实际完成位置中的较近者门控。超过 `3°` 时 LEFT/RIGHT 纠偏优先；纠偏、起点接近及换边保持原有 25 输出。 |
 | 滚刷门控 | 航向绝对值不超过 `10°` 且墙距在稳定区间时开刷 `50%`；纠偏和滚刷可以同时工作。 |
 | 丢墙恢复 | `WAIT_WALL` 最多等待 `1.5 s`；期间输出中位命令，超时转 `PAUSED`。 |
 | 端点判断 | 使用地图边投影的船中心到边端距离；小于等于 `0.40 m` 进入 `EDGE_STOP`。雷达前方观测只作为辅助安全信息。 |
@@ -154,6 +154,8 @@ flowchart TD
 /pool_cleaning/resume               校验条件后继续同一任务
 /pool_cleaning/stop                 旧接口，等同 cancel，结束当前任务
 /pool_cleaning/cancel               取消并清除边关联
+/pool_cleaning/set_cleaning_speed   任务开始前设置原始整数 0–100，映射辅助输出 0–50
+/pool_cleaning/set_forward_boost    旧布尔兼容接口：true→原始值 50，false→0
 /pool_cleaning/command_preview      执行器命令预览；live 模式另经 lease 发往 bridge
 /pool_cleaning/status               状态、原因、边进度和覆盖区间
 ```
@@ -161,5 +163,7 @@ flowchart TD
 射线选墙位于 [geometry.py](../../src/f1_pool_cleaning/f1_pool_cleaning/geometry.py)，简单靠近与路线编排位于 [autonomous.py](../../src/f1_pool_cleaning/f1_pool_cleaning/autonomous.py)，沿墙与换边位于 [mission.py](../../src/f1_pool_cleaning/f1_pool_cleaning/mission.py)。沿墙默认参数位于 [pool_cleaning.yaml](../../src/f1_pool_cleaning/config/pool_cleaning.yaml)，`approach_*` 默认值由 `ApproachConfig` 定义并由控制器声明。
 
 组合入口的定位状态为 `/f1_localization/localization_status`；开放任务的控制接口为 `/l_cleaning/*`。人工 `pause` 可显式 `resume`；`stop/cancel` 结束任务并使断点失效，App 的 `manual_stop` 仅停止手动会话。完整门控和地图管理规则见[功能说明](../TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
+
+`status.cleaning_speed` 是控制器保存的原始选择，`forward_boost_percent` 是对应辅助幅度；仅 `forward_boost_active=true` 表示当前有效命令在使用前进辅助，均不代表实测推力。人工暂停／恢复保持原始选择与当前墙段截止状态；重载地图或重启控制器恢复 0。无地图待机尚未启动清洗控制器时，App 的数值设置不可用，需先加载支持该任务的地图。
 
 > 说明：`COMPLETE` 表示本次路线执行结束；`coverage_complete` 单独表示记录的要求区间是否满足覆盖容差；`cleaned_intervals` 的统计基准是左侧滚刷接触中心线，不应单独解释为池底面积覆盖率。实船漂移、角部留白和实际清洁效果仍需现场验收记录。

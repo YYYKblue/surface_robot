@@ -14,7 +14,7 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_msgs.msg import String
 from std_srvs.srv import Trigger, SetBool
 from f1_interfaces.msg import ActuatorCommand, WallObservation
-from f1_interfaces.srv import SetEdge
+from f1_interfaces.srv import SetEdge, SetCleaningSpeed
 from f1_pool_cleaning.ros_support import stamp, to_observation_message
 from f1_pool_cleaning.controller_node import PoolController
 from f1_pool_cleaning.demo import SYNTHETIC_GEOMETRY, sample
@@ -171,6 +171,35 @@ def test_perception_restart_latches_pause(harness):
     h.session = "restarted-perception"
     h.wait(lambda: h.controller.mission.phase == "PAUSED")
     assert "perception restarted" in h.controller.mission.reason
+
+
+def test_numeric_speed_service_maps_raw_value_and_preserves_cutoff(harness):
+    h = harness
+    client = h.peer.create_client(SetCleaningSpeed, "/pool_cleaning/set_cleaning_speed")
+    h.wait(client.service_is_ready)
+    for value in (-1, 101):
+        future = client.call_async(SetCleaningSpeed.Request(value=value))
+        h.wait(future.done)
+        assert not future.result().success
+        assert h.controller.mission.cleaning_speed == 0
+    future = client.call_async(SetCleaningSpeed.Request(value=75))
+    h.wait(future.done)
+    assert future.result().success
+    h.wait(lambda: any(s.get("cleaning_speed") == 75 and s.get("forward_boost_percent") == 38
+                       for s in h.statuses))
+    h.start()
+    h.wait(lambda: any(m.direction == ActuatorCommand.FORWARD and m.speed_percent == 38
+                       and m.brush_enabled for m in h.commands))
+    future = client.call_async(SetCleaningSpeed.Request(value=100))
+    h.wait(future.done)
+    assert not future.result().success
+    assert h.controller.mission.cleaning_speed == 75
+    h.along = h.controller.config.length_m - .8
+    h.wait(lambda: h.controller.mission.forward_boost_cutoff_reached)
+    h.wait(lambda: h.commands[-1].direction == 0 and h.commands[-1].brush_enabled)
+    h.angle = .07
+    h.wait(lambda: h.commands[-1].direction == ActuatorCommand.LEFT)
+    assert h.commands[-1].speed_percent == 25
 
 
 def test_stage2_uses_map_pose_to_select_edge_and_enter_wall_band():

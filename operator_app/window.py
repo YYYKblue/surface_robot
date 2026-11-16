@@ -63,6 +63,8 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.drive_output = {}
         self._control_identity = None
         self.pending_requests = {}
+        self._cleaning_speed_kind = None
+        self._cleaning_speed_editing = False
         self.initial_pose = None
         self.completed_results = {}
         self.seen_completions = set()
@@ -243,11 +245,28 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
             self.task_combo.addItem(TASK_NAMES[kind], kind)
         self.task_combo.currentIndexChanged.connect(self._refresh_controls)
         box.addWidget(self.task_combo)
-        self.forward_boost_button = QPushButton("主电机提速：状态未知")
-        self.forward_boost_button.setCheckable(True)
-        self.forward_boost_button.setEnabled(False)
-        self.forward_boost_button.clicked.connect(self._set_forward_boost)
-        box.addWidget(self.forward_boost_button)
+        box.addWidget(QLabel("清洗速度 · 沿墙前进辅助输出"))
+        speed_row = QHBoxLayout()
+        self.cleaning_speed_slider = QSlider(Qt.Horizontal)
+        self.cleaning_speed_slider.setRange(0, 100)
+        self.cleaning_speed_slider.setSingleStep(1)
+        self.cleaning_speed_slider.setFocusPolicy(Qt.NoFocus)
+        self.cleaning_speed_value = QSpinBox()
+        self.cleaning_speed_value.setRange(0, 100)
+        self.cleaning_speed_value.setSuffix(" / 100")
+        self.cleaning_speed_value.setKeyboardTracking(False)
+        for widget in (self.cleaning_speed_slider, self.cleaning_speed_value):
+            widget.setEnabled(False)
+            widget.valueChanged.connect(self._preview_cleaning_speed)
+        self.cleaning_speed_slider.sliderReleased.connect(self._set_cleaning_speed)
+        self.cleaning_speed_slider.actionTriggered.connect(self._cleaning_speed_action)
+        self.cleaning_speed_value.editingFinished.connect(self._finish_cleaning_speed_edit)
+        speed_row.addWidget(self.cleaning_speed_slider, 1)
+        speed_row.addWidget(self.cleaning_speed_value)
+        box.addLayout(speed_row)
+        self.cleaning_speed_confirmed = QLabel("已确认设置：未知")
+        self.cleaning_speed_confirmed.setWordWrap(True)
+        box.addWidget(self.cleaning_speed_confirmed)
         self.forward_boost_status = QLabel("仅在任务开始前设置；距墙端 80 cm 内关闭前进辅助")
         self.forward_boost_status.setWordWrap(True)
         box.addWidget(self.forward_boost_status)
@@ -324,12 +343,42 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self._send_request("initial_pose", **self.initial_pose)
         self.pose_button.setChecked(False)
 
-    def _set_forward_boost(self, checked):
-        if not self.forward_boost_button.isEnabled():
+    def _show_cleaning_speed(self, value):
+        for widget in (self.cleaning_speed_slider, self.cleaning_speed_value):
+            blocked = widget.blockSignals(True)
+            widget.setValue(value)
+            widget.blockSignals(blocked)
+
+    def _preview_cleaning_speed(self, value):
+        if not self.cleaning_speed_slider.isEnabled():
+            return
+        self._cleaning_speed_editing = True
+        self._show_cleaning_speed(value)
+        self._refresh_controls()
+
+    def _cleaning_speed_action(self, action):
+        # Groove clicks / wheel changes do not emit sliderReleased. Commit after
+        # Qt has propagated sliderPosition to value, but never during a drag.
+        if not self.cleaning_speed_slider.isSliderDown():
+            QTimer.singleShot(0, self._set_cleaning_speed)
+
+    def _finish_cleaning_speed_edit(self):
+        self._set_cleaning_speed()
+        if self.cleaning_speed_value.hasFocus() or self.cleaning_speed_value.lineEdit().hasFocus():
+            self.setFocus(Qt.OtherFocusReason)
+        self._refresh_controls()
+
+    def _set_cleaning_speed(self):
+        if not self.cleaning_speed_slider.isEnabled():
+            return
+        value = self.cleaning_speed_value.value()
+        self._cleaning_speed_editing = False
+        kind = self.task_combo.currentData()
+        if value == self.telemetry.get("tasks", {}).get(kind, {}).get("cleaning_speed"):
+            self._refresh_controls()
             return
         self._clear_manual()
-        self._send_request("task", action="set_forward_boost",
-                           task_type=self.task_combo.currentData(), enabled=bool(checked))
+        self._send_request("task", action="set_cleaning_speed", task_type=kind, value=value)
 
     def _send_request(self, op, **fields):
         packet = self._packet(op, request_id=uuid.uuid4().hex, **fields)
@@ -355,6 +404,12 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         kind = self.task_combo.currentData()
         task = tasks.get(kind, {})
         task_fresh = task.get("fresh") is True
+        for request_id, (_, request) in list(self.pending_requests.items()):
+            confirmed_task = tasks.get(request.get("task_type"), {})
+            if (request.get("_speed_acknowledged") and fresh and confirmed_task.get("fresh") is True
+                    and type(confirmed_task.get("cleaning_speed")) is int
+                    and confirmed_task.get("cleaning_speed") == request.get("value")):
+                self.pending_requests.pop(request_id)
         local_pending = bool(self.pending_requests)
         busy = packet.get("task_busy", False)
         selecting = self.pose_button.isChecked()
@@ -394,31 +449,45 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.brush_button.setEnabled(not locked)
         self.thrust_button.setEnabled(not locked and packet.get("state", {}).get("allow_fifth_thruster") is True)
         self.task_combo.setEnabled(fresh and operator and not busy and not local_pending and not selecting)
-        boost_supported = "forward_boost" in self.capabilities
-        boost_known = fresh and task_fresh and type(task.get("forward_boost_enabled")) is bool
-        boost_enabled = boost_known and task["forward_boost_enabled"]
-        self.forward_boost_button.setChecked(boost_enabled)
-        self.forward_boost_button.setText("主电机提速：" + (
-            ("开启" if boost_enabled else "关闭") if boost_known else "状态未知"))
-        self.forward_boost_button.setEnabled(bool(boost_supported and boost_known and operator
-            and not busy and not local_pending and not selecting
-            and task.get("can_set_forward_boost") is True))
-        self.forward_boost_button.setToolTip(task.get("forward_boost_setting_error") or
-            "只在任务开始前设置；运行中和暂停期间锁定。四电推以新标度 25% 前进辅助，纠偏优先。")
+        boost_supported = "cleaning_speed_v1" in self.capabilities
+        speed = task.get("cleaning_speed")
+        output = task.get("forward_boost_percent")
+        boost_known = (fresh and task_fresh and type(speed) is int and 0 <= speed <= 100
+                       and type(output) is int and 0 <= output <= 50)
+        editable = bool(boost_supported and boost_known and operator
+                        and not busy and not local_pending and not selecting
+                        and task.get("can_set_cleaning_speed") is True)
+        if kind != self._cleaning_speed_kind or not editable:
+            self._cleaning_speed_editing = False
+        self._cleaning_speed_kind = kind
+        pending_speed = next((p for _, p in self.pending_requests.values()
+                              if p.get("action") == "set_cleaning_speed" and p.get("task_type") == kind), None)
+        if pending_speed:
+            self._show_cleaning_speed(pending_speed["value"])
+        elif boost_known and not self._cleaning_speed_editing:
+            self._show_cleaning_speed(speed)
+        for widget in (self.cleaning_speed_slider, self.cleaning_speed_value):
+            widget.setEnabled(editable)
+            widget.setToolTip(task.get("cleaning_speed_setting_error") or
+                "仅在任务开始前设置；0 关闭前进辅助。0–100 由机器人映射为 0–50 挡，纠偏优先。")
+        self.cleaning_speed_confirmed.setText(
+            f"已确认：{speed} / 100 · 对应辅助挡位：{output} 挡" if boost_known else "已确认设置：未知")
         boost_text = {
-            "disabled": "提速已关闭，沿墙前进依靠滚刷",
-            "active": "已启用，正在输出新标度 25% 前进辅助",
-            "inactive_task": "已启用，等待开始下一次任务",
-            "endpoint_cutoff": "已启用，已进入近端区，本墙段保持滚刷推进",
-            "heading_correction": "已启用，航向纠偏中，前进辅助关闭",
-            "waiting_follow": "已启用，等待稳定沿墙条件",
-        }.get(task.get("forward_boost_reason"), "等待提速状态")
+            "disabled": "前进辅助已关闭，沿墙前进依靠滚刷",
+            "active": f"正在输出 {output} 挡前进辅助",
+            "inactive_task": "等待开始下一次任务",
+            "endpoint_cutoff": "已进入近端区，本墙段保持滚刷推进",
+            "heading_correction": "航向纠偏中，前进辅助关闭",
+            "waiting_follow": "等待稳定沿墙条件",
+        }.get(task.get("forward_boost_reason"), "等待前进辅助状态")
         if not boost_supported:
-            boost_text = "提速功能需要更新 Nano 网关和清洗控制器"
+            boost_text = "清洗速度设置需要更新 Nano 网关和清洗控制器"
         elif not boost_known:
-            boost_text = "提速状态未确认，不能修改"
-        if any(p.get("action") == "set_forward_boost" for _, p in self.pending_requests.values()):
-            boost_text = "提速设置尚未确认，等待机器人回复"
+            boost_text = "清洗速度状态未确认，不能修改"
+        elif pending_speed:
+            boost_text = f"正在设置 {pending_speed['value']} / 100，等待机器人确认"
+        elif self._cleaning_speed_editing:
+            boost_text = f"准备设置 {self.cleaning_speed_value.value()} / 100；结束编辑后提交"
         self.forward_boost_status.setText(boost_text)
         for index in range(self.task_combo.count()):
             option = tasks.get(self.task_combo.itemData(index), {})
@@ -429,7 +498,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.publish_pose_button.setEnabled(self.pose_button.isEnabled() and self.initial_pose is not None)
         if not self.pose_button.isEnabled() and selecting:
             self.pose_button.setChecked(False)
-        self.task_buttons["start"].setEnabled(fresh and supported and operator and not local_pending and not selecting and task.get("can_start") is True)
+        self.task_buttons["start"].setEnabled(fresh and supported and operator and not local_pending and not self._cleaning_speed_editing and not selecting and task.get("can_start") is True)
         active = packet.get("active_tasks", [])
         pending_start = any(p.get("action") in ("start", "resume") for _, p in self.pending_requests.values())
         stopping = any(p.get("action") in ("pause", "stop", "cancel") for _, p in self.pending_requests.values())
@@ -805,6 +874,11 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         if event.type() == QEvent.TouchCancel and hasattr(self, "brush_button"):
             self._stop_all_manual("touch_cancelled")
         if event.type() == QEvent.FocusIn and isinstance(obj, (QLineEdit, QAbstractSpinBox)) and hasattr(self, "brush_button"):
+            if hasattr(self, "cleaning_speed_value") and obj in (
+                    self.cleaning_speed_value, self.cleaning_speed_value.lineEdit()):
+                # keyboardTracking is off: protect uncommitted text from the
+                # telemetry refresh before valueChanged has fired.
+                self._cleaning_speed_editing = True
             self._stop_all_manual("text_input")
         if event.type() == QEvent.WindowDeactivate and obj is self:
             self._stop_all_manual("window_deactivated")
@@ -960,7 +1034,13 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
                                  "网关回复", str(packet.get("message", "操作未完成")),
                                  {"op": packet.get("op"), "success": packet.get("success")})
             if not packet.get("pending"):
-                self.pending_requests.pop(packet.get("request_id"), None)
+                request = self.pending_requests.get(packet.get("request_id"))
+                if request and request[1].get("action") == "set_cleaning_speed" and packet.get("success"):
+                    # The gateway waits for controller status; our telemetry may
+                    # arrive after its RPC reply. Keep the UI locked until readback.
+                    request[1]["_speed_acknowledged"] = True
+                else:
+                    self.pending_requests.pop(packet.get("request_id"), None)
             self._mapping_reply(packet)
             if packet.get("message"):
                 prefix = "操作反馈：" if packet.get("success") else "操作未完成："

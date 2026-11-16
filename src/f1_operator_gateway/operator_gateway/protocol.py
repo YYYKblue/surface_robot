@@ -12,7 +12,7 @@ MAX_PAYLOAD = 128 * 1024
 OPERATIONS = {"hello", "manual_input", "manual_stop", "task", "initial_pose", "mapping"}
 DIRECTIONS = {"STOP", "FORWARD", "REVERSE", "LEFT", "RIGHT"}
 MODES = {"FRONT", "BOTH", "BACK"}
-TASKS = {"start", "pause", "resume", "stop", "cancel", "set_forward_boost"}
+TASKS = {"start", "pause", "resume", "stop", "cancel", "set_forward_boost", "set_cleaning_speed"}
 
 
 @dataclass(frozen=True)
@@ -115,6 +115,11 @@ def decode(raw):
             if not request_id or type(packet.get("enabled")) is not bool:
                 raise ValueError("set_forward_boost requires request_id and boolean enabled")
             result["enabled"] = packet["enabled"]
+        if action == "set_cleaning_speed":
+            value = packet.get("value")
+            if not request_id or type(value) is not int or not 0 <= value <= 100:
+                raise ValueError("set_cleaning_speed requires request_id and integer value in [0,100]")
+            result["value"] = value
         return result
     sequence = packet.get("seq")
     if type(sequence) is not int or not 0 <= sequence < 2**64:

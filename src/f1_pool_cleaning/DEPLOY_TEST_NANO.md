@@ -1,6 +1,8 @@
 # Nano：阶段 4 矩形四边自动清洁一周部署与验收
 
-文档核对：2026-11-08，源码基线 `0c0e4e2`。本页适用于矩形任务；开放多段直墙使用[独立任务入口与地图](../f1_l_cleaning/README.md)。通过 Qt App 操作时，自动任务使用“停止任务”“暂停任务”或“取消任务”；顶部红色“停止手动输出”只释放网关的手动租约。App 建图、选图和共享定位使用[受管入口](../f1_operator_gateway/README.md)，与下述完整 bringup 择一运行。
+清洗速度、暂停续跑和 App 验收步骤核对：2026-11-16；`0c0e4e2` 为历史源码基线。本页适用于矩形任务；开放多段直墙使用[独立任务入口与地图](../f1_l_cleaning/README.md)。通过 Qt App 操作时，自动任务使用“暂停／继续”或“取消”；旧 ROS `/stop` 是取消别名。顶部红色“停止手动输出”只停止手动会话，不取消自动任务。App 建图、选图和共享定位使用[受管入口](../f1_operator_gateway/README.md)，与下述完整 bringup 择一运行。
+
+2026-11-16 已在 Nano 同步并构建数值清洗速度功能，267 项隔离测试通过，实时网关已确认 `cleaning_speed_v1`；部署时 F103 串口缺失、雷达无新鲜数据，尚无此次改动的实机输出验收。完整范围见[部署验证记录](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#2026-11-16-nano-部署验证)，下文是后续验证步骤，不能视为已全部执行。
 
 当前任务使用冻结地图定位，默认 `start_policy=left_ray`：沿船体 +y 射线选墙并锁定最近投影点，关刷旋转、前后移动和侧移进入旧版起始范围；不做路径搜索或环境碰撞检查。随后复用旧版沿墙/换边。矩形仅补齐起始边前段，L 形到终点停且不返回、不补洗。`COMPLETE` 表示路线执行完成，覆盖缺口单独记录。
 
@@ -8,7 +10,7 @@
 
 ## 1. 同步和构建
 
-两个清洗包已合并为 `f1_pool_cleaning`。Nano 第一次升级必须先按 [迁移说明](MIGRATION.md) 停止旧节点、移走两个旧源码包和对应 build/install 目录；普通 rsync 不会自动删除它们。
+历史 `f1_wall_cleaning` 和 `f1_rectangle_cleaning` 已合并为 `f1_pool_cleaning`；当前另有开放墙链适配包 `f1_l_cleaning`。只有仍保留旧包的工作空间，才按 [迁移说明](MIGRATION.md) 处理旧节点和旧生成目录；已迁移的 Nano 无需重复执行。
 
 源码传输与基础依赖按 [Nano 从零部署指南](../../DEPLOY_NANO.md)。2026-10-30 定位已拆至 `f1_localization`，首次升级必须按[定位拆包升级](../../DEPLOY_NANO.md#定位拆包升级)同步新增包、传播旧文件删除并重新生成安装目录，不能只同步本清洗包。
 
@@ -23,13 +25,17 @@ rsync -av --ignore-existing \
   nvidia@192.168.1.188:/home/nvidia/surface_ws/maps/
 ```
 
-Nano 构建、离线测试：
+Nano 构建、离线测试：先确认没有活动任务或手动控制，再停止 `f1-operator.service`；在新终端中只加载系统 ROS 后构建，避免运行期间替换消息接口。沿用当前 Nano 的复制安装方式，不混用 `--symlink-install`。
 
 ```bash
 cd /home/nvidia/surface_ws
 source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-up-to f1_pool_cleaning
+sudo systemctl stop f1-operator.service
+CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
+  colcon build --base-paths src --executor sequential --packages-up-to f1_operator_gateway \
+  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 -DAMENT_CMAKE_SYMLINK_INSTALL=OFF
 source install/local_setup.bash
+ros2 interface show f1_interfaces/srv/SetCleaningSpeed
 ros2 run f1_pool_cleaning pool_demo
 export ROS_LOCALHOST_ONLY=1 ROS_DOMAIN_ID=173 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export CYCLONEDDS_URI="file://$PWD/src/f1_lidar_driver/test/cyclonedds_localhost.xml"
@@ -37,6 +43,8 @@ colcon test --executor sequential \
   --packages-select f1_localization f1_pool_cleaning --return-code-on-test-failure
 colcon test-result --verbose
 ```
+
+验证通过后，使用 App 的部署在原服务终端执行 `sudo systemctl start f1-operator.service`；随后通过 App 选图。若要执行本文独立 bringup 验收，则保持 operator 停止，避免启动第二份 bridge、定位或控制器；独立验收结束后再恢复 operator。
 
 关闭测试终端后，每个实景终端加载（不要继承上述测试专用 DDS 配置）：
 
@@ -81,14 +89,18 @@ bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano start
 
 `start` 返回后检查 `lease_held=true`、`start_edge_id` 和实际动作阶段。初始阶段为 `APPROACH_START → ALIGN_START / MOVE_START_ALONG / MOVE_START_SIDE → ACQUIRE_WALL`，随后进入旧版 `APPROACH_WALL/FOLLOW/CORRECT_HEADING`。已在范围内时不离墙。相邻换边仍为 `EDGE_STOP → MOVE_INWARD → TURN_TO_NEXT_EDGE → APPROACH_NEXT_EDGE`。L 形终点不返回；矩形只补起始边前段。`coverage_complete` 独立于路线 `COMPLETE`，缺口只显示不追加补洗。
 
-暂停、取消仍在终端 B 执行；快捷脚本尚无 `stop` 子命令，停止任务使用 ROS 服务：
+暂停、取消仍在终端 B 执行；快捷脚本尚无 `resume` 或 `stop` 子命令，继续或取消别名使用 ROS 服务：
 
 ```bash
 bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano pause
+# 满足 can_resume 后，在已加载运行环境的终端继续：
+ros2 service call /pool_cleaning/resume std_srvs/srv/Trigger '{}'
+# 如果需要结束任务，选择 cancel 或旧 stop 别名之一：
 bash ~/surface_ws/src/f1_pool_cleaning/scripts/pool_nano cancel
-# 已加载运行环境的终端：
 ros2 service call /pool_cleaning/stop std_srvs/srv/Trigger '{}'
 ```
+
+`resume` 仅适用于控制器持续运行期间的人工暂停，并需通过状态中的 `can_resume/resume_blockers`；故障暂停须先取消再开始。取消后不能继续同一断点，详见[暂停续跑规则](../../docs/TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
 
 终端 A 按 `Ctrl+C` 会退出本次统一入口启动的节点；通过跳过参数复用的外部节点继续运行。
 
@@ -149,6 +161,14 @@ ros2 topic echo /pool_cleaning/command_preview
 - `localization_state=LOCALIZATION_READY`。TF 不含协方差时，`pose_covariance_available=false` 是明确的能力限制。
 - `output_enabled=false`、`lease_held=false`，预览 token 为空。
 
+启动前选择清洗速度；以下服务只设置下一次任务的辅助力度，不会立即驱动电机：
+
+```bash
+ros2 service call /pool_cleaning/set_cleaning_speed f1_interfaces/srv/SetCleaningSpeed '{value: 75}'
+```
+
+状态应回报 `cleaning_speed=75`、`forward_boost_percent=38`。App 与服务均使用整数 0–100，控制器按 `(value + 1) // 2` 映射为 0–50；0 关闭前进辅助，滚刷和纠偏按原规则工作。矩形与开放任务独立保存设置，运行与暂停期间拒绝修改。先在启动前改为 `value: 0` 核对下表基准行为，再在取消／完成后分别设置非零值、开始下一轮预览；表中未注明辅助的沿墙 STOP 预期以 `cleaning_speed=0` 为前提。
+
 调用 `start` 后先检查选墙结果、靠近动作与确认墙面状态；预览不会驱动船体，需要合成反馈或人工移动才能推进流程。以下沿墙输出预期适用于已进入贴墙清洗阶段（不连接执行器）：
 
 ```bash
@@ -162,7 +182,11 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 | 夹角超过 +10° / -10° | 刷盘关；四个主电机 LEFT / RIGHT 25%、BOTH 持续纠偏，没有脉冲/中位等待 |
 | 误差绝对值 >3° 且 ≤10°，墙距在 32–36 cm | 继续 LEFT / RIGHT 纠偏，同时开启刷盘 50% |
 | 墙距在 32–36 cm，误差恢复到 ±3° 内 | 四主电机 STOP，刷盘保持 50% 推进 |
-| 中心距前墙仍 >0.40 m | 继续按墙距和航向控制；沿墙没有主电机 FORWARD 辅助或 0.8 m 切换阈值 |
+| 中心距前墙仍 >0.40 m | 继续按墙距和航向控制；非零清洗速度仅在距当前墙端或实际补洗结束位置 >0.80 m、稳定 FOLLOW 且无需纠偏时辅助前进 |
+| 启动前设置 0、1、50、75、100 | 状态保存对应原始值，映射辅助输出为 0、1、25、38、50；非零值在满足条件时发 FORWARD、BOTH，0 不妨碍滚刷推进和纠偏 |
+| 非零设置、稳定沿墙时进入 ≤0.80 m 区域 | 撤销前进辅助，本墙段不再恢复；即使仅更新位姿而未到新墙观测，也不得保留旧辅助或延长指令期限 |
+| 非零设置且航向误差 >3° | LEFT/RIGHT 仍使用 25 输出；纠偏结束且未进入近端区后才恢复所选前进辅助力度 |
+| 运行或暂停时请求新速度 | 服务拒绝，原始设置值保持；人工恢复保留原值和近端截止状态 |
 | 换边后退右推 | 主电机 REVERSE 与第五路向右 50% 同时持续 0.5 s |
 | 纠偏方向的空间标志为 false | 仍按夹角纠偏，不暂停 |
 | 墙线在 ±70° 内、相邻有效观测角度变化 ≤30° | 拟合质量满足条件时继续跟踪；刷盘仍只在 ±10° 内开启 |
@@ -175,7 +199,7 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 | 地图位姿正常更新 | 更新边进度和前墙距离，并通过 `EdgeTarget` 维持当前目标墙关联 |
 | 地图位姿发生超阈值跳变 | 定位管理器锁存 `PAUSED`，控制器关闭输出；反馈恢复后不自动续跑 |
 
-本版没有 0.36 m 最小墙距暂停门槛；墙距偏小时由第五路向外纠正。超出 ±10° 可以启动任务，先纠偏再开刷。暂停后执行 `cancel` 和 `start`。
+本版没有 0.36 m 最小墙距暂停门槛；墙距偏小时由第五路向外纠正。超出 ±10° 可以启动任务，先纠偏再开刷。故障暂停后执行 `cancel` 和 `start`；人工暂停满足恢复门控时可显式 `resume`。
 
 诊断单次启动后暂停：`ros2 topic echo /pool_cleaning/status --once --full-length`，查看 `phase`、`reason`、`wall_valid`、`wall_reason`。状态前部的 `left_wall_distance_cm` 是船中心到左墙的距离（厘米）；无效或过期时显示 `null`。`WAIT_WALL` 可以自动恢复；`PAUSED` 不会自行恢复。带地图自动任务初次启动不要求有效墙线，不另做原始扫描碰撞检查，但定位管理器仍要求扫描就绪；确认墙面和正式清洗阶段仍须核对墙线。
 
@@ -185,7 +209,7 @@ ros2 service call /pool_cleaning/start std_srvs/srv/Trigger '{}'
 
 ## 5. 矩形一周实机测试
 
-预览核对后，退出预览控制器，保持定位与感知来源一致。地图无法发现盲区新增障碍；本轮需要人工观察前方并保留遥控接管。0.40 m 是船中心到前方墙的换边触发阈值，需记录每个转移的漂移、0.5 s 后退右推位移和最终 `COMPLETE` 状态。当前直边推进依赖滚刷，配置不支持 `brush_percent=0`；如需无刷动作验收，应另行制定现场测试步骤，不能把禁用输出预览当作实船无刷完整一周。
+预览核对后，退出预览控制器，保持定位与感知来源一致。地图无法发现盲区新增障碍；本轮需要人工观察前方并保留遥控接管。0.40 m 是船中心到前方墙的换边触发阈值，需记录每个转移的漂移、0.5 s 后退右推位移和最终 `COMPLETE` 状态。当前直边默认由滚刷推进，启动前可设清洗速度辅助前进；配置不支持 `brush_percent=0`。如需无刷动作验收，应另行制定现场测试步骤，不能把禁用输出预览当作实船无刷完整一周。
 
 单独终端启动唯一 bridge（串口路径按已有 bridge 配置；direction_confirmed 表示主轮 LEFT/RIGHT 硬件映射已经核对）：
 
@@ -230,13 +254,14 @@ ros2 bag record -o rectangle_one_loop_trial \
 
 按本次所选起始边及顺时针顺序记录四条边的实际墙距、夹角、靠墙和入口调整时间、50% 刷盘是否能推进、第五路双向纠偏是否振荡、每次 `EDGE_STOP` 触发位置、后退右推位移、转向误差、每条边的 `cleaned_intervals`、最终 `completed_edges` 和未覆盖原因。刷尖约距中心 0.33 m，33 cm 作为名义目标；实际接触压缩仍需实船测量。
 
-一周任务的现场记录至少应包含：起始初始位姿、地图版本、实际选中起始边与 `run_id`，四条边及起始边补齐段的轨迹、简单靠近和相邻换边的停止原因与漂移，暂停/停止/取消/遥控接管记录，以及最终状态中的 `phase`、`completed_edges`、要求区间、已覆盖区间和剩余缺口。角部留白和短边有效清洗长度应单独标注，不能只凭最终 `COMPLETE` 声明全池面积已覆盖。
+一周任务的现场记录至少应包含：起始初始位姿、地图版本、实际选中起始边与 `run_id`、原始清洗速度和映射辅助挡位，四条边及起始边补齐段的轨迹、简单靠近和相邻换边的停止原因与漂移，暂停/继续/取消/遥控接管记录，以及最终状态中的 `phase`、`completed_edges`、要求区间、已覆盖区间和剩余缺口。非零速度需记录四电机前进方向、最低有效输出、纠偏效果及 80 cm 撤销后的滑行。角部留白和短边有效清洗长度应单独标注，不能只凭最终 `COMPLETE` 声明全池面积已覆盖。
 
-## Windows 目标轨迹复核
+## Windows 源码 App 与实际轨迹复核
 
-同步并构建两个清洗包、重新加载控制器，Windows 更新 `operator_app` 后检查：
+Nano 采用更新后的接口、控制器和网关，Windows 更新整个 `operator_app` 并按[命令行启动说明](../../operator_app/README.md#命令行启动)运行；本次不打包 exe。检查：
 
-1. 状态 `expected_track.basis` 为 `boat_center_stop`，`front_stop_m=0.40`，`wall_target_m=0.33`，开刷范围为 `0.32–0.36` m；自定义 YAML 应显式核对。
-2. 启动前和启动后，蓝色船中心目标线距左墙 33 cm，末端橙色方框沿墙方向距当前墙端 40 cm，标注为 `40 cm`。开放墙链只显示本次后续段，不连角点或闭合。
-3. 切换任务或地图后使用对应轨迹；断开连接后目标线、停车点及实时参数图例消失，历史轨迹保留并提示过期。
-4. `--mock` 可核对绘图和交互，不验证真实定位、漂移或刷头接触；实船仍需对照 RViz 和停止换边记录。
+1. “清洗速度”滑条和数值框范围均为 0–100；拖动只预览、松开提交一次，数字编辑不被遥测刷新覆盖。50 对应辅助输出 25，75 对应 38，100 对应 50。
+2. 等待机器人确认期间不能重复设置或开始任务；运行/暂停时锁定。重连后显示控制器保存的原始值，旧版本或无地图待机时明确显示不可设置原因。
+3. 画布只显示底图、实时船体位姿和实际轨迹；不再要求蓝色预期轨迹、40 cm 停车方框或扫描点。控制器的 `expected_track` 可用于 ROS 诊断，但网关不再转发该绘图数据。
+4. 实际轨迹按任务、地图和 `run_id` 对应，暂停后分段；实时数据过期应提示，不能将历史轨迹当作当前位姿。显示精简不改变 33 cm 目标墙距、32–36 cm 开刷范围和 40 cm 停车阈值。
+5. `--mock` 可核对绘图和交互，不验证真实定位、漂移或刷头接触；实船仍需对照 RViz 和停止换边记录。

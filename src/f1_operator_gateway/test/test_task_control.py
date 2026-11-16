@@ -412,3 +412,116 @@ def test_resume_rejects_request_for_old_run():
     g._operation_request('app', dict(task(action='resume'), run_id='previous-run'))
     assert not g.sent[-1]['success']
     assert not g.task_clients['l']['resume'].calls
+
+
+def speed_status(g, kind='l', value=0, **fields):
+    status = dict(cleaning_speed=value, forward_boost_percent=(value+1)//2,
+                  forward_boost_enabled=value > 0, forward_boost_editable=True)
+    status.update(fields)
+    g.status(kind, **status)
+
+
+@pytest.mark.parametrize('kind', ['rectangle', 'l'])
+@pytest.mark.parametrize('value', [0, 1, 50, 75, 100])
+def test_cleaning_speed_waits_for_service_and_matching_fresh_raw_status(kind, value):
+    g = Gateway()
+    speed_status(g, kind)
+    packet = dict(task(kind, 'set_cleaning_speed'), value=value)
+    assert g._task_view(kind)['can_set_cleaning_speed']
+    g._operation_request('app', packet)
+    client = g.task_clients[kind]['set_cleaning_speed']
+    assert client.calls[-1][0].value == value  # Gateway never quantizes.
+    g._operation_request('app', packet)
+    assert len(client.calls) == 1
+    speed_status(g, kind, value)
+    g._task_tick()
+    assert g.command_pending['stage'] == 'service'
+    respond(client)
+    speed_status(g, kind, value, stamp_ns=g.command_pending['sent_ns']-1)
+    g._task_tick()
+    assert g.command_pending['stage'] == 'cleaning_speed_status'
+    assert not g._task_view(kind)['can_start']
+    assert not g._task_view(kind)['can_set_cleaning_speed']
+    g._operation_request('app', task(kind, request_id='early-start'))
+    assert not g.task_clients[kind]['start'].calls
+    speed_status(g, kind, value)
+    g._task_tick()
+    assert g.command_pending is None and g.sent[-1]['success']
+    g._operation_request('app', packet)
+    assert len(client.calls) == 1
+    assert g._task_view(kind)['cleaning_speed'] == value
+
+
+@pytest.mark.parametrize('mismatch', ['raw', 'mapped', 'bool', 'map', 'kind'])
+def test_cleaning_speed_confirmation_rejects_inconsistent_status(mismatch):
+    g = Gateway()
+    speed_status(g)
+    g._operation_request('app', dict(task(action='set_cleaning_speed'), value=75))
+    respond(g.task_clients['l']['set_cleaning_speed'])
+    fields = {'raw': dict(cleaning_speed=76),  # Same mapped 38 is insufficient.
+              'mapped': dict(forward_boost_percent=37),
+              'bool': dict(forward_boost_enabled=False),
+              'map': dict(map_id='different-map'),
+              'kind': dict(task_type='rectangle')}[mismatch]
+    speed_status(g, value=75, **fields)
+    g._task_tick()
+    assert g.command_pending is not None
+    speed_status(g, value=75)
+    g._task_tick()
+    assert g.command_pending is None and g.sent[-1]['success']
+
+
+@pytest.mark.parametrize('failure', ['running', 'paused', 'stale', 'old_controller',
+    'other_task', 'service', 'handover', 'malformed', 'mapping', 'map', 'uncertain'])
+def test_cleaning_speed_rejected_unless_confirmed_pre_start(failure):
+    g = Gateway()
+    speed_status(g)
+    packet = dict(task(action='set_cleaning_speed'), value=75)
+    if failure in ('running', 'paused'):
+        speed_status(g, phase='FOLLOW' if failure == 'running' else 'PAUSED')
+    elif failure == 'stale':
+        g.task_received['l'] -= 1
+    elif failure == 'old_controller':
+        g.tasks['l'].pop('cleaning_speed')
+    elif failure == 'other_task':
+        g.status('rectangle', phase='FOLLOW')
+    elif failure == 'service':
+        g.task_clients['l']['set_cleaning_speed'].available = False
+    elif failure == 'malformed':
+        g.tasks['l']['cleaning_speed'] = False
+    elif failure == 'mapping':
+        g._runtime_busy = lambda: True
+    elif failure == 'map':
+        g.tasks['l']['map_id'] = 'different-map'
+    elif failure == 'uncertain':
+        g.uncertain_tasks.add('rectangle')
+    elif failure == 'handover':
+        g._manual_acquires = 1
+        g._operation_request('app', packet)
+        speed_status(g, phase='FOLLOW')
+        g._manual_acquires = 0
+        g._task_tick()
+    if failure != 'handover':
+        assert not g._task_view('l')['can_set_cleaning_speed']
+        g._operation_request('app', packet)
+    assert not g.task_clients['l']['set_cleaning_speed'].calls
+    assert not g.sent[-1]['success']
+
+
+def test_cleaning_speed_failure_and_timeout_never_claim_new_setting_or_retry():
+    g = Gateway()
+    speed_status(g, value=50)
+    g._operation_request('app', dict(task(action='set_cleaning_speed'), value=75))
+    client = g.task_clients['l']['set_cleaning_speed']
+    respond(client, success=False)
+    assert not g.sent[-1]['success'] and g.command_pending is None
+    assert g._task_view('l')['cleaning_speed'] == 50
+    g._operation_request('app', dict(task(action='set_cleaning_speed', request_id='retry'), value=75))
+    respond(client)
+    g.command_pending['since'] -= 4
+    g._task_tick()
+    assert not g.sent[-1]['success'] and g.sent[-1]['pending']
+    assert g.command_pending is not None and len(client.calls) == 2
+    speed_status(g, value=75)
+    g._task_tick()
+    assert g.command_pending is None and g.sent[-1]['success']

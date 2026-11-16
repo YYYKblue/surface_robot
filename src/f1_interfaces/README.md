@@ -14,8 +14,11 @@
 | srv | `ReleaseControl` | 释放控制租约 |
 | srv | `SetInitialPose` | 向泳池定位管理器提交 RViz2 使用的 `map` 坐标初始位姿 |
 | srv | `SetEdge` | 在任务空闲时为下一次矩形或大 L 任务指定地图起始边 |
+| srv | `SetCleaningSpeed` | 启动前设置清洗速度原始整数值 0–100，由控制器映射为前进辅助输出 0–50 |
 
 Python 使用 `from f1_interfaces.msg import ActuatorCommand` 或 `from f1_interfaces.srv import AcquireControl`；依赖包在 `package.xml` 中声明 `f1_interfaces`。
+
+2026-11-16 清洗速度：`SetCleaningSpeed` 请求字段为 `int32 value`，控制器只接受整数 0–100；响应为 `bool success` 和 `string message`。映射公式为 `(value + 1) // 2`，只用于沿墙前进辅助。新增服务后需重新构建接口包、清洗控制器和网关；本次没有修改 `ActuatorCommand` 或 F103 v3 协议。Nano 上已完成该构建并核对生成接口，详见[部署验证记录](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#2026-11-16-nano-部署验证)。
 
 2026-11-11 F103 v3：`ActuatorCommand.speed_percent` 为整数 0–100 的主电机 PWM 输出；0 仅停止主电机，滚刷和第五电推独立。新 25% 对应 100 μs 偏移，旧 25 档为 125 μs。`ControlState` 新增 `firmware_protocol_version`（0 表示尚未观察到 CTRL）、`firmware_protocol_compatible` 和 `rc_valid/rc_flags/rc_sequence/rc_age_sec/rc_channels[14]`。RC 为原始输入诊断；CTRL PWM 仍为目标值。必须重建本接口包及所有依赖节点并一同重启，不能混用旧生成消息。详细编码和兼容策略见[桥接说明](../f1_nano_bridge/README.md#f103-v3-连续输出2026-11-11)。
 
@@ -42,7 +45,7 @@ done
 echo "旧接口备份：$migration_backup"
 ```
 
-源码同步命令不会自动删除 Nano 上的旧包，因此 PC 和 Nano 均需检查。随后加载 ROS 及必要的驱动工作空间环境，重新构建整个工作空间：
+源码同步命令不会自动删除 Nano 上的旧包，因此 PC 和 Nano 均需检查。随后加载 ROS 及必要的驱动工作空间环境，重新构建整个工作空间。以下是 PC 开发机的符号链接安装示例；Nano 使用 [部署指南](../../DEPLOY_NANO.md#5-nano编译) 中的复制安装方式，不直接使用下面的 `--symlink-install`：
 
 ```bash
 source /opt/ros/humble/setup.bash

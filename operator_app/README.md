@@ -1,12 +1,14 @@
 # F1 Windows 操作员 Qt App
 
+**2026-11-16 当前使用方式：更新源码后从[命令行启动](#命令行启动)，本次未生成 exe。** 清洗任务页已将提速开关替换为 0–100 滑条和数值框，Nano 映射为 0–50 挡；详见[清洗操作](#清洗操作)。Nano 四个相关包已完成部署与编译，267 项隔离测试通过，运行网关已确认 `cleaning_speed_v1`，见[部署验证](../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#2026-11-16-nano-部署验证)。App 本次 Linux 离屏回归 131 项全部通过，未执行本次改动的真实 Windows 或实船验收。
+
 2026-11-12 新增同一 App 同时控制两台：**水面 W/A/S/D，水下 ↑/↓/←/→**。水下控制区独立显示，默认连接 `--url` 同一主机的 `8766` 端口；可用 `--under-url` 覆盖，`--surface-only` 保留单机界面。`--mock` 默认演示两台。
 
-水下使用 Nano 独立的 `under_control` 服务，不依赖 ROS。两台各自维护连接、百分比、控制权与超时；水面任务锁不锁定水下。空格和顶部按钮停止两台**手动输出**，不取消水面自动任务，也不覆盖 H7 遥控接管。详见[水下部署、协议与验证](../under_control/README.md)。旧 `dist/f103-v3` 包不包含此功能；本次新版为 [双机 Windows 分发包](dist/dual-control/F1Operator-dual-control-windows-x64.zip)。
+水下使用 Nano 独立的 `under_control` 服务，不依赖 ROS。两台各自维护连接、百分比、控制权与超时；水面任务锁不锁定水下。空格和顶部按钮停止两台**手动输出**，不取消水面自动任务，也不覆盖 H7 遥控接管。详见[水下部署、协议与验证](../under_control/README.md)。旧 `dist/f103-v3` 包不包含此功能；当时发布过双机 Windows 分发包（历史路径 `dist/dual-control/F1Operator-dual-control-windows-x64.zip`）。该历史包不包含本次清洗速度滑条，当前使用更新后的源码。
 
-## 2026-11-15 网络 RTT 显示与验证
+## 2026-11-15 网络 RTT 显示与验证（历史记录）
 
-本次新增水面／水下独立网络 RTT 和绿黄红提示，详见[延迟定义与阈值](#windows--nano-网络延迟)。此次功能无需部署 Nano；Windows exe 需使用重新构建的分发包。
+该次新增水面／水下独立网络 RTT 和绿黄红提示，详见[延迟定义与阈值](#windows--nano-网络延迟)。RTT 功能本身无需部署 Nano；以下是当时的测试记录，不代表本次清洗速度修改的验证结果。
 
 - Linux App、ROS 网关、水下服务联合回归 **367 项通过，无跳过**；最后的显示文字及集成测试断言调整后，相关 **17 项复核通过**。覆盖 Ping/Pong、超时恢复、迟到回复、重连、双连接独立显示，以及慢速完整消息期间手动发送和优先停止。
 - Windows Python 3.13.1 / PySide6 6.12.0：App **122 项通过，无跳过**，包含真实本机 WebSocket 网关集成；Qt 旧接口弃用提示不影响测试结果。
@@ -17,20 +19,20 @@
 - 初始双机版本 Linux 联合验证：`under_control/test` 34 项与 `operator_app/test` 110 项共 **144 项通过，无跳过**，其中包括 Qt ↑ 按键→本机 WebSocket→真实 pyserial PTY→编译后的 H7 C 源码的全链路，以及松键停车、水面离线时水下独立操作、串口回包丢失和恢复后不重放。后续增加 H7 缺席启动/模拟拔插处理，单独重跑水下服务为 **35 项通过**。
 - Windows：Python 3.13.1 / PySide6 6.12.0 下 App **110 项通过，无跳过**。旧 mock 用例的固定 250 ms 启动等待改为有截止时间的实际状态等待；没有放宽产品控制超时。
 - PyInstaller 6.22.3 构建完成，exe 的 `--mock` 原生双机窗口已实际打开，WM_CLOSE 正常退出码 0。源码哈希和构建环境见 `dist/dual-control/F1Operator/BUILD_INFO.json`。
-- [ZIP](dist/dual-control/F1Operator-dual-control-windows-x64.zip) 约 45.3 MiB；[校验文件](dist/dual-control/SHA256SUMS.txt)。**完整解压 F1Operator 目录并保留 `_internal`，不要单独复制 exe。**
+- 当时 ZIP 约 45.3 MiB，路径为 `dist/dual-control/F1Operator-dual-control-windows-x64.zip`，校验文件为 `dist/dual-control/SHA256SUMS.txt`；这些生成文件被 Git 忽略，当前源码仓库不附带，不作为本次更新的下载入口。历史分发要求为完整解压 F1Operator 目录并保留 `_internal`。
 - 构建验证时未连接电机或烧录，H7 与水面 F103 固件未修改。之后的 Nano 部署状态见[部署记录](../docs/UNDER_CONTROL_NANO_DEPLOYMENT.md)；部署时 H7 适配器缺席，实机运动尚未验收。包内 `BUILD_INFO.json` 的 `nano_deployed=false` 与 `APP_README.md` 是构建时快照，后续部署情况以部署记录为准。
 
-重新构建需先在 Windows 的仓库根目录设置 `$env:PYTHONPATH = "$PWD\src\f1_operator_gateway"`（使真实网关集成测试可导入），运行 `python -m pytest operator_app/test -q`，再运行 `python operator_app/tools/build_windows.py --tests-passed 122`（数字使用该次实际通过数）。构建脚本只运行无硬件 mock；全部产物写入 Git 忽略的 `operator_app/dist/dual-control/`。
+以下为历史打包复现方法，本次不执行：先在 Windows 的仓库根目录设置 `$env:PYTHONPATH = "$PWD\src\f1_operator_gateway"`（使真实网关集成测试可导入），运行 `python -m pytest operator_app/test -q`，再运行 `python operator_app/tools/build_windows.py --tests-passed 122`（数字使用该次实际通过数）。构建脚本只运行无硬件 mock；全部产物写入 Git 忽略的 `operator_app/dist/dual-control/`。
 
 人工暂停续跑、取消及地图删除／卸载的接口和使用边界见[功能说明](../docs/TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
 
-更新：2026-11-15。App 分别通过 WebSocket 连接 Nano 水面网关与水下服务，不需要安装 ROS，不管理水面控制 token。下文地图、定位、清洗任务、滚刷与第五电推独立控制均属于水面机器人；水下仅提供方向和百分比控制。
+更新：2026-11-16。App 分别通过 WebSocket 连接 Nano 水面网关与水下服务，不需要安装 ROS，不管理水面控制 token。下文地图、定位、清洗任务、滚刷与第五电推独立控制均属于水面机器人；水下仅提供方向和百分比控制。
 
-当前功能包括建图、地图命名保存、地图列表/预览/加载、手动控制、底图与实时船体位姿、开放多边／矩形任务选择、地图初始位姿发布、启动条件显示、任务完成结果、实际轨迹、任务停止/取消、船体中心距左墙显示及诊断日志导出。App 不再显示雷达点、预期轨迹、起始范围框或停车点；ROS 雷达和任务控制算法继续正常运行。
+当前功能包括建图、地图命名保存、地图列表/预览/加载、手动控制、底图与实时船体位姿、开放多边／矩形任务选择、地图初始位姿发布、启动条件显示、任务完成结果、实际轨迹、任务暂停/继续/取消、船体中心距左墙显示及诊断日志导出。App 不再显示雷达点、预期轨迹、起始范围框或停车点；ROS 雷达和任务控制算法继续正常运行。
 
 2026-11-09 的显示链路更新必须同时升级 Nano 网关与整个 Windows App，exe 需要重新打包。新版地图采用压缩编码，轨迹和诊断采用独立消息，旧 App 无法完整显示新版网关数据。
 
-## 启动与打包
+## 命令行启动
 
 Nano 启动方式见[网关说明](../src/f1_operator_gateway/README.md)。在 Windows 执行：
 
@@ -40,7 +42,11 @@ python -m pip install -r requirements.txt
 python main.py --url ws://192.168.1.188:8765
 ```
 
-使用 PySide6，也兼容开发环境中的 PyQt5。打包必须在 Windows 上执行：
+本次清洗速度更新只使用源码命令行启动，不生成 exe。更新整个 `operator_app/` 后重新运行上述命令即可；指定 Nano（192.168.1.188）已完成接口包、控制器和网关的[部署](../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#2026-11-16-nano-部署验证)；部署到其他设备时仍需同步更新这些包。使用 PySide6，也兼容开发环境中的 PyQt5。
+
+### 可选打包参考
+
+以下为已有打包方式，本次更新不执行。打包必须在 Windows 上执行：
 
 ```powershell
 python -m pip install pyinstaller
@@ -94,9 +100,13 @@ ros2 launch f1_operator_gateway operator_system.launch.py \
 
 ## 清洗操作
 
-“主电机提速”按钮默认关闭，在任务开始前按当前任务类型设置；运行中、获取控制权和暂停时锁定，暂停期间不能修改提速设置，需先取消。取消/完成后可为下一次任务修改。开启后，正常沿墙且船中心沿当前墙方向距墙端大于 80 cm 时，四电推以新标度 25% 前进辅助；80 cm 内（含边界）撤销辅助，本墙段不再恢复，仍允许航向纠偏。矩形补洗还会在实际任务结束位置前 80 cm 撤销辅助。
+“清洗速度”用横向滑条和数值框选择整数 0–100，默认 0。App 发送原始值，Nano 控制器按 `(value + 1) // 2` 映射为四主电机 0–50 挡前进辅助：App 50 对应原提速力度 25，75 对应 38，100 对应 50。0 关闭前进辅助，滚刷推进与主电机纠偏继续按原规则工作。该数值不是实测船速百分比；纠偏、靠近和换边保持原有 25 输出。
 
-按钮显示 Nano 已确认的开关，旁边区分正在提速、纠偏、近端区和等待沿墙等状态。请求期间禁用重复设置和开始任务；失败或超时不显示为已成功开启。断线重连读取实际设置，不重放旧操作。开关在当前控制器会话内保留，重新加载地图或控制器重启后默认关闭。旧网关/控制器不支持时按钮禁用；需要同步更新 Nano 和 Windows App，使用 exe 时重新打包。
+未加载地图时，受管清洗控制器尚未启动，滑条禁用并提示先加载地图；网关已声明能力不等于任务状态就绪。加载地图并收到所选任务的新鲜状态后，再按以下规则设置。
+
+滑条只在任务开始前按当前任务类型设置；运行中、获取控制权和暂停时锁定，暂停期间需先取消任务才能修改。取消/完成后可为下一次任务修改。设置大于 0 后，正常沿墙且船中心沿当前墙方向距墙端大于 80 cm 时，四电推以映射后的输出前进辅助；80 cm 内（含边界）撤销辅助，本墙段不再恢复，纠偏优先。矩形补洗还会在实际任务结束位置前 80 cm 撤销辅助。
+
+拖动时只预览，松开后提交一次；数值框结束编辑时提交。界面区分待设置值、等待确认和 Nano 已确认值，并显示正在提速、纠偏、近端区或等待沿墙等状态。请求期间禁用重复设置和开始任务；服务成功且新鲜状态回报原始值、映射值一致后才确认完成。失败或超时不当作成功，断线重连读取实际原始值，不重放旧操作。矩形与开放任务分别保存当前控制器会话中的设置，重新加载地图或控制器重启后恢复 0。旧网关/控制器不支持 `cleaning_speed_v1` 数值功能时滑条禁用并提示升级，不回退到固定 25。编辑数值时沿用文本输入保护，滑条不接收驾驶方向键焦点。
 
 1. 在“清洗任务”中选择“开放多边清洗”或“矩形清洗”。当前地图无法推导路线、节点未运行或状态过期时，对应选项不可用；悬停可查看原因。
 2. 点击“设置初始位置和船头方向”，在地图上按住鼠标并拖动。紫色箭头表示待发布位置及船头方向；拖动至少 8 像素以确定方向。
@@ -212,12 +222,12 @@ python -m pytest operator_app/test -q
 
 原 L 任务显示为“开放多边清洗”，协议类型仍为 `l`。新增左转换边的前行、左移、左转状态显示；新完成范围为 `remaining_open_route`，仍兼容旧 `remaining_l_route`。从中途启动只执行后续墙段；要清洗全链，从首边入口附近开始。2026-11-09 起画布仅显示实际行驶轨迹。
 
-## 2026-11-11 Windows 构建与分发验证
+## 2026-11-11 Windows 构建与分发验证（历史记录）
 
 本次 F103 v3 App 已在真实 Windows x64 的 Python 3.13.1、PySide6 6.12.0 环境运行全部 `operator_app/test`：**91 项通过，无跳过**。测试使用 `offscreen`，包含本机 WebSocket 收发、连续百分比、焦点、断线恢复和旧动作清除。随后使用 PyInstaller 6.22.3 的 `--noconsole --name F1Operator` 生成目录包；测试与打包期间 App Python 源码校验值一致。
 
 - 当时分发路径为 `dist/f103-v3/F1Operator-f103-v3-windows-x64.zip`。**完整解压 `F1Operator/` 目录，保留 `_internal/`，不要只复制 exe。**
 - 当时可执行文件为 `dist/f103-v3/F1Operator/F1Operator.exe`，已确认是 Windows x86-64 GUI PE 文件。
-- 当时校验文件为 `dist/f103-v3/SHA256SUMS.txt`，构建环境、测试结果与源文件 SHA256 位于 `dist/f103-v3/F1Operator/BUILD_INFO.json`。这些生成产物被 Git 忽略；2026-11-12 文档核对时旧路径已不存在，以上仅保留历史记录。当前分发使用页首的双机版本。
+- 当时校验文件为 `dist/f103-v3/SHA256SUMS.txt`，构建环境、测试结果与源文件 SHA256 位于 `dist/f103-v3/F1Operator/BUILD_INFO.json`。这些生成产物被 Git 忽略；2026-11-12 文档核对时旧路径已不存在，以上仅保留历史记录。这些历史包不包含 2026-11-16 清洗速度修改；当前按页首说明从源码启动。
 
 打包后的 exe 已以 `--mock` 在 Windows 原生窗口启动，并通过正常窗口关闭流程退出，退出码为 0，未留下该进程。以上测试和 mock 均未连接 Nano 或执行器，不能替代 Windows 平板触摸、现场 Wi-Fi、实船电机方向与推力验收。

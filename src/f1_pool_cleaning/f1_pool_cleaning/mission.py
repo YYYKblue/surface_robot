@@ -34,11 +34,13 @@ class Effort:
     side_left_percent: float = 0.
     brush_percent: float = 0.
     forward_boost: bool = False
+    forward_boost_percent: int = 0
 
 
 def command_fields(effort, config):
     percent = effort.side_left_percent * config.fifth_left_sign
-    return dict(direction=effort.direction, speed_percent=config.turn_speed_percent, mode=1,
+    speed = effort.forward_boost_percent if effort.forward_boost else config.turn_speed_percent
+    return dict(direction=effort.direction, speed_percent=speed, mode=1,
                 brush_enabled=bool(effort.brush_percent), brush_percent=float(effort.brush_percent),
                 thrust_enabled=bool(percent), thrust_percent=float(percent))
 
@@ -68,7 +70,7 @@ class Mission:
         self.pause_context = None
         self.pause_kind = ""
         self.resume_sequence = 0
-        self.forward_boost_enabled = False
+        self.cleaning_speed = 0
         self.forward_boost_cutoff_reached = False
 
         self.pool = None
@@ -112,13 +114,27 @@ class Mission:
         self.last_coverage_ns = None
         self.cleaned_intervals = []
 
+    @property
+    def forward_boost_enabled(self):
+        return self.cleaning_speed > 0
+
+    @property
+    def forward_boost_percent(self):
+        return (self.cleaning_speed + 1) // 2
+
+    def set_cleaning_speed(self, value):
+        if type(value) is not int or not 0 <= value <= 100:
+            return False, "cleaning speed requires an integer in [0, 100]"
+        if self.phase not in self.BOOST_EDIT_PHASES:
+            return False, "清洗速度只能在任务开始前设置；暂停后请先取消任务"
+        self.cleaning_speed = value
+        return True, f"清洗速度已设置为 {value}，主电机前进辅助输出 {self.forward_boost_percent}"
+
     def set_forward_boost(self, enabled):
+        """Legacy boolean API: enabled retains its original 25 percent output."""
         if type(enabled) is not bool:
             return False, "forward boost requires a boolean"
-        if self.phase not in self.BOOST_EDIT_PHASES:
-            return False, "主电机提速只能在任务开始前设置；暂停后请先取消任务"
-        self.forward_boost_enabled = enabled
-        return True, "主电机提速已开启" if enabled else "主电机提速已关闭"
+        return self.set_cleaning_speed(50 if enabled else 0)
 
     def boost_remaining(self, f):
         if self.edge_active:
@@ -138,7 +154,8 @@ class Mission:
         elif previous and previous.forward_boost and self.forward_boost_cutoff_reached:
             # Revoke forward assistance on fresh pose alone. Never extend the
             # old wall command's computation time or validity deadline.
-            self.last_effort = replace(previous, direction=0, forward_boost=False)
+            self.last_effort = replace(previous, direction=0, forward_boost=False,
+                                       forward_boost_percent=0)
             self.reason = "near endpoint; brush propulsion"
             return self.last_effort
         return None
@@ -151,7 +168,8 @@ class Mission:
                 and self.c.side_off_distance_m <= f.wall.distance <= self.c.side_on_distance_m
                 and math.isfinite(remaining) and remaining > self.BOOST_CUTOFF_M + 1e-9):
             self.reason = "within wall and heading bands; brush with main-motor forward boost"
-            return replace(effort, direction=1, forward_boost=True)
+            return replace(effort, direction=1, forward_boost=True,
+                           forward_boost_percent=self.forward_boost_percent)
         return effort
 
     def forward_boost_status(self, now):
@@ -164,7 +182,9 @@ class Mission:
                   "heading_correction" if self.phase == "CORRECT_HEADING" else
                   "endpoint_cutoff" if self.forward_boost_cutoff_reached else
                   "waiting_follow")
-        return dict(forward_boost_enabled=self.forward_boost_enabled,
+        return dict(cleaning_speed=self.cleaning_speed,
+                    forward_boost_percent=self.forward_boost_percent,
+                    forward_boost_enabled=self.forward_boost_enabled,
                     forward_boost_active=active, forward_boost_reason=reason,
                     forward_boost_editable=self.phase in self.BOOST_EDIT_PHASES,
                     forward_boost_cutoff_m=self.BOOST_CUTOFF_M,

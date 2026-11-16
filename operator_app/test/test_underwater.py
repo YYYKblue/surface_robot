@@ -172,3 +172,17 @@ def test_other_operator_blocks_only_underwater(dual):
     ("ws://[::1]:8765", "ws://[::1]:8766"), ("wss://nano.example/control", "wss://nano.example:8766")])
 def test_default_underwater_url_uses_same_host(source, target):
     assert underwater_url(source) == target
+
+
+def test_cleaning_speed_editor_stops_both_and_keeps_arrow_keys_in_editor(dual, monkeypatch):
+    window, _, _ = dual
+    key(window, Qt.Key_W)
+    key(window, Qt.Key_Left)
+    editor = window.cleaning_speed_value.lineEdit()
+    monkeypatch.setattr(QApplication, "focusWidget", lambda: editor)
+    window.eventFilter(editor, QEvent(QEvent.FocusIn))
+    assert window.direction == window.under_panel.direction == "STOP"
+    key(window, Qt.Key_W)
+    key(window, Qt.Key_Right)
+    assert window.direction == window.under_panel.direction == "STOP"
+    assert not window._pressed_keys and not window.under_panel.pressed

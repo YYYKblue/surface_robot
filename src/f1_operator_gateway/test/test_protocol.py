@@ -105,3 +105,23 @@ def test_map_delete_and_unload_protocol():
     with pytest.raises(ValueError):
         decode(json.dumps(dict(packet, snapshot_id='../escape')))
     assert decode(json.dumps(dict(op='mapping', action='unload', request_id='unload')))['action'] == 'unload'
+
+
+@pytest.mark.parametrize('value', [0, 1, 50, 75, 76, 99, 100])
+def test_cleaning_speed_preserves_raw_integer(value):
+    packet = dict(op='task', action='set_cleaning_speed', task_type='l',
+                  request_id='speed', value=value)
+    assert decode(json.dumps(packet)) == packet
+
+
+@pytest.mark.parametrize('value', [-1, 101, True, False, 50.0, 50.5, '50', None,
+                                  float('nan'), float('inf')])
+def test_cleaning_speed_rejects_invalid_value(value):
+    packet = dict(op='task', action='set_cleaning_speed', request_id='speed', value=value)
+    with pytest.raises(ValueError, match='set_cleaning_speed'):
+        decode(json.dumps(packet))
+
+
+def test_cleaning_speed_requires_request_identity():
+    with pytest.raises(ValueError, match='request_id'):
+        decode(json.dumps(dict(op='task', action='set_cleaning_speed', value=50)))

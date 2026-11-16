@@ -2,7 +2,9 @@
 
 人工暂停续跑、取消及地图删除／卸载的接口和使用边界见[功能说明](../../docs/TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
 
-更新：2026-11-12。Windows Qt App 的水面 Nano 侧 WebSocket 入口（默认 `:8765`），提供手动控制、双任务操作、初始位姿、状态转发，以及受管建图、地图保存与选择。模块职责与入口对比见[架构导读](../../docs/ARCHITECTURE.md)。
+更新：2026-11-16。Windows Qt App 的水面 Nano 侧 WebSocket 入口（默认 `:8765`），提供手动控制、双任务操作、初始位姿、状态转发，以及受管建图、地图保存与选择。模块职责与入口对比见[架构导读](../../docs/ARCHITECTURE.md)。
+
+**2026-11-16 部署状态：** 指定 Nano 已完成接口包、两种清洗控制器和网关的构建及 267 项隔离测试；重启后实时 hello 已确认 `cleaning_speed_v1`，见[部署验证](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#2026-11-16-nano-部署验证)。当时无地图待机、F103 串口缺失且雷达无新鲜数据，未验证物理输出；该记录不代表之后硬件状态。Windows 使用更新后的源码命令行启动，本次没有生成 exe。
 
 同一 App 的水下箭头控制另连 [`under_control`](../../under_control/README.md)（默认 `:8766`），该服务自行管理 H7 会话及 USB 转 RS485，不经过本 ROS 网关或 `f1_nano_bridge`。本页的租约、地图、任务锁与 `manual_stop` 均属于水面链路；顶部“两台手动停止”由 App 分别向两个服务发送停止，不取消自动任务。水下服务由独立 `under-control.service` 托管，水面 launch 不会启动它。
 
@@ -10,10 +12,14 @@ Windows App 的[网络 RTT 显示](../../operator_app/README.md#windows--nano-�
 
 ## 构建
 
+以下沿用 Nano 的复制安装模式。升级前确认无任务及手动控制，再停止 `f1-operator.service`；完成构建与检查后恢复服务，完整步骤见 [Nano 部署指南](../../DEPLOY_NANO.md#5-nano编译)。开发机使用其他安装模式时不要直接混用已有缓存。
+
 ```bash
 source /opt/ros/humble/setup.bash
 cd /home/nvidia/surface_ws
-colcon build --symlink-install --packages-up-to f1_operator_gateway
+CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
+  colcon build --base-paths src --executor sequential --packages-up-to f1_operator_gateway \
+  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 -DAMENT_CMAKE_SYMLINK_INSTALL=OFF
 source install/local_setup.bash
 export ROS_DOMAIN_ID=33
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
@@ -122,7 +128,8 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py \
 | `/map`、TF、`/pavo2_scan` | 显示底图、船体位姿及扫描健康检查；不再生成 App 雷达点 |
 | `/pool_cleaning/status`、`/l_cleaning/status` | 两种任务的独立状态 |
 | 两组任务的 `start/pause/resume/stop/cancel` | 任务操作 |
-| 两组任务的 `set_forward_boost`（`std_srvs/srv/SetBool`） | 启动前设置主电机前进辅助 |
+| 两组任务的 `set_cleaning_speed`（`f1_interfaces/srv/SetCleaningSpeed`） | 启动前设置整数 0–100，由控制器映射为前进辅助 0–50 |
+| 两组任务的 `set_forward_boost`（`std_srvs/srv/SetBool`） | 旧开关兼容：true 设置原始值 50，false 设置 0 |
 | `${localization_prefix}/set_initial_pose` | 提交 map 坐标系初始位姿 |
 | `${localization_prefix}/localization_status` | 定位诊断、稳定窗口与就绪状态 |
 
@@ -162,15 +169,19 @@ CTRL/ACK 的累计年龄会加上 `max(ROS 当前时间−桥状态源时间戳,
 
 `telemetry.state` 原样传递桥状态，并包含 `rc_valid/rc_flags/rc_sequence/rc_age_sec/rc_channels`（14 路原始通道）用于 RC 诊断。RC 数组和四路目标 PWM 均转换为 JSON 数组。`speed_percent`、方向和 `target_pwm_bl_br_fl_fr` 来自 F103 状态；目标 PWM 不表示斜坡期间的实时 PWM、实测转速或推力。RC 数据的有效性与年龄应单独判断，不能用收到 App 遥测代替 RC 新鲜度。
 
-此扩展保持网关 250 ms 手动输入看门狗、250 ms ROS 指令有效期及既有停止/交接机制。Windows 打包与控件操作见 [App 说明](../../operator_app/README.md)；软件测试、ACK 和状态回显不替代实机输出测量。
+此扩展保持网关 250 ms 手动输入看门狗、250 ms ROS 指令有效期及既有停止/交接机制。Windows 源码启动与控件操作见 [App 说明](../../operator_app/README.md)；软件测试、ACK 和状态回显不替代实机输出测量。
 
-`forward_boost` capability 表示网关支持启动前提速设置。请求示例：
+`cleaning_speed_v1` capability 表示网关支持启动前数值清洗速度设置。请求示例：
 
 ```json
-{"op":"task","action":"set_forward_boost","task_type":"l","request_id":"boost-1","enabled":true}
+{"op":"task","action":"set_cleaning_speed","task_type":"l","request_id":"speed-1","value":75}
 ```
 
-`enabled` 必须是布尔值，`request_id` 必填；沿用任务操作的串行、去重和权限控制。网关检查新鲜任务状态、地图/任务类型及服务，仅 `IDLE/CANCELLED/STOPPED/COMPLETE` 可修改，控制器再次校验，暂停不放行。服务成功后还等待请求发出之后、开关一致的新鲜状态；超时表示结果待确认，不自动重发。设置确认前不能开始任务。遥测透传控制器的 `forward_boost_*` 字段，并提供 `can_set_forward_boost` 与 `forward_boost_setting_error`。开关由控制器持有，App 重连不重置或重发，重载控制器默认关闭。
+`value` 必须是整数 0–100（布尔值、小数和越界值均拒绝），`request_id` 必填。网关转发原始值给 `/pool_cleaning/set_cleaning_speed` 或 `/l_cleaning/set_cleaning_speed`，控制器按 `(value + 1) // 2` 映射为整数 0–50；例如上例保存原始值 75、前进辅助输出 38。0 关闭前进辅助，原有滚刷推进与纠偏仍可执行；该数值不表示实测船速。
+
+沿用任务操作的串行、去重和权限控制。网关检查新鲜任务状态、地图/任务类型及服务，仅 `IDLE/CANCELLED/STOPPED/COMPLETE` 可修改，控制器再次校验，暂停不放行。服务成功后还等待请求发出之后、原始值和映射值均匹配的新鲜状态；超时表示结果待确认，不自动重发。设置确认前不能开始任务。遥测透传 `cleaning_speed`、`forward_boost_percent` 和其余 `forward_boost_*` 字段，并提供 `can_set_cleaning_speed` 与 `cleaning_speed_setting_error`。设置由控制器按任务类型保存，App 重连读取原始值；重载地图/控制器重启默认 0。只有 capability 但没有数值服务或有效数值状态时，不能修改。受管入口未加载地图时两个清洗控制器不运行，`can_set_cleaning_speed=false` 并提示先加载地图，属于正常待机行为。
+
+旧 `forward_boost` capability 和 `set_forward_boost` 请求继续兼容布尔字段 `enabled`：true 设置原始值 50（输出 25），false 设置 0；保留 `can_set_forward_boost` 与 `forward_boost_setting_error`。新 App 使用数值接口，旧控制器不支持时提示升级，不静默回退。
 
 `diagnostic_history` 能力对应独立 `{"type":"diagnostics","diagnostics":{"session":"...","events":[]}}` 消息。网关保留最近 50 条桥状态变化和手动停止事件，hello 时补发历史，之后只发送新增事件。事件带单调递增 `id`、`time_unix`、`source`、`reason`、`details`；App 按 session/id 去重。手动停止记录清除前的输入年龄及超时阈值，桥事件记录 CTRL/ACK 年龄和最近撤销原因，不包含控制 token。进程重启不保留旧历史。新版 App 仍可读取旧遥测内嵌的 diagnostics。
 
@@ -179,7 +190,7 @@ CTRL/ACK 的累计年龄会加上 `max(ROS 当前时间−桥状态源时间戳,
 {"op":"initial_pose","x":1.2,"y":3.4,"yaw":1.57,"map_revision":1,"request_id":"另一请求编号"}
 ```
 
-`task_type` 为 `rectangle/l`；`action` 为 `start/pause/resume/stop/cancel`。位姿使用米、弧度，yaw 在 [-π, π]；`map_revision` 必须匹配当前地图。网关生成 ROS 时间戳、平面四元数和默认协方差。
+`task_type` 为 `rectangle/l`；任务生命周期 `action` 为 `start/pause/resume/stop/cancel`，设置操作另有上述 `set_cleaning_speed` 与兼容的 `set_forward_boost`。位姿使用米、弧度，yaw 在 [-π, π]；`map_revision` 必须匹配当前地图。网关生成 ROS 时间戳、平面四元数和默认协方差。
 
 `reply` 回传 `request_id`、`success`、`message`，可能带 `pending=true`（尚未确认）。网关缓存每客户端最近的请求结果，重复编号不重复执行；App 不自动重试操作。
 
@@ -218,7 +229,7 @@ colcon test-result --verbose
 
 上述 DDS 文件**仅用于本机测试**，使用 localhost 单播与 1200 字节报文/1024 字节分片，不用于连接 Nano。当前开发环境曾出现“能发现节点，但接收不到清洗状态”：独立字符串测试中 10/1000 字节消息正常，3000/10000 字节消息丢失；使用此配置后四种大小均可接收。实机终端不要继承这份测试配置。
 
-### 本次验证记录（2026-10-30）
+### 历史验证记录（2026-10-30）
 
 以下分节为各次修改当时的记录，不是本轮文档核对重新执行的结果；七包记录早于雷达驱动纳入工作空间，当前完整构建为八包。测试数也受每次选择的包和用例范围影响，不应相加作为当前总量。
 
