@@ -1,16 +1,16 @@
 """Real WebSocket + pyserial PTY + compiled H7 C; never opens a physical port."""
 import asyncio
 import ctypes
+import errno
 import json
 import os
 import pty
 import select
 import threading
 import time
+import tty
 
 import pytest
-
-websockets = pytest.importorskip("websockets")
 
 from under_control.protocol import DEVICE, PROTOCOL
 from under_control.serial_worker import SerialWorker, open_serial
@@ -69,7 +69,36 @@ async def send(ws, op, **fields):
     await ws.send(json.dumps(dict(protocol=PROTOCOL, device=DEVICE, op=op, **fields)))
 
 
+def test_auto_ch340_skips_stream_without_transmitting_then_finds_h7(board, monkeypatch):
+    master, slave = pty.openpty()
+    tty.setraw(slave)
+    gnss = os.ttyname(slave)
+    os.close(slave)
+    monkeypatch.setattr("under_control.serial_worker.ch340_candidates", lambda: [gnss, board["port"]])
+    worker = SerialWorker("auto_ch340", motion_enabled=False)
+    try:
+        worker.start()
+        deadline = time.monotonic() + 7
+        while time.monotonic() < deadline and not worker.snapshot()["stop_confirmed"]:
+            os.write(master, b"$GNHPR,,,,,,,,*43\r\n")
+            time.sleep(.03)
+            if select.select([master], [], [], 0)[0]:
+                try:
+                    data = os.read(master, 1024)
+                except OSError as error:  # A PTY with no open slave reports EIO.
+                    assert error.errno == errno.EIO
+                    continue
+                assert not data, "H7 transmitted to the streaming GNSS candidate"
+        assert board["frames"] and worker.snapshot()["stop_confirmed"]
+        assert board["output"] == (0, 0, 0, 0)
+    finally:
+        worker.close()
+        os.close(master)
+
+
 def test_network_to_real_h7_input_timeout_ownership_and_no_replay(board):
+    websockets = pytest.importorskip("websockets")
+
     async def scenario():
         worker = SerialWorker(board["port"], motion_enabled=True)
         server = Server(worker, "127.0.0.1", 0)
@@ -148,6 +177,8 @@ def test_lost_h7_replies_stop_and_do_not_continue_renewing_motion(board):
 
 
 def test_server_without_serial_never_claims_hardware_ready():
+    websockets = pytest.importorskip("websockets")
+
     async def scenario():
         worker = SerialWorker()
         server = Server(worker, "127.0.0.1", 0)
@@ -205,6 +236,7 @@ def test_optional_h7_missing_at_start_hotplug_and_replug_without_worker_restart(
 
 
 def test_qt_arrow_to_websocket_to_real_h7_while_surface_disconnected(board):
+    pytest.importorskip("websockets")
     pytest.importorskip("websocket")
     try:
         from PySide6.QtCore import Qt

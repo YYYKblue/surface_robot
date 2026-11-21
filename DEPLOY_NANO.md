@@ -1,6 +1,6 @@
 # Nano 从零部署 surface_ws
 
-更新：2026-11-16。适用于 Nano 首次部署或已有 `surface_ws` 升级。包含水面 ROS 系统及独立水下 H7 服务。仅部署水下控制时直接阅读[水下服务章节](#水下-h7独立服务与可选设备自启动)，无需构建 ROS。PC 与 Nano 分别构建；下面每节标明执行设备。2026-11-09 控制器配置加载修复已部署到 Nano 并验证，见[故障排查](#定位正常但开放任务不能启动)。这项修复不涉及雷达驱动迁移；雷达旧服务迁移见第 8 节，旧清洗包升级见[清洗包迁移说明](src/f1_pool_cleaning/MIGRATION.md)。
+更新于 2026-11-21。适用于 Nano 首次部署或已有 `surface_ws` 升级。包含水面 ROS 系统及独立水下 H7 服务。仅部署水下控制时直接阅读[水下服务章节](#水下-h7独立服务与可选设备自启动)，无需构建 ROS。PC 与 Nano 分别构建；下面每节标明执行设备。2026-11-09 控制器配置加载修复已部署到 Nano 并验证，见[故障排查](#定位正常但开放任务不能启动)。这项修复不涉及雷达驱动迁移；雷达旧服务迁移见第 8 节，旧清洗包升级见[清洗包迁移说明](src/f1_pool_cleaning/MIGRATION.md)。
 
 | 项目 | 统一约定 |
 | --- | --- |
@@ -9,6 +9,7 @@
 | Nano 登录 | `nvidia@192.168.1.188`，地址变化时替换 |
 | 系统 ROS | `/opt/ros/humble` |
 | 雷达驱动包 | `f1_lidar_driver` |
+| 独立 RTK 驱动 | `f1_rtk_driver`，WTRTK-982 根据 CH340 标识及 GGA/HPR 自动识别 |
 | 桥接功能包 | `f1_nano_bridge` |
 | 自定义接口包 | `f1_interfaces` |
 | 沿边清洗功能包 | `f1_pool_cleaning` |
@@ -19,6 +20,46 @@
 PC 和 Nano 分别编译，不传 PC 的生成目录。部署状态以各项验证记录为准，文档中的操作命令不表示全部步骤均已在目标设备执行。
 
 **2026-11-16 清洗速度已部署到指定 Nano。** `f1_interfaces`、`f1_pool_cleaning`、`f1_l_cleaning`、`f1_operator_gateway` 四包构建成功，Nano 隔离测试 267 项通过，operator 已恢复待机并确认 `cleaning_speed_v1`。按用户要求未备份原代码，地图和 YAML 未覆盖，Windows 只更新源码、不打包 exe。部署时 F103 串口缺失、雷达无新鲜数据，所以结果仅证明软件部署及接口链路；详见[当次验证快照](docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#2026-11-16-nano-部署验证)。下文首次安装和其他设备升级步骤不需要在这台 Nano 上重复执行。
+
+## 独立 RTK 部署
+
+WTRTK-982 使用独立串口。仅更新船中心定位与船头定向时，部署范围是 `f1_rtk_driver`。先在 PC 工作空间根目录同步该包，保留远端其他文件。
+
+```bash
+rsync -av --exclude='__pycache__/' --exclude='.pytest_cache/' --exclude='*.pyc' \
+  src/f1_rtk_driver/ nvidia@192.168.1.188:/home/nvidia/surface_ws/src/f1_rtk_driver/
+```
+
+在 Nano 新终端只加载系统 ROS，按现有复制安装方式编译。测试使用本机伪串口及 ROS 订阅者，覆盖有效测量、定向失锁和断线重连。
+
+```bash
+cd /home/nvidia/surface_ws
+source /opt/ros/humble/setup.bash
+CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
+  colcon build --base-paths src --packages-select f1_rtk_driver --executor sequential \
+  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 -DAMENT_CMAKE_SYMLINK_INSTALL=OFF
+source install/local_setup.bash
+ROS_LOCALHOST_ONLY=1 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
+  colcon test --base-paths src --packages-select f1_rtk_driver --return-code-on-test-failure
+```
+
+实机运行终端加载上述工作空间，设置 `ROS_DOMAIN_ID=33` 和 `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`。核对设备归属及已有驱动实例。
+
+```bash
+export ROS_DOMAIN_ID=33 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+python3 -m serial.tools.list_ports -v
+ros2 node list | grep -Fx /f1/rtk/rtk_driver
+```
+
+若已有驱动，直接订阅。需要加载刚安装的新版时，重启持有该串口的 RTK 实例。没有驱动实例时，以 `ros2 launch f1_rtk_driver rtk.launch.py` 前台启动。另开同环境终端查看 `ros2 topic echo --once /f1/rtk/status`。串口缺席时状态为 `connected=false`，节点会自动重试。只有收到同一 GNSS 时刻的有效 GGA 和固定解 HPR 后，`/f1/rtk/base_fix` 才给出有效的船中心位置。六个话题、安装角和实船核对方法见 [RTK 包说明](src/f1_rtk_driver/README.md#数据约定)。
+
+RTK 默认 `port: auto`，可插在任一可用 USB 数据口。驱动只读候选 CH340 的 GGA 和 HPR，确认校验与报文结构后连接，拔插后重新识别。现场 H7 同为通用 CH340 时，设置 `/etc/under-control.env` 的 `UNDER_SERIAL_PORT=auto_ch340`。H7 跳过已占用和 1.5 秒监听期内主动输出数据的适配器。对静默候选只先使用既有发现/STOP 握手，运动许可仍由有效 H7 应答和原有控制流程决定。若使用其他型号的 H7 适配器，可指定其唯一 by-id。现场更新 H7 环境后只需重启 `under-control.service`。
+
+**2026-11-21 部署记录。** 此前按物理口筛选时，RTK 接在另一插口，接收机持续输出但驱动显示离线。重新核对 USB 后确认三台外设分别为 UVC 摄像头、水面桥和 RTK，H7 当时未接。对 CH340 被动读取 2.5 秒得到 13 条 GGA 和 12 条 HPR，校验均通过。船体参数为安装角 +42°、主天线 x = −0.191 m、y = +0.213 m。
+
+停用旧物理口 udev 规则并切换自动识别后，Nano 的 RTK 包 32 个用例全部通过。驱动在当前接线识别到 `/dev/ttyUSB0`。实机连续 12 秒收到 60 条 GGA、61 条 HPR，60 条状态均为已连接、拒收计数为 0。船中心和船头话题各收到 60 条 `base_link` 消息。室内 GGA 质量为 0、HPR 质量为 −1，均无有效解。H7 遥测为 OFFLINE，串口发送计数为 0。水面桥和雷达服务运行期间 PID 连续。此次未物理换插，也未接入 H7 实机。
+
+本次启动的是临时用户服务。在 Nano 以 `nvidia` 运行 `systemctl --user status f1-rtk-test.service` 可查看，`systemctl --user stop f1-rtk-test.service` 可结束。重启 Nano 后需要 RTK 采集时，按上文前台命令启动。
 
 ## 水下 H7：独立服务与可选设备自启动
 
@@ -50,7 +91,7 @@ sudoedit /etc/under-control.env
 sudo install -m 0644 under_control/deploy/under-control.service /etc/systemd/system/under-control.service
 ```
 
-将 `UNDER_SERIAL_PORT` 改为实际 H7 适配器的 `/dev/serial/by-id/...`，不能使用水面 F103 的端口，也不要自动选取任意 ttyUSB/ttyACM。模板的运动许可为 `false`；只会发现和停止握手，核验板端反馈后再改为 `true` 并重启服务。只要配置了串口，停止握手就会写串口，不是被动监听。现有 `192.168.1.188` 的现场配置已为 `true`，设备仍须就绪且收到新的人工输入才会运动；升级时保留现场 env，不用模板覆盖。
+H7 使用通用 CH340 时选择 `UNDER_SERIAL_PORT=auto_ch340`，有唯一序列号的其他适配器可填写其专属 by-id。模板的运动许可为 `false`；只会发现和停止握手，核验板端反馈后再改为 `true` 并重启服务。只要配置了串口，停止握手就会写串口，不是被动监听。现有 `192.168.1.188` 的现场配置已为 `true`，设备仍须就绪且收到新的人工输入才会运动；升级时保留现场 env，不用模板覆盖。
 
 核对已有服务和端口占用后释放同一 H7 串口。如果确认旧服务确实是被替换的独立 H7 桥，先 `sudo systemctl disable --now nano-h7-bridge.service`；不停止水面 `f1-operator.service` 或雷达服务。然后执行：
 
@@ -188,7 +229,7 @@ ssh nvidia@192.168.1.188
 `rosdep update` 使用普通用户执行。该流程依据[官方 rosdep 使用说明](https://docs.ros.org/en/humble/Tutorials/Intermediate/Rosdep.html)，从 `package.xml` 解析依赖；网络或依赖解析失败时先解决错误，再执行下一步。
 括号内启用了失败即停止，避免更新失败后继续使用已有缓存安装依赖。若出现缺失的 `debian.yaml` 或 GitHub 索引超时，按[第 9 节](#9-rosdep-更新报错处理)修复后重试。
 
-当前应列出八个项目包（已包含 PAVO2 驱动）：
+全量同步后，`colcon list --base-paths src --names-only` 应列出以下九个包。
 
 ```text
 f1_interfaces
@@ -199,6 +240,7 @@ f1_mapping_bringup
 f1_nano_bridge
 f1_operator_gateway
 f1_pool_cleaning
+f1_rtk_driver
 ```
 
 若列表为空，检查是否把源码放进了 `/home/nvidia/surface_ws/src`。先传源码，再构建，不需要先编译空工作空间。
@@ -215,7 +257,7 @@ CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
   --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 -DAMENT_CMAKE_SYMLINK_INSTALL=OFF
 ```
 
-只扫描 `src/`，同时限制包间和包内并行度，减小 Nano 编译时的内存占用。这里统一采用复制安装（`AMENT_CMAKE_SYMLINK_INSTALL=OFF`），避免在已有复制安装缓存上直接切换 `--symlink-install` 造成目录冲突。仅构建本仓库时，成功应看到 `8 packages finished`，且没有 failed/aborted。失败时保留输出，先定位首个报错；只有编译成功后才加载本工作空间环境。
+只扫描 `src/`，同时限制包间和包内并行度，减小 Nano 编译时的内存占用。这里统一采用复制安装（`AMENT_CMAKE_SYMLINK_INSTALL=OFF`），避免在已有复制安装缓存上直接切换 `--symlink-install` 造成目录冲突。仅构建本仓库时，成功应看到 `9 packages finished`，且没有 failed/aborted。失败时保留输出，先定位首个报错；只有编译成功后才加载本工作空间环境。
 
 ## 6. Nano：检查安装结果
 
@@ -232,6 +274,8 @@ ros2 pkg executables f1_nano_bridge
 ros2 interface show f1_interfaces/msg/ActuatorCommand
 ros2 pkg executables cartographer_ros
 ros2 pkg executables f1_lidar_driver
+ros2 pkg executables f1_rtk_driver
+ros2 launch f1_rtk_driver rtk.launch.py --show-args
 ros2 launch f1_lidar_driver lidar.launch.py --show-args
 ros2 launch f1_nano_bridge bridge.launch.py --show-args
 ros2 pkg executables f1_operator_gateway
@@ -421,7 +465,7 @@ ros2 launch f1_operator_gateway operator_gateway.launch.py --show-args
 
 ## 定位拆包升级
 
-2026-10-30 起，定位实现位于 `f1_localization`，当时源码包含七个项目包（现已新增雷达驱动，为八包）。矩形和大 L 的任务启动命令不变，旧定位 launch 与可执行入口保留转发。详见[定位包说明](src/f1_localization/README.md)。
+2026-10-30 起，定位实现位于 `f1_localization`，当时源码包含七个项目包，随后加入雷达和独立 RTK 驱动。矩形和大 L 的任务启动命令不变，旧定位 launch 与可执行入口保留转发。详见[定位包说明](src/f1_localization/README.md)。
 
 首次升级时，先停止运行中的定位和清洗节点，备份现场修改的参数文件。在 PC 将新定位包及两个清洗包同步到 Nano；下列 `--delete` 仅限这三个包目录，用于移除迁走的旧定位源码和配置：
 

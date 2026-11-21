@@ -2,7 +2,7 @@
 
 人工暂停续跑、取消及地图删除／卸载的接口和使用边界见[功能说明](TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
 
-清洗速度链路更新：2026-11-16；其余架构核对基线为 2026-11-12。`9db6798` 为历史配置修复基线，不代表当前代码版本。本文依据源码、launch、YAML 与测试整理。操作入口见[根 README](../README.md)，目标机安装见[部署指南](../DEPLOY_NANO.md)。历史验证记录只说明当时的测试结果，不能用来证明当前实船状态。
+独立 RTK 链路更新于 2026-11-21，清洗速度链路更新于 2026-11-16，其余架构核对基线为 2026-11-12。`9db6798` 为历史配置修复基线，不代表当前代码版本。本文依据源码、launch、YAML 与测试整理。操作入口见[根 README](../README.md)，目标机安装见[部署指南](../DEPLOY_NANO.md)。历史验证记录只说明当时的测试结果，不能用来证明当前实船状态。
 
 ## 1. 项目组成与依赖
 
@@ -11,6 +11,7 @@
 | 包或目录 | 主要代码 | 职责 |
 |---|---|---|
 | `f1_lidar_driver` | [pavo2_scan_node.cpp](../src/f1_lidar_driver/src/pavo2_scan_node.cpp)、`vendor/pavo2_sdk/` | 连接雷达、发布扫描，不发布安装 TF |
+| `f1_rtk_driver` | [串口节点](../src/f1_rtk_driver/wit_rtk/node.py)、[船体换算](../src/f1_rtk_driver/wit_rtk/alignment.py) | WTRTK-982 独立采集，发布主天线与船体观测 |
 | `f1_mapping_bringup` | [lidar_mapping.launch.py](../src/f1_mapping_bringup/launch/lidar_mapping.launch.py)、`config/pavo2_2d.lua` | Cartographer 纯雷达建图、地图发布、平面安装 TF |
 | `f1_localization` | [localization_node.py](../src/f1_localization/f1_localization/localization_node.py)、`localization.py`、`map_io.py` | 冻结地图、初始位姿、轨迹生命周期、定位门控和栅格读取 |
 | `f1_pool_cleaning` | [controller_node.py](../src/f1_pool_cleaning/f1_pool_cleaning/controller_node.py)、`autonomous.py`、`mission.py`、`map_profile.py`、`open_route.py` | 矩形任务及两类任务共用的简单靠近、沿墙、覆盖、感知实现 |
@@ -22,12 +23,14 @@
 | `operator_app/underwater.py` | [underwater.py](../operator_app/underwater.py) | 独立水下连接、箭头面板、控制代次和新鲜度门控 |
 | `under_control` | [server.py](../under_control/server.py)、`session.py`、`serial_worker.py`、`protocol.py` | H7 网络网关、会话与串口请求/回包；独立 Python 服务，不是 ROS 包 |
 
-`f1_localization` 依赖接口和建图配置包，建图配置包再依赖雷达驱动。因此 `--packages-up-to f1_localization` 当前构建四个仓库包；`--packages-up-to f1_operator_gateway` 构建全部八包。构建依赖并不意味着 launch 会启动所有依赖节点：雷达始终独立运行。
+`f1_localization` 依赖接口和建图配置包，建图配置包再依赖雷达驱动。因此 `--packages-up-to f1_localization` 构建四个仓库包，`--packages-up-to f1_operator_gateway` 构建八个。全工作空间还包括可单独构建的 `f1_rtk_driver`。雷达和 RTK 驱动各自独立启动。
 
 ## 2. 数据与控制流
 
 ```mermaid
 flowchart LR
+    RTK[WTRTK-982] -->|GGA / HPR| R[f1_rtk_driver]
+    R -->|base_fix / bow_heading| REC[ROS 订阅与录包]
     L[PAVO2 驱动] -->|/pavo2_scan| SLAM[Cartographer 建图或固定地图定位]
     L --> P[墙线感知]
     SLAM -->|位姿| N[简单动作靠近]
@@ -46,6 +49,8 @@ flowchart LR
     B <-->|CTRL / ACK / IMU| MCU[F103]
 ```
 
+RTK 的 `base_fix` 给出船中心的 WGS84 经纬度，`bow_heading` 给出船头顺时针真北航向。它们使用船体安装参数，当前由独立订阅者读取。建图与固定地图定位仍从 Cartographer 取得地图内位姿。[RTK 坐标和话题](../src/f1_rtk_driver/README.md#数据约定)
+
 图中的网关任务服务调用与初始位姿调用分别进入控制器和定位管理器。IMU 由桥发布，但当前建图和固定地图定位均不融合 IMU 或轮速。TF 链为 `map → odom → base_link → pavo2s_frame`；雷达静态安装参数来自 `f1_mapping_bringup/config/lidar_planar.yaml`。建图 Lua 的跟踪帧为 `pavo2s_frame`，纯定位 Lua 的跟踪帧为 `base_link`，对外船体位姿都使用 `map → base_link`。
 
 水下仅需要前后与转向手动控制，网关和串口桥合并在 `under_control` 进程中，无须接入 ROS 话题、地图或任务租约。`server.py` 处理 `under-operator-v1`，`session.py` 负责控制权、代次和停止握手，`serial_worker.py` 独立检查输入期限并串行完成半双工请求/回包，`protocol.py` 对接 H7 V6。App 两个 worker 独立运行；水面自动任务锁、某一连接断线或过期仅影响对应设备。全局手动停止、窗口失焦和进入文本/数值编辑会清除两台手动意图，不能取消自动任务或覆盖 H7 遥控优先权。
@@ -58,6 +63,7 @@ flowchart LR
 
 | 入口 | 启动内容 | 使用前提 |
 |---|---|---|
+| `f1_rtk_driver rtk.launch.py` | RTK 串口、船体位置与航向 | 自动识别持续输出 GGA/HPR 的 CH340，可换 USB 插口 |
 | `f1_lidar_driver lidar.launch.py` | 仅雷达驱动 | 没有同一设备的常驻驱动实例 |
 | `f1_mapping_bringup lidar_mapping.launch.py` | 建图、地图发布、可选安装 TF/RViz | 已有扫描，未运行固定地图定位 |
 | `f1_localization localization.launch.py` | 冻结地图定位和门控 | 地图三件套与扫描已准备 |

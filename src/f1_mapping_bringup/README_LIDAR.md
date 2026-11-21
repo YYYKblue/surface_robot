@@ -31,7 +31,7 @@ TF 的 z/roll/pitch=0 是二维建模约定，不代表实测高度或倾角。
 
 ## 同步与构建
 
-首次部署或升级执行[Nano 部署指南](../../DEPLOY_NANO.md)，使用 `/home/nvidia/surface_ws`。Cartographer 通过系统软件包安装，八个项目包（含 `f1_lidar_driver`）在该工作空间内构建。
+首次部署或升级执行[Nano 部署指南](../../DEPLOY_NANO.md)，使用 `/home/nvidia/surface_ws`。Cartographer 通过系统软件包安装，雷达驱动与建图包均在该工作空间内构建。
 
 部署完成后，另开 Nano 运行终端：
 

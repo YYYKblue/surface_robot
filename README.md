@@ -6,7 +6,7 @@
 
 人工暂停续跑、取消及地图删除／卸载的接口和使用边界见[功能说明](docs/TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
 
-更新：2026-11-16，依据当前源码、启动文件和默认配置整理。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
+2026-11-21 补充独立 RTK 部署与船体观测入口，其余项目概览沿用 2026-11-16 核对结果。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
 
 F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主电机输出支持整数 0–100，Windows App 提供滑条、数值输入和快捷值，反馈区分设定值、固件报告值与目标 PWM；RC 原始通道独立用于诊断。旧固件协议会明确阻止控制。新标度 25% 为 PWM 偏移 100 μs，旧 25 档为 125 μs；自主清洗的纠偏、靠近和换边保留新 25% 输出，沿墙前进辅助由 App 0–100 设置映射为 0–50 输出，实际效果需实船验证。接口包、桥接、网关、依赖节点和 Windows App 应一起升级，见[协议与迁移](src/f1_nano_bridge/README.md#f103-v3-连续输出2026-11-11)。
 
@@ -21,6 +21,7 @@ F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主�
 | [`f1_interfaces`](src/f1_interfaces/README.md) | 统一执行器、控制状态、墙观测、目标边消息与服务 |
 | [`f1_nano_bridge`](src/f1_nano_bridge/README.md) | F103 串口协议、CTRL/ACK、控制租约、超时保护和 IMU 遥测 |
 | [`f1_lidar_driver`](src/f1_lidar_driver/README.md) | PAVO2 驱动与 SDK、雷达参数、独立启动及开机服务模板 |
+| [`f1_rtk_driver`](src/f1_rtk_driver/README.md) | 独立读取 WTRTK-982，发布船中心 `base_fix`、船头真北航向 `bow_heading` 及原始天线观测 |
 | [`f1_mapping_bringup`](src/f1_mapping_bringup/README.md) | Cartographer 2D 纯雷达建图、静态雷达 TF 和扫描检查 |
 | [`f1_localization`](src/f1_localization/README.md) | 固定地图定位、初始位姿、轨迹管理和定位就绪门控 |
 | [`f1_pool_cleaning`](src/f1_pool_cleaning/README.md) | 墙感知、简单动作靠近、沿墙控制、矩形四边任务及覆盖记录 |
@@ -31,7 +32,7 @@ F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主�
 | `maps/` | 地图三件套直接存放于此；被 Git 忽略，克隆仓库不包含；日常同步保留 Nano 地图，首次部署或明确更新地图时单独传输 |
 | `docs/`、`tools/` | 开发验收、历史试验记录和离线路线示意工具 |
 
-仓库共有八个 ROS 功能包，另有独立的 `under_control/` Python 服务。PAVO2 驱动与 SDK 已迁入 `f1_lidar_driver`；本地固件源码位于 `under/F103firmware` 与 `under/H7firmware`。`under/` 和地图目录被 Git 忽略，重新克隆后需另行准备；本页测试使用当前 PC 本地固件副本。Nano 双机部署同步 `src/`、`under_control/`、文档和工具，不需要 Windows App 或固件工程，命令见 [Nano 部署指南](DEPLOY_NANO.md#3-pc把源码和文档传到-nano)。Nano 编译与旧雷达服务迁移流程见[驱动说明](src/f1_lidar_driver/README.md)。旧 ZMQ 网关和旧 UI 协议已移除。
+仓库共有九个 ROS 功能包，另有独立的 `under_control/` Python 服务。PAVO2 驱动与 SDK 已迁入 `f1_lidar_driver`；本地固件源码位于 `under/F103firmware` 与 `under/H7firmware`。`under/` 和地图目录被 Git 忽略，重新克隆后需另行准备；本页测试使用当前 PC 本地固件副本。Nano 双机部署同步 `src/`、`under_control/`、文档和工具，不需要 Windows App 或固件工程，命令见 [Nano 部署指南](DEPLOY_NANO.md#3-pc把源码和文档传到-nano)。Nano 编译与旧雷达服务迁移流程见[驱动说明](src/f1_lidar_driver/README.md)。旧 ZMQ 网关和旧 UI 协议已移除。
 
 ## 数据与控制链路
 
@@ -90,7 +91,7 @@ source install/local_setup.bash
 colcon list --names-only
 ```
 
-按需构建可使用 `--packages-up-to f1_l_cleaning f1_operator_gateway`，当前依赖关系下会覆盖八个包。网关为完整部署声明了雷达驱动、bridge、定位及清洗包的运行依赖，`--packages-up-to f1_operator_gateway` 会一并构建这些依赖。
+按需构建可使用 `--packages-up-to f1_l_cleaning f1_operator_gateway`，当前依赖关系下会覆盖八个包。网关为完整部署声明了雷达驱动、bridge、定位及清洗包的运行依赖，`--packages-up-to f1_operator_gateway` 会一并构建这些依赖。RTK 采集独立构建和启动，使用 `--packages-select f1_rtk_driver`。
 
 ## 启动入口
 
@@ -104,6 +105,8 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ```
 
 雷达由独立服务常驻运行；迁移后的服务使用本仓库 `f1_lidar_driver`，切换说明见[驱动部署](src/f1_lidar_driver/README.md#nano-由操作者切换现有开机服务)。没有服务实例时可单独执行 `ros2 launch f1_lidar_driver lidar.launch.py`，不要重复启动。
+
+独立采集船中心位置和船头真北航向时使用 `ros2 launch f1_rtk_driver rtk.launch.py`。Cartographer 仍使用雷达扫描。串口检查、ROS 话题和 Nano 验证步骤见 [独立 RTK 部署](DEPLOY_NANO.md#独立-rtk-部署)。
 
 确认驱动已发布 `/pavo2_scan` 后建图：
 

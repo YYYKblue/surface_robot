@@ -1,0 +1,13 @@
+/f1/rtk/rtk_driver:
+  ros__parameters:
+    port: auto
+    baudrate: 115200
+    stale_timeout_sec: 1.5
+    reconnect_sec: 1.0
+    antenna_frame: gnss_ant1
+    base_frame: base_link
+    # Clockwise from the bow to the M -> S baseline.
+    baseline_clockwise_from_bow_deg: 42.0
+    # Main antenna (M) relative to base_link, x forward and y to port.
+    antenna_x_m: -0.191
+    antenna_y_m: 0.213

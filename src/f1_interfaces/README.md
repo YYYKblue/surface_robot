@@ -1,6 +1,6 @@
 # F1 统一接口包
 
-本工作空间的所有自定义 ROS 消息和服务统一放在 `f1_interfaces`，业务节点在各自功能包中实现。后续新增自定义接口继续加入本包，并在 `CMakeLists.txt` 中注册；ROS 标准接口仍使用原有标准包。
+`f1_interfaces` 提供水面控制、清洗与定位共用的消息和服务。独立 RTK 驱动在自己的包内定义 `Heading`、`RtkStatus` 和 `RawSentence`，位置使用标准 `sensor_msgs/msg/NavSatFix`。[RTK 话题](../f1_rtk_driver/README.md#数据约定)
 
 | 类型 | 接口 | 用途 |
 |---|---|---|
@@ -56,4 +56,4 @@ ros2 interface show f1_interfaces/msg/ActuatorCommand
 ros2 interface show f1_interfaces/srv/AcquireControl
 ```
 
-`colcon list` 应只包含一个自定义接口包 `f1_interfaces`；当前仓库共八个功能包，完整列表见[工作空间说明](../../README.md)。IMU 由 `f1_nano_bridge` 原生串口桥直接发布，更新旧版本时同时参考[工作空间迁移说明](../../WORKSPACE_MIGRATION.md)，清理旧独立包与接入入口。
+迁移完成后，`colcon list --base-paths src` 应能发现 `f1_interfaces` 和独立的 `f1_rtk_driver`。当前完整包列表见[工作空间说明](../../README.md)。IMU 由 `f1_nano_bridge` 原生串口桥直接发布，更新旧版本时同时参考[工作空间迁移说明](../../WORKSPACE_MIGRATION.md)，清理旧独立包与接入入口。

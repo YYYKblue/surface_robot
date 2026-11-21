@@ -1,7 +1,9 @@
 """One Linux RS485 owner, one outstanding request, no ROS or network calls."""
+import errno
 import os
 import logging
 from pathlib import Path
+import select
 import threading
 import time
 
@@ -38,6 +40,13 @@ def open_serial(port):
         handle.close()
         raise
     return handle
+
+
+def ch340_candidates():
+    from serial.tools import list_ports
+
+    return sorted(p.device for p in list_ports.comports()
+                  if (p.vid, p.pid) == (0x1a86, 0x7523))
 
 
 class SerialWorker:
@@ -94,15 +103,40 @@ class SerialWorker:
             self.thread.join(2)
 
     def _run(self):
+        automatic = self.port == "auto_ch340"
+        candidates = []
+        defer_until = {}
         while not self.quit.is_set():
             handle = None
             retry_delay = .5
             try:
-                handle = open_serial(self.port)
+                port = self.port
+                if automatic:
+                    if not candidates:
+                        now = time.monotonic()
+                        candidates = [p for p in ch340_candidates() if defer_until.get(p, 0) <= now]
+                    if not candidates:
+                        raise FileNotFoundError("waiting for an H7 adapter")
+                    port = candidates.pop(0)
+                try:
+                    handle = open_serial(port)
+                except (OSError, RuntimeError) as error:
+                    if not automatic or (isinstance(error, OSError) and
+                                         error.errno not in (errno.EBUSY, errno.EAGAIN, errno.ENOENT)):
+                        raise
+                    defer_until[port] = time.monotonic() + 2.0
+                    raise FileNotFoundError("no free H7 candidate")
+                if automatic and select.select([handle], [], [], 1.5)[0]:
+                    # H7 only replies to a request. A streaming device (e.g.
+                    # GNSS) must be released before sending even discovery/STOP.
+                    defer_until[port] = time.monotonic() + 5.0
+                    raise FileNotFoundError("unsolicited serial data")
+                if self.quit.is_set():
+                    break
                 with self.lock:
                     self.core.opened()
                     self.reconnects += 1
-                logging.getLogger(__name__).info("H7 serial connected: %s", self.port)
+                logging.getLogger(__name__).info("H7 serial connected: %s", port)
                 self._exchange(handle)
             except Exception as error:
                 if isinstance(error, FileNotFoundError):

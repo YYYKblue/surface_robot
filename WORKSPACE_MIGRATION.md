@@ -10,7 +10,7 @@
 
 Python 模块仍为 `nano_ros_bridge`，原生桥节点仍为 `/nano_bridge`，配置文件顶层键仍为 `nano_bridge`。话题、服务、参数与执行器协议保持原样。
 
-以上改名仅指水面 ROS 桥。2026-11-12 新增的水下 [`under_control/`](under_control/README.md) 是工作空间根目录下的独立 Python 服务，不属于这八个 ROS 包，不由 colcon 构建。双机部署需保留并另行同步该目录；移动工作空间时还需更新 `under-control.service` 的工作目录与启动脚本路径。旧 `nano-h7-bridge.service` 是另一套历史 H7 服务，不能按本页的 ROS 包改名替换；其停用、备份和回退见[水下部署记录](docs/UNDER_CONTROL_NANO_DEPLOYMENT.md)。
+以上改名仅指水面 ROS 桥。2026-11-12 新增的水下 [`under_control/`](under_control/README.md) 是工作空间根目录下的独立 Python 服务，由 systemd 单独运行。双机部署需保留并另行同步该目录；移动工作空间时还需更新 `under-control.service` 的工作目录与启动脚本路径。旧 `nano-h7-bridge.service` 是另一套历史 H7 服务，不能按本页的 ROS 包改名替换；其停用、备份和回退见[水下部署记录](docs/UNDER_CONTROL_NANO_DEPLOYMENT.md)。
 
 PC 源码目录已改名。下面步骤仅适用于仍保留旧目录、已按[从零部署指南](DEPLOY_NANO.md)准备好系统 ROS 和工具的 Nano；不依赖其他已删除的用户工作空间。
 
@@ -70,7 +70,7 @@ CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
   --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 -DAMENT_CMAKE_SYMLINK_INSTALL=OFF
 ```
 
-当前源码应列出八个包：`f1_interfaces`、`f1_nano_bridge`、`f1_lidar_driver`、`f1_mapping_bringup`、`f1_localization`、`f1_pool_cleaning`、`f1_l_cleaning` 和 `f1_operator_gateway`。PAVO2 驱动已纳入仓库；既有雷达服务按[驱动说明](src/f1_lidar_driver/README.md)由操作者在 Nano 编译后切换。构建成功后，在运行终端加载新的 `install/local_setup.bash`。
+当前源码应列出九个包，包括`f1_interfaces`、`f1_nano_bridge`、`f1_lidar_driver`、`f1_mapping_bringup`、`f1_localization`、`f1_pool_cleaning`、`f1_l_cleaning`、`f1_operator_gateway` 和 `f1_rtk_driver`。PAVO2 驱动已纳入仓库；既有雷达服务按[驱动说明](src/f1_lidar_driver/README.md)由操作者在 Nano 编译后切换。构建成功后，在运行终端加载新的 `install/local_setup.bash`。
 
 ```bash
 source /opt/ros/humble/setup.bash
