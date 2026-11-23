@@ -6,7 +6,7 @@
 
 人工暂停续跑、取消及地图删除／卸载的接口和使用边界见[功能说明](docs/TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
 
-2026-11-21 补充独立 RTK 部署与船体观测入口，其余项目概览沿用 2026-11-16 核对结果。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
+2026-11-23 更新 RTK 统一接口和 20 Hz 配置，其余项目概览沿用 2026-11-16 核对结果。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
 
 F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主电机输出支持整数 0–100，Windows App 提供滑条、数值输入和快捷值，反馈区分设定值、固件报告值与目标 PWM；RC 原始通道独立用于诊断。旧固件协议会明确阻止控制。新标度 25% 为 PWM 偏移 100 μs，旧 25 档为 125 μs；自主清洗的纠偏、靠近和换边保留新 25% 输出，沿墙前进辅助由 App 0–100 设置映射为 0–50 输出，实际效果需实船验证。接口包、桥接、网关、依赖节点和 Windows App 应一起升级，见[协议与迁移](src/f1_nano_bridge/README.md#f103-v3-连续输出2026-11-11)。
 
@@ -18,7 +18,7 @@ F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主�
 
 | 目录 / 功能包 | 职责 |
 |---|---|
-| [`f1_interfaces`](src/f1_interfaces/README.md) | 统一执行器、控制状态、墙观测、目标边消息与服务 |
+| [`f1_interfaces`](src/f1_interfaces/README.md) | 统一执行器、控制状态、墙观测、目标边和 RTK 消息与服务 |
 | [`f1_nano_bridge`](src/f1_nano_bridge/README.md) | F103 串口协议、CTRL/ACK、控制租约、超时保护和 IMU 遥测 |
 | [`f1_lidar_driver`](src/f1_lidar_driver/README.md) | PAVO2 驱动与 SDK、雷达参数、独立启动及开机服务模板 |
 | [`f1_rtk_driver`](src/f1_rtk_driver/README.md) | 独立读取 WTRTK-982，发布船中心 `base_fix`、船头真北航向 `bow_heading` 及原始天线观测 |
@@ -91,7 +91,7 @@ source install/local_setup.bash
 colcon list --names-only
 ```
 
-按需构建可使用 `--packages-up-to f1_l_cleaning f1_operator_gateway`，当前依赖关系下会覆盖八个包。网关为完整部署声明了雷达驱动、bridge、定位及清洗包的运行依赖，`--packages-up-to f1_operator_gateway` 会一并构建这些依赖。RTK 采集独立构建和启动，使用 `--packages-select f1_rtk_driver`。
+按需构建可使用 `--packages-up-to f1_l_cleaning f1_operator_gateway`，当前依赖关系下会覆盖八个包。网关为完整部署声明了雷达驱动、bridge、定位及清洗包的运行依赖，`--packages-up-to f1_operator_gateway` 会一并构建这些依赖。独立 RTK 采集使用 `--packages-up-to f1_rtk_driver` 构建统一接口与驱动两个包。
 
 ## 启动入口
 

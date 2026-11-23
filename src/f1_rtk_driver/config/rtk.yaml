@@ -2,6 +2,8 @@
   ros__parameters:
     port: auto
     baudrate: 115200
+    # ROS status heartbeat; configure GGA and HPR periods on the receiver.
+    status_rate_hz: 20.0
     stale_timeout_sec: 1.5
     reconnect_sec: 1.0
     antenna_frame: gnss_ant1

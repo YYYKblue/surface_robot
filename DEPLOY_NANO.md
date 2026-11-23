@@ -23,22 +23,25 @@ PC 和 Nano 分别编译，不传 PC 的生成目录。部署状态以各项验�
 
 ## 独立 RTK 部署
 
-WTRTK-982 使用独立串口。仅更新船中心定位与船头定向时，部署范围是 `f1_rtk_driver`。先在 PC 工作空间根目录同步该包，保留远端其他文件。
+WTRTK-982 使用独立串口。RTK 采集部署涉及 `f1_interfaces` 和 `f1_rtk_driver`。在 PC 工作空间根目录同步两个源码包。
 
 ```bash
 rsync -av --exclude='__pycache__/' --exclude='.pytest_cache/' --exclude='*.pyc' \
-  src/f1_rtk_driver/ nvidia@192.168.1.188:/home/nvidia/surface_ws/src/f1_rtk_driver/
+  src/f1_interfaces src/f1_rtk_driver nvidia@192.168.1.188:/home/nvidia/surface_ws/src/
 ```
 
-在 Nano 新终端只加载系统 ROS，按现有复制安装方式编译。测试使用本机伪串口及 ROS 订阅者，覆盖有效测量、定向失锁和断线重连。
+从驱动内置消息版本升级时，先在 Nano 工作区根目录按[接口迁移说明](src/f1_rtk_driver/README.md#从驱动内置消息升级)移出旧驱动生成目录。上述增量同步会保留远端旧文件，若 `src/f1_rtk_driver/msg/` 还存有 `Heading.msg`、`RawSentence.msg`、`RtkStatus.msg`，将这三个旧定义移出源码树。当前定义位于 `src/f1_interfaces/msg/`。
+
+在 Nano 新终端只加载系统 ROS，按现有复制安装方式编译。测试使用伪串口和 ROS 订阅者，覆盖持续 20 Hz 输入、有效测量、定向失锁和断线重连。
 
 ```bash
 cd /home/nvidia/surface_ws
 source /opt/ros/humble/setup.bash
 CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
-  colcon build --base-paths src --packages-select f1_rtk_driver --executor sequential \
+  colcon build --base-paths src --packages-up-to f1_rtk_driver --executor sequential \
   --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 -DAMENT_CMAKE_SYMLINK_INSTALL=OFF
 source install/local_setup.bash
+ros2 interface show f1_interfaces/msg/RtkStatus
 ROS_LOCALHOST_ONLY=1 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
   colcon test --base-paths src --packages-select f1_rtk_driver --return-code-on-test-failure
 ```

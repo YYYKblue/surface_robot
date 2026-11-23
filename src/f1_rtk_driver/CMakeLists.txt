@@ -2,14 +2,7 @@ cmake_minimum_required(VERSION 3.8)
 project(f1_rtk_driver)
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
-find_package(rosidl_default_generators REQUIRED)
-find_package(std_msgs REQUIRED)
 
-rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/Heading.msg" "msg/RtkStatus.msg" "msg/RawSentence.msg"
-  DEPENDENCIES std_msgs)
-ament_export_dependencies(rosidl_default_runtime)
-# Keep driver code separate from the generated f1_rtk_driver.msg module.
 ament_python_install_package(wit_rtk)
 install(PROGRAMS scripts/rtk_driver DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})

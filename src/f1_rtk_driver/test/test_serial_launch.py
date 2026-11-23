@@ -1,4 +1,4 @@
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from functools import reduce
 import math
 from operator import xor
@@ -10,9 +10,10 @@ import time
 
 import pytest
 import rclpy
+from rclpy.time import Time
 from sensor_msgs.msg import NavSatFix, NavSatStatus
 
-from f1_rtk_driver.msg import Heading, RawSentence, RtkStatus
+from f1_interfaces.msg import Heading, RawSentence, RtkStatus
 
 
 GGA = (b"$GNGGA,023541.00,2304.76261531,N,11415.24485118,E,"
@@ -48,16 +49,23 @@ def stop_launch(process):
             process.wait(timeout=3)
 
 
-def test_installed_launch_pty_and_ros_topics(tmp_path, monkeypatch):
+def observed_hz(messages):
+    span = Time.from_msg(messages[-1].header.stamp) - Time.from_msg(messages[0].header.stamp)
+    return (len(messages) - 1) * 1e9 / span.nanoseconds
+
+
+@contextmanager
+def launch_driver(tmp_path, monkeypatch, config_text=None):
     # Keep injected PTY samples outside the vessel's live domain 33.
     monkeypatch.setenv("ROS_DOMAIN_ID", str(40 + os.getpid() % 40))
     monkeypatch.setenv("ROS_LOCALHOST_ONLY", "1")
     monkeypatch.setenv("ROS_LOG_DIR", str(tmp_path / "ros_log"))
     port = tmp_path / "receiver"
-    config = tmp_path / "rtk.yaml"
-    config.write_text("/f1/rtk/rtk_driver:\n  ros__parameters:\n"
-                      "    stale_timeout_sec: 0.8\n    reconnect_sec: 0.2\n"
-                      "    antenna_frame: test_ant1\n    base_frame: test_base\n")
+    command = ["ros2", "launch", "f1_rtk_driver", "rtk.launch.py", f"port:={port}"]
+    if config_text is not None:
+        config = tmp_path / "rtk.yaml"
+        config.write_text(config_text)
+        command.append(f"config:={config}")
     with ExitStack() as stack:
         rclpy.init()
         stack.callback(rclpy.try_shutdown)
@@ -70,9 +78,7 @@ def test_installed_launch_pty_and_ros_topics(tmp_path, monkeypatch):
             probe.create_subscription(kind, f"/f1/rtk/{name}", received[name].append, 100)
         logfile = tmp_path / "launch.log"
         with logfile.open("w") as log:
-            process = subprocess.Popen(
-                ["ros2", "launch", "f1_rtk_driver", "rtk.launch.py", f"config:={config}", f"port:={port}"],
-                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         stack.callback(stop_launch, process)
 
         def until(predicate, repeat=None):
@@ -94,8 +100,23 @@ def test_installed_launch_pty_and_ros_topics(tmp_path, monkeypatch):
 
         until(lambda: all(probe.count_publishers(f"/f1/rtk/{name}") == 1 for name in types)
               and status_matches(connected=False, fix_quality=-1))
-        master = stack.enter_context(attach_receiver(port))
-        until(lambda: status_matches(connected=True))
+
+        def connect():
+            master = stack.enter_context(attach_receiver(port))
+            until(lambda: status_matches(connected=True))
+            return master
+
+        yield probe, received, until, status_matches, connect
+
+
+def test_installed_launch_pty_and_ros_topics(tmp_path, monkeypatch):
+    config = ("/f1/rtk/rtk_driver:\n  ros__parameters:\n"
+              "    stale_timeout_sec: 0.8\n    reconnect_sec: 0.2\n    status_rate_hz: 5.0\n"
+              "    antenna_frame: test_ant1\n    base_frame: test_base\n")
+    with launch_driver(tmp_path, monkeypatch, config) as (_, received, until, status_matches, connect):
+        until(lambda: len(received["status"]) >= 7)
+        assert observed_hz(received["status"]) == pytest.approx(5.0, rel=0.15)
+        master = connect()
         # A sentence can span reads; multiple sentences can arrive in one read.
         master.write(GGA[:20])
         time.sleep(0.06)
@@ -142,12 +163,12 @@ def test_installed_launch_pty_and_ros_topics(tmp_path, monkeypatch):
         master.write(at_epoch(GGA, b"023543") + GGA[:20])
         until(lambda: status_matches(fix_utc="023543"))
         master.close()
-        port.unlink()
+        (tmp_path / "receiver").unlink()
         until(lambda: status_matches(connected=False, fix_valid=False, heading_valid=False,
                                      fix_quality=-1, heading_quality=-1)
               and not received["bow_heading"][-1].valid
               and received["base_fix"][-1].status.status == NavSatStatus.STATUS_NO_FIX)
-        second = stack.enter_context(attach_receiver(port))
+        second = connect()
         until(lambda: status_matches(connected=True, fix_valid=False, heading_valid=False))
         before = len(received["base_fix"])
         second.write(at_epoch(HPR, b"023543.00") + at_epoch(GGA, b"023544.00"))
@@ -168,3 +189,49 @@ def test_installed_launch_pty_and_ros_topics(tmp_path, monkeypatch):
         until(lambda: status_matches(fix_valid=True, heading_valid=False, heading_quality=5)
               and received["base_fix"][-1].status.status == NavSatStatus.STATUS_NO_FIX
               and not received["bow_heading"][-1].valid)
+
+
+def test_twenty_hz_receiver_stream(tmp_path, monkeypatch):
+    with launch_driver(tmp_path, monkeypatch) as (probe, received, until, status_matches, connect):
+        master = connect()
+        # Complete a warm-up epoch before counting messages on all six subscriptions.
+        master.write(GGA + HPR)
+        until(lambda: all(received.values()) and len(received["raw"]) == 2
+              and status_matches(fix_valid=True, heading_valid=True))
+        for messages in received.values():
+            messages.clear()
+
+        epochs = [f"1200{i // 20:02d}.{(i % 20) * 5:02d}" for i in range(200)]
+        expected_raw = []
+        start = time.monotonic()
+        for i, utc in enumerate(epochs):
+            deadline = start + i * 0.05
+            while (remaining := deadline - time.monotonic()) > 0:
+                rclpy.spin_once(probe, timeout_sec=remaining)
+            lines = [at_epoch(kind, utc.encode()) for kind in (GGA, HPR)]
+            master.write(b"".join(lines))
+            expected_raw.extend(line.decode().strip() for line in lines)
+
+        observations = ("fix", "heading", "bow_heading", "base_fix")
+        until(lambda: all(len(received[name]) >= len(epochs) for name in observations)
+              and len(received["raw"]) >= len(expected_raw) and status_matches(fix_utc=epochs[-1]))
+        assert [msg.sentence for msg in received["raw"]] == expected_raw
+        for name in ("heading", "bow_heading"):
+            assert [msg.utc for msg in received[name]] == epochs
+            assert all(msg.valid for msg in received[name])
+        fixes, centers = received["fix"], received["base_fix"]
+        assert len(fixes) == len(centers) == len(epochs)
+        assert all(msg.status.status == NavSatStatus.STATUS_FIX for msg in centers)
+        assert [msg.header.stamp for msg in centers] == [msg.header.stamp for msg in fixes]
+        assert observed_hz(fixes) == pytest.approx(20.0, rel=0.1)
+        assert observed_hz(received["status"]) == pytest.approx(20.0, rel=0.1)
+        assert status_matches(rejected_lines=0)
+
+        # Omit HPR at .00, then deliver the next heading before its matching fix.
+        master.write(at_epoch(GGA, b"120010.00") + at_epoch(HPR, b"120010.05")
+                     + at_epoch(GGA, b"120010.05"))
+        until(lambda: len(centers) > len(epochs) and len(fixes) == len(epochs) + 2
+              and status_matches(fix_utc="120010.05"))
+        assert len(centers) == len(epochs) + 1
+        assert centers[-1].status.status == NavSatStatus.STATUS_FIX
+        assert centers[-1].header.stamp == fixes[-1].header.stamp

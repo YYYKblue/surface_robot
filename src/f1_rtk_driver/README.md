@@ -5,25 +5,25 @@
 ## 准备接收机
 
 1. 将两根天线装在开阔处，连接模块，用 Type-C 数据线接电脑。在维特上位机打开实际串口，出厂参数为 115200、8N1。
-2. 在当前输出端口逐行发送以下命令，每行以 CR/LF 结束。前两条启用 5 Hz 输出。看到原始 GGA、HPR 后再保存配置，断电重启复查。驱动本身仅读取串口，无需差分账号。
+2. 在已确认的 RTK 输出端口逐行发送以下命令，每行以 CR/LF 结束。`0.05` 表示每 50 ms 输出一次。配置命令使用 `GP` 前缀，实际输出可以是 `$GNGGA`、`$GNHPR`。[和芯星通 N4 指令手册，第 7 章](https://en.unicorecomm.com/uploads/file/Unicore%20Reference%20Commands%20Manual%20For%20N4%20High%20Precision%20Products_V2_EN_R1.14.pdf)
 
    ```text
-   GNGGA 0.2
-   GPHPR 0.2
-   SAVECONFIG
+   GPGGA 0.05
+   GPHPR 0.05
    ```
 
-3. 将 RTK 接到任一可用 USB 数据口。该型号使用 CH340（`1a86:7523`）。运行账号需要串口读写权限，Ubuntu 通常由 dialout 组提供。
+3. 核对两条命令的回执。观察两类报文各自的 UTC 连续以 0.05 秒递增、两路同一历元可配对后，发送 `SAVECONFIG` 并断电重启复查。需要恢复 5 Hz 时将两条命令的周期都设为 `0.2`，复核后保存。
+4. 关闭上位机串口，将 RTK 接到任一可用 USB 数据口。该型号使用 CH340（`1a86:7523`），驱动被动读取报文。运行账号需要串口读写权限，Ubuntu 通常由 dialout 组提供。
 
 [维特上手教程](https://wit-motion.yuque.com/wumwnr/bf4d0f/qpalh34ulfouy3p2) · [天线安装与规格](https://wit-motion.yuque.com/wumwnr/docs/sl3yxrnbigoi432o)
 
 ## 独立构建和启动
 
-下面的符号链接构建用于 PC。Nano 使用复制安装，单包更新、串口检查和启动命令见 [Nano 部署指南](../../DEPLOY_NANO.md#独立-rtk-部署)。在 PC 工作区根目录执行以下命令。
+驱动使用 `f1_interfaces` 生成的消息。以下命令在 PC 工作区根目录构建这两个包。Nano 的复制安装及串口检查见 [Nano 部署指南](../../DEPLOY_NANO.md#独立-rtk-部署)。首次从旧版升级时，先按下节处理旧驱动的生成目录。
 
 ```bash
 source /opt/ros/humble/setup.bash
-colcon build --base-paths src --packages-select f1_rtk_driver --symlink-install
+colcon build --base-paths src --packages-up-to f1_rtk_driver --symlink-install
 source install/local_setup.bash
 ros2 launch f1_rtk_driver rtk.launch.py
 ```
@@ -32,16 +32,35 @@ ros2 launch f1_rtk_driver rtk.launch.py
 
 启动参数 `config:=/绝对路径/rtk.yaml` 选择配置文件。如果要使用不同型号的适配器，可用 `port:=/dev/serial/by-id/设备唯一标识` 显式选择已确认设备，此模式直接打开给定路径。自动模式下日志 `Opened RTK ...` 显示实际设备名，`/f1/rtk/status.connected` 表示串口已通过识别。
 
+### 从驱动内置消息升级
+
+`Heading`、`RtkStatus`、`RawSentence` 的类型名前缀已由 `f1_rtk_driver/msg/` 迁至 `f1_interfaces/msg/`。外部 ROS 订阅者需更新类型并重新启动，编译型订阅者还需重建。旧 rosbag 的这三种类型仍带原包名，可在旧环境中回放，或转换类型后供新订阅者使用。两个位置话题沿用 `sensor_msgs/msg/NavSatFix`。
+
+项目默认使用 colcon 隔离安装。首次升级有旧类型的 PC 或 Nano 工作空间时，在工作区根目录将旧驱动的生成目录移出，再执行对应平台的构建命令。这样 ROS 接口索引会与当前源码一致。
+
+```bash
+if [ -f install/f1_rtk_driver/share/ament_index/resource_index/rosidl_interfaces/f1_rtk_driver ]; then
+  rtk_previous=$(mktemp -d /tmp/f1-rtk-previous.XXXXXX)
+  for tree in build install; do
+    if [ -d "$tree/f1_rtk_driver" ]; then
+      mv "$tree/f1_rtk_driver" "$rtk_previous/$tree"
+    fi
+  done
+fi
+```
+
 ## 数据约定
 
 | 话题 | 类型 | 含义 |
 |---|---|---|
 | `/f1/rtk/base_fix` | `sensor_msgs/msg/NavSatFix` | 船中心的 WGS84 经纬度，默认 `frame_id=base_link`。有效位置沿用当次 GGA 定位级别，高度为 NaN，位置协方差未知。 |
-| `/f1/rtk/bow_heading` | `f1_rtk_driver/msg/Heading` | 船头（`base_link` 的 +x）相对真北的顺时针角，范围 [0°, 360°)。与同次原始航向共享时间戳、UTC、质量码和有效标志。 |
+| `/f1/rtk/bow_heading` | `f1_interfaces/msg/Heading` | 船头（`base_link` 的 +x）相对真北的顺时针角，范围 [0°, 360°)。与同次原始航向共享时间戳、UTC、质量码和有效标志。 |
 | `/f1/rtk/fix` | `sensor_msgs/msg/NavSatFix` | 主天线的 WGS84 经纬度。椭球高取 GGA 海拔加大地水准面差距，缺少任一项时为 NaN。仅靠 GGA 无法确定位置协方差和实际使用的星座，标为未知。 |
-| `/f1/rtk/heading` | `f1_rtk_driver/msg/Heading` | M→S 基线从真北顺时针计量的角度，东为 90°。仅 HPR 质量码 4 且角度有效时 `valid=true`，其余角度输出 NaN。 |
-| `/f1/rtk/status` | `f1_rtk_driver/msg/RtkStatus` | 5 Hz 状态。分别报告串口连接、GGA/HPR 质量码、有效性和距上次有效观测的秒数。包含 GGA 的 UTC、卫星数、HDOP 和累计拒收行数。串口断开后质量码回到 -1。 |
-| `/f1/rtk/raw` | `f1_rtk_driver/msg/RawSentence` | 每条完整串口文本行及接收时间，包括校验失败的报文。去掉行尾 CR/LF，超出 1024 字节的行丢弃并计数。 |
+| `/f1/rtk/heading` | `f1_interfaces/msg/Heading` | M→S 基线从真北顺时针计量的角度，东为 90°。仅 HPR 质量码 4 且角度有效时 `valid=true`，其余角度输出 NaN。 |
+| `/f1/rtk/status` | `f1_interfaces/msg/RtkStatus` | 默认 20 Hz 状态。分别报告串口连接、GGA/HPR 质量码、有效性和距上次有效观测的秒数。包含 GGA 的 UTC、卫星数、HDOP 和累计拒收行数。串口断开后质量码回到 -1。 |
+| `/f1/rtk/raw` | `f1_interfaces/msg/RawSentence` | 每条完整串口文本行及接收时间，包括校验失败的报文。去掉行尾 CR/LF，超出 1024 字节的行丢弃并计数。 |
+
+当 GGA、HPR 各以 20 Hz 输出时，`fix`、`heading` 和 `bow_heading` 各随报文以 20 Hz 更新。两路每个历元都有效且配对成功时，有效 `base_fix` 也是 20 Hz。仅输出这两类报文时 `raw` 约为 40 条/秒。启动参数文件中的 `status_rate_hz` 只控制状态心跳，设备离线时仍按该频率报告。
 
 所有 `header.stamp` 使用 ROS 接收时间。报文自带的 UTC 为日内时间，保留在 `Heading.utc`、`RtkStatus.fix_utc` 和原文中。超时判断使用单调时钟。默认 1.5 秒未收到该类有效报文时，分别撤销有效标志，对原先有效的话题发布一次无效观测。失联时同样撤销。状态中的年龄从上次有效接收起继续增长，从未收到过时为 -1。
 
@@ -68,7 +87,7 @@ GGA 质量码 1 表示单点，4 表示 RTK 固定，5 表示 RTK 浮点。首�
 | `baseline_clockwise_from_bow_deg` | +42.0 | 从船头顺时针转到 M→S 的安装角，假定接收机输出原始基线方向 |
 
 1. 船头真北航向 `H = (HPR航向 − 安装角) mod 360°`。例如原始 HPR 为 42° 时，船头朝正北。原始 HPR 为 0° 时，船头指向 318°。若以后需要 ROS 的 ENU yaw，角度为 `90° − H`，再按所需区间回绕。
-2. 用同一 GNSS UTC 历元的有效 GGA 和固定解 HPR 求船中心。两条报文可先后任意到达，跨秒或相邻 5 Hz 历元不能混用。令 `x, y` 为上表中 M 的坐标，从 M 移到船中心的偏移为 `东 = −x sin(H) + y cos(H)`、`北 = −x cos(H) − y sin(H)`。将这个米制偏移加到 WGS84 局部切平面后换回经纬度，消息沿用 GGA 的 ROS 接收时间。例如船头朝北时，船中心应位于 M 以东 21.3 cm、以北 19.1 cm。[经纬度与地心坐标换算公式](https://epsg.io/9602-method)
+2. 用同一 GNSS UTC 历元的有效 GGA 和固定解 HPR 求船中心。两条报文可先后任意到达，配对时精确匹配 UTC。令 `x, y` 为上表中 M 的坐标，从 M 移到船中心的偏移为 `东 = −x sin(H) + y cos(H)`、`北 = −x cos(H) − y sin(H)`。将这个米制偏移加到 WGS84 局部切平面后换回经纬度，消息沿用 GGA 的 ROS 接收时间。例如船头朝北时，船中心应位于 M 以东 21.3 cm、以北 19.1 cm。[经纬度与地心坐标换算公式](https://epsg.io/9602-method)
 3. 该换算采用船体近似水平的二维模型。船中心的 `altitude` 为 NaN，主天线的原始椭球高仍可从 `fix` 读取。安装补偿只校正参考点和固定角差，单点定位误差、航向抖动及船体横摇和纵摇仍会影响结果。此前约 50 cm 基线静置测试的 1,500 个固定解样本，减去安装角前后的航向跨度均为 8.58°。
 
 启动后获得同一历元的有效观测才会输出有效 `base_fix`。GGA 无解、HPR 失去固定解或串口断开时，已有的船中心解立即失效，发布 `STATUS_NO_FIX` 和 NaN 经纬度。若两路都在输出、却持续没有新配对，也会在 `stale_timeout_sec` 后撤销上次有效位置。船体位置的可用性应直接检查 `base_fix.status.status`。`status.fix_valid` 单独反映主天线 GGA，有效的主天线单点位置仍可单独使用。
@@ -85,8 +104,9 @@ ros2 topic echo --once /f1/rtk/bow_heading
 ros2 bag record -o rtk_standalone_01 /f1/rtk/raw /f1/rtk/fix /f1/rtk/heading /f1/rtk/base_fix /f1/rtk/bow_heading /f1/rtk/status
 ```
 
-1. 在室外开阔处静置，核对两个质量码和更新频率。对比相同接收时间的 `fix` 与 `base_fix`，两点水平距离应约 0.286 m。这个距离用于核对杆臂换算，单点定位的绝对精度需另用已知点验证。
-2. 将船头沿已知真北方位的参考线停放，比较 `bow_heading` 与参考方位。再将整船顺时针转约 90°停稳，两次船头航向之差按 360°回绕后应约为 +90°。分别记录平均偏差和静止波动，以区分安装角误差与定向噪声。
-3. 岸上拔插 RTK 的 USB。确认状态变为失联，两类有效标志撤销，接回同一路径后无需重启节点即可恢复。
+1. 在室外开阔处静置，等 GGA 有效且 HPR 质量码为 4 后，连续录制至少 60 秒。在同一段 60 秒窗口内，从 `raw` 分别统计 GGA、HPR 各自的唯一 UTC 数、重复及缺失历元。预期每类约 1,200 个历元，相邻 UTC 间隔 50 ms。核对有效 `base_fix` 的数量及时间戳与可配对的 GGA 一致，记录 `status.rejected_lines` 在窗口内的增量。室内无解时仍可核对串口报文频率。拔掉接收机后可核对状态心跳。
+2. 对比相同接收时间的 `fix` 与 `base_fix`，两点水平距离应约 0.286 m。这个距离用于核对杆臂换算，单点定位的绝对精度需另用已知点验证。
+3. 将船头沿已知真北方位的参考线停放，比较 `bow_heading` 与参考方位。再将整船顺时针转约 90°停稳，两次船头航向之差按 360°回绕后应约为 +90°。分别记录平均偏差和静止波动，以区分安装角误差与定向噪声。
+4. 岸上拔插 RTK 的 USB。确认状态变为失联，两类有效标志撤销，接回同一路径后无需重启节点即可恢复。
 
 运行包内测试可用 `colcon test --packages-select f1_rtk_driver --event-handlers console_direct+`。串口集成测试在本机创建伪终端并通过实际 launch 和 ROS 话题交换数据。

@@ -4,6 +4,7 @@ import math
 import time
 
 import rclpy
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.clock import Clock, ClockType
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -11,7 +12,7 @@ import serial
 from sensor_msgs.msg import NavSatFix, NavSatStatus
 from std_msgs.msg import Header
 
-from f1_rtk_driver.msg import Heading, RawSentence, RtkStatus
+from f1_interfaces.msg import Heading, RawSentence, RtkStatus
 from wit_rtk.alignment import EpochPairs, base_coordinates, bow_heading, utc_nanoseconds
 from wit_rtk.discovery import ReceiverDiscovery
 from wit_rtk.nmea import Fix, parse_sentence
@@ -22,6 +23,10 @@ class RtkDriver(Node):
         super().__init__("rtk_driver", namespace="/f1/rtk")
         self.port = self.declare_parameter("port", "auto").value
         self.baudrate = self.declare_parameter("baudrate", 115200).value
+        status_rate_hz = self.declare_parameter(
+            "status_rate_hz", 20.0, ParameterDescriptor(read_only=True)).value
+        if not math.isfinite(status_rate_hz) or status_rate_hz <= 0:
+            raise ValueError("status_rate_hz must be finite and positive")
         self.stale_timeout = self.declare_parameter("stale_timeout_sec", 1.5).value
         self.reconnect = self.declare_parameter("reconnect_sec", 1.0).value
         self.frame = self.declare_parameter("antenna_frame", "gnss_ant1").value
@@ -59,7 +64,7 @@ class RtkDriver(Node):
         self.last_base_fix = None
         steady = Clock(clock_type=ClockType.STEADY_TIME)
         self.create_timer(0.025, self.poll, clock=steady)
-        self.create_timer(0.2, self.publish_status, clock=steady)
+        self.create_timer(1.0 / status_rate_hz, self.publish_status, clock=steady)
 
     def header(self):
         return Header(stamp=self.get_clock().now().to_msg(), frame_id=self.frame)

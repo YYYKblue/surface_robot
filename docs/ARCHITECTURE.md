@@ -2,7 +2,7 @@
 
 人工暂停续跑、取消及地图删除／卸载的接口和使用边界见[功能说明](TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
 
-独立 RTK 链路更新于 2026-11-21，清洗速度链路更新于 2026-11-16，其余架构核对基线为 2026-11-12。`9db6798` 为历史配置修复基线，不代表当前代码版本。本文依据源码、launch、YAML 与测试整理。操作入口见[根 README](../README.md)，目标机安装见[部署指南](../DEPLOY_NANO.md)。历史验证记录只说明当时的测试结果，不能用来证明当前实船状态。
+独立 RTK 链路更新于 2026-11-23，清洗速度链路更新于 2026-11-16，其余架构核对基线为 2026-11-12。`9db6798` 为历史配置修复基线，不代表当前代码版本。本文依据源码、launch、YAML 与测试整理。操作入口见[根 README](../README.md)，目标机安装见[部署指南](../DEPLOY_NANO.md)。历史验证记录只说明当时的测试结果，不能用来证明当前实船状态。
 
 ## 1. 项目组成与依赖
 
@@ -23,7 +23,7 @@
 | `operator_app/underwater.py` | [underwater.py](../operator_app/underwater.py) | 独立水下连接、箭头面板、控制代次和新鲜度门控 |
 | `under_control` | [server.py](../under_control/server.py)、`session.py`、`serial_worker.py`、`protocol.py` | H7 网络网关、会话与串口请求/回包；独立 Python 服务，不是 ROS 包 |
 
-`f1_localization` 依赖接口和建图配置包，建图配置包再依赖雷达驱动。因此 `--packages-up-to f1_localization` 构建四个仓库包，`--packages-up-to f1_operator_gateway` 构建八个。全工作空间还包括可单独构建的 `f1_rtk_driver`。雷达和 RTK 驱动各自独立启动。
+`f1_localization` 依赖接口和建图配置包，建图配置包再依赖雷达驱动。因此 `--packages-up-to f1_localization` 构建四个仓库包，`--packages-up-to f1_operator_gateway` 构建八个。`--packages-up-to f1_rtk_driver` 构建 `f1_interfaces` 和 RTK 驱动。雷达和 RTK 驱动各自独立启动。
 
 ## 2. 数据与控制流
 

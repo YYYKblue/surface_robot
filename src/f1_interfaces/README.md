@@ -1,6 +1,6 @@
 # F1 统一接口包
 
-`f1_interfaces` 提供水面控制、清洗与定位共用的消息和服务。独立 RTK 驱动在自己的包内定义 `Heading`、`RtkStatus` 和 `RawSentence`，位置使用标准 `sensor_msgs/msg/NavSatFix`。[RTK 话题](../f1_rtk_driver/README.md#数据约定)
+`f1_interfaces` 提供水面控制、清洗与定位共用的消息和服务。RTK 驱动通过本包发布航向、接收机状态和串口原文，通过标准 `sensor_msgs/msg/NavSatFix` 发布位置。[RTK 话题](../f1_rtk_driver/README.md#数据约定)
 
 | 类型 | 接口 | 用途 |
 |---|---|---|
@@ -8,6 +8,9 @@
 | msg | `ControlState` | 硬件桥控制状态 |
 | msg | `WallObservation` | 墙面与周边空间观测 |
 | msg | `EdgeTarget` | 固定地图位姿生成的目标边/左墙上下文 |
+| msg | `Heading` | 双天线基线或船头的真北航向、UTC 与定向质量 |
+| msg | `RtkStatus` | 接收机串口状态、定位与航向质量、有效性和观测年龄 |
+| msg | `RawSentence` | 带 ROS 接收时间的单行串口原文 |
 | msg | `EffortPreview` | 旧脉冲控制预览接口；保留类型兼容，当前清洗包不发布 |
 | msg | `CleaningStatus` | 旧脉冲控制状态接口；保留类型兼容，当前清洗包不发布 |
 | srv | `AcquireControl` | 申请控制租约 |
@@ -17,6 +20,8 @@
 | srv | `SetCleaningSpeed` | 启动前设置清洗速度原始整数值 0–100，由控制器映射为前进辅助输出 0–50 |
 
 Python 使用 `from f1_interfaces.msg import ActuatorCommand` 或 `from f1_interfaces.srv import AcquireControl`；依赖包在 `package.xml` 中声明 `f1_interfaces`。
+
+2026-11-23 起，RTK 的三个自定义消息使用本包的类型名。旧订阅者和历史 rosbag 的处理见 [RTK 接口迁移](../f1_rtk_driver/README.md#从驱动内置消息升级)。
 
 2026-11-16 清洗速度：`SetCleaningSpeed` 请求字段为 `int32 value`，控制器只接受整数 0–100；响应为 `bool success` 和 `string message`。映射公式为 `(value + 1) // 2`，只用于沿墙前进辅助。新增服务后需重新构建接口包、清洗控制器和网关；本次没有修改 `ActuatorCommand` 或 F103 v3 协议。Nano 上已完成该构建并核对生成接口，详见[部署验证记录](../../docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#2026-11-16-nano-部署验证)。
 
