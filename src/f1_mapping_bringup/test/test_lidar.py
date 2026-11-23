@@ -124,7 +124,7 @@ def test_lidar_launch_publishes_planar_mounting_without_imu(tmp_path, monkeypatc
     context = LaunchContext()
     context.launch_configurations.update(
         resolution="0.05", scan_topic="/pavo2_scan", configuration_directory=str(PACKAGE / "config"),
-        configuration_basename="pavo2_2d.lua", use_sim_time="false", use_rviz="false",
+        configuration_basename="", use_rtk="false", use_sim_time="false", use_rviz="false",
         publish_lidar_tf="true", lidar_extrinsics_file=str(PACKAGE / "config/lidar_planar.yaml"),
     )
     nodes = module.lidar_nodes(context)
@@ -143,6 +143,12 @@ def test_lidar_launch_publishes_planar_mounting_without_imu(tmp_path, monkeypatc
     nodes = module.lidar_nodes(context)
     assert len(nodes) == 2
     assert all(node["package"] == "cartographer_ros" for node in nodes)
+    context.launch_configurations["use_rtk"] = "true"
+    context.launch_configurations["gnss_config"] = str(PACKAGE / "config/gnss_fusion.yaml")
+    slam, grid, gnss = module.lidar_nodes(context)
+    assert "rtk_mapping.lua" in slam["arguments"]
+    assert ("landmark", "/f1/rtk/landmarks") in slam["remappings"]
+    assert gnss["executable"] == "gnss_landmarks"
 
 
 def test_missing_cartographer_executable_gives_actionable_error(tmp_path):

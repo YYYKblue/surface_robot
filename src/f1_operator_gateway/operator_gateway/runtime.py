@@ -20,7 +20,7 @@ READ_ACTIONS = {"list", "preview"}
 class RuntimeControl:
     def _init_runtime(self):
         defaults = dict(managed_runtime=False, workspace_root="", map_timezone="Asia/Shanghai",
-                        scan_topic="/pavo2_scan", output_enabled=False, publish_lidar_tf=True,
+                        scan_topic="/pavo2_scan", output_enabled=False, publish_lidar_tf=True, use_rtk=True,
                         mapping_resolution=.05, rectangle_config="", l_config="", localization_config="")
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -238,7 +238,8 @@ class RuntimeControl:
         self._runtime_reset()
         arguments = ["ros2", "launch", "f1_operator_gateway", "operator_mode.launch.py",
                      "mode:=" + ("mapping" if mapping else "localization")]
-        for key in ("scan_topic", "publish_lidar_tf", "output_enabled", "rectangle_config", "l_config", "localization_config"):
+        for key in ("scan_topic", "publish_lidar_tf", "use_rtk", "output_enabled",
+                    "rectangle_config", "l_config", "localization_config"):
             value = self.get_parameter(key).value
             if value != "":
                 arguments.append(f"{key}:={str(value).lower() if isinstance(value, bool) else value}")

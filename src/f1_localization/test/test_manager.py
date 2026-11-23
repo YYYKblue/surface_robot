@@ -138,8 +138,22 @@ def test_independent_manager_initialization_ready_loss_and_relocalize(monkeypatc
         assert future.result().success
         wait_for(lambda: not active and manager._finish_future is None)
         assert finishes == [1] and not manager.gate.ready
+        # A real service reply is still in flight when a manual pose replaces a GNSS seed.
+        wait_for(lambda: not manager._known_active_ids)
+        assert manager._accept_initial_pose(pose, 'gnss')
+        first_start = manager._start_future
+        assert first_start is not None
+        manual = PoseWithCovarianceStamped()
+        manual.header.frame_id = 'map'
+        manual.pose.pose.orientation.w = 1.
+        manual.pose.pose.position.x = 1.1
+        assert manager._accept_initial_pose(manual, 'rviz')
+        assert manager._start_future is first_start
+        wait_for(lambda: statuses[-1]['ready'] and len(starts) == 3)
+        assert finishes == [1, 2] and active == {3}
+        assert starts[-1].initial_pose.position.x == pytest.approx(1.1)
         pose_pub.publish(pose)
-        wait_for(lambda: statuses[-1]['ready'] and len(starts) == 2)
+        wait_for(lambda: statuses[-1]['ready'] and active == {4})
 
         pose.header.frame_id = 'odom'
         future = client.call_async(SetInitialPose.Request(pose=pose))

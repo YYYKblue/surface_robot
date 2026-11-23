@@ -1,0 +1,6 @@
+/**:
+  ros__parameters:
+    # Initial weights for single-point position and fixed dual-antenna heading.
+    gnss_translation_weight: 0.5
+    gnss_rotation_weight: 8.0
+    gnss_constraint_rate_hz: 2.0

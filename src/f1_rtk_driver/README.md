@@ -5,21 +5,21 @@
 ## 准备接收机
 
 1. 将两根天线装在开阔处，连接模块，用 Type-C 数据线接电脑。在维特上位机打开实际串口，出厂参数为 115200、8N1。
-2. 在已确认的 RTK 输出端口逐行发送以下命令，每行以 CR/LF 结束。`0.05` 表示每 50 ms 输出一次。配置命令使用 `GP` 前缀，实际输出可以是 `$GNGGA`、`$GNHPR`。[和芯星通 N4 指令手册，第 7 章](https://en.unicorecomm.com/uploads/file/Unicore%20Reference%20Commands%20Manual%20For%20N4%20High%20Precision%20Products_V2_EN_R1.14.pdf)
+2. 在实际连接的串口发送 `UNILOGLIST`，查出该端口已启用的 GGA 和 HPR 日志名。沿用原有日志名调整周期，每行以 CR/LF 结束。`0.05` 表示每 50 ms 输出一次。本机查到 `COM3` 上原有 `GNGGA` 和 `GPHPR`，实测生效的命令如下。如果同一端口同时启用了 `GNGGA` 和 `GPGGA`，它们可能都输出 `$GNGGA`。确认保留 `GNGGA` 后，用 `UNLOG COM3 GPGGA` 关闭重复项。[和芯星通 N4 指令手册，第 1、7、8 章](https://en.unicore.com/uploads/file/20241219/Unicore_Reference_Commands_Manual_For_N4_High_Precision_Products_V2_EN_R1.4.pdf)
 
    ```text
-   GPGGA 0.05
+   GNGGA COM3 0.05
    GPHPR 0.05
    ```
 
-3. 核对两条命令的回执。观察两类报文各自的 UTC 连续以 0.05 秒递增、两路同一历元可配对后，发送 `SAVECONFIG` 并断电重启复查。需要恢复 5 Hz 时将两条命令的周期都设为 `0.2`，复核后保存。
+3. 核对命令回执和 `UNILOGLIST`，再实测两类原始报文各约 20 Hz。取得有效解后，观察两类报文各自的 UTC 是否以 0.05 秒递增、两路是否同历元配对。发送 `SAVECONFIG` 并核对回执，下一次断电重启后复查。需要恢复 5 Hz 时将两条命令的周期都设为 `0.2`，复核后保存。
 4. 关闭上位机串口，将 RTK 接到任一可用 USB 数据口。该型号使用 CH340（`1a86:7523`），驱动被动读取报文。运行账号需要串口读写权限，Ubuntu 通常由 dialout 组提供。
 
 [维特上手教程](https://wit-motion.yuque.com/wumwnr/bf4d0f/qpalh34ulfouy3p2) · [天线安装与规格](https://wit-motion.yuque.com/wumwnr/docs/sl3yxrnbigoi432o)
 
 ## 独立构建和启动
 
-驱动使用 `f1_interfaces` 生成的消息。以下命令在 PC 工作区根目录构建这两个包。Nano 的复制安装及串口检查见 [Nano 部署指南](../../DEPLOY_NANO.md#独立-rtk-部署)。首次从旧版升级时，先按下节处理旧驱动的生成目录。
+驱动使用 `f1_interfaces` 生成的消息。以下命令用于 PC 开发调试。Nano 日常采集由 `f1-rtk.service` 开机启动。手动串口配置或前台调试前先暂停服务，完成后恢复，用 `systemctl status f1-rtk.service` 和 `/f1/rtk/status` 检查。首次从旧版升级时，先按下节处理旧驱动的生成目录。[Nano 复制安装、服务与串口检查](../../DEPLOY_NANO.md#独立-rtk-部署)
 
 ```bash
 source /opt/ros/humble/setup.bash

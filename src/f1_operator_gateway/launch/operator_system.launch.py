@@ -18,14 +18,15 @@ def generate_launch_description():
         "workspace_root", "bind_address", "scan_topic", "map_timezone",
         "rectangle_config", "l_config", "localization_config")}
     parameters.update(managed_runtime=True, localization_prefix="/f1_localization")
-    for name, kind in (("port", int), ("output_enabled", bool), ("publish_lidar_tf", bool), ("mapping_resolution", float)):
+    for name, kind in (("port", int), ("output_enabled", bool), ("publish_lidar_tf", bool),
+                       ("use_rtk", bool), ("mapping_resolution", float)):
         parameters[name] = ParameterValue(LaunchConfiguration(name), value_type=kind)
     gateway = Node(package="f1_operator_gateway", executable="f1_operator_gateway", output="screen", parameters=[parameters])
     return LaunchDescription([
         DeclareLaunchArgument("workspace_root", description="Absolute workspace root; maps are stored under maps/"),
         *[DeclareLaunchArgument(name, default_value=value) for name, value in dict(
             bind_address="127.0.0.1", port="8765", scan_topic="/pavo2_scan", map_timezone="Asia/Shanghai",
-            start_bridge="true", output_enabled="false", publish_lidar_tf="true", mapping_resolution="0.05",
+            start_bridge="true", output_enabled="false", publish_lidar_tf="true", use_rtk="true", mapping_resolution="0.05",
             bridge_config=str(bridge / "config/bridge.yaml"), rectangle_config="", l_config="", localization_config="").items()],
         RegisterEventHandler(OnProcessExit(on_exit=[EmitEvent(event=Shutdown(reason="operator system process exited"))])),
         IncludeLaunchDescription(PythonLaunchDescriptionSource(str(bridge / "launch/bridge.launch.py")),

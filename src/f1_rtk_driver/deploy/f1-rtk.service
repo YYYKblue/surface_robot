@@ -1,0 +1,20 @@
+[Unit]
+Description=WTRTK-982 GNSS driver (surface_ws/f1_rtk_driver)
+After=network.target
+
+[Service]
+Type=simple
+User=nvidia
+WorkingDirectory=/home/nvidia/surface_ws
+Environment=ROS_DOMAIN_ID=33
+Environment=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash -ec 'source /opt/ros/humble/setup.bash; source /home/nvidia/surface_ws/install/local_setup.bash; exec ros2 launch f1_rtk_driver rtk.launch.py'
+Restart=always
+RestartSec=3
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

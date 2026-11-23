@@ -1,6 +1,7 @@
-"""ROS adapter for operator-initialized Cartographer localization."""
+"""Manage Cartographer fixed-map localization from GNSS or operator initialization."""
 
 import math
+import subprocess
 import time
 from pathlib import Path
 
@@ -98,6 +99,21 @@ class LocalizationManager(Node):
         self._transform_exception = TransformException
         steady = Clock(clock_type=ClockType.STEADY_TIME)
         self.timer = self.create_timer(.05, self._tick, clock=steady)
+        self.gnss_reference = None
+        self.allow_gnss_seed = True
+        if self.get_parameter("use_rtk").value:
+            from f1_mapping_bringup.gnss_landmarks import GnssLandmarks
+            from .gnss_reference import read_reference
+            path = self.get_parameter("gnss_state_file").value
+            try:
+                self.gnss_reference = read_reference(path, self.reference_trajectory_id)
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                self.get_logger().error(f"Cannot read GNSS reference from {path}: {exc}; using lidar")
+            else:
+                origin = self.gnss_reference[0] if self.gnss_reference else None
+                self.gnss = GnssLandmarks(self, origin, self._gnss_pose)
+                if origin is None:
+                    self.get_logger().info("Map has no GNSS origin; initialize manually before GNSS fusion")
 
     def _declare_parameters(self):
         import dataclasses
@@ -116,6 +132,28 @@ class LocalizationManager(Node):
         self.declare_parameter("reference_trajectory_id", 0)
         self.declare_parameter("scan_topic", "/pavo2_scan")
         self.declare_parameter("trajectory_query_period_sec", .50)
+        self.declare_parameter("use_rtk", False, ParameterDescriptor(read_only=True))
+        self.declare_parameter("gnss_state_file", "", ParameterDescriptor(read_only=True))
+
+    def _gnss_pose(self, enu_from_base, header):
+        """Allow optional backend observations; only seed an idle, uninitialized manager."""
+        if self.gate.state == "PAUSED" or self._finish_future is not None or self._pending_pose is not None:
+            return False
+        if self.gnss_reference is None:
+            return self.gate.initial_pose_received and self._trajectory_active()
+        _, map_from_enu, _ = self.gnss_reference
+        map_from_base = map_from_enu.compose(enu_from_base)
+        if not self.gate.within_map_bounds(map_from_base):
+            return False
+        if (self.trajectory_id is None and self.allow_gnss_seed and self._states_checked
+                and not self.gate.initial_pose_received and self._finish_future is None
+                and self.start_client.service_is_ready()
+                and self._known_trajectory_states.get(self.reference_trajectory_id) == TrajectoryStates.FROZEN):
+            seed = PoseWithCovarianceStamped()
+            seed.header.frame_id, seed.header.stamp = self.config.map_frame, header.stamp
+            seed.pose.pose = map_from_base.message()
+            self._accept_initial_pose(seed, "gnss")
+        return self.gate.initial_pose_received and self._trajectory_active()
 
     def _map_geometry(self):
         path = self.get_parameter("map").value if self.has_parameter("map") else ""
@@ -179,7 +217,7 @@ class LocalizationManager(Node):
         return response
 
     def _accept_initial_pose(self, message, source):
-        ok, reason, _ = validate_initial_pose(message, self.config.map_frame)
+        ok, reason, yaw = validate_initial_pose(message, self.config.map_frame)
         if not ok:
             self._reject_initial_pose(reason)
             self.get_logger().warning(reason)
@@ -195,11 +233,21 @@ class LocalizationManager(Node):
         self._publish_status(now)
         # A new initial pose invalidates the previous trajectory and all of its
         # stability evidence.  The task controller sees not-ready immediately.
+        self.allow_gnss_seed = False
         self._pending_pose = message.pose.pose
+        if self.gnss_reference:
+            # StartTrajectory uses the first reference node, while seeds are in map.
+            from f1_mapping_bringup.gnss_landmarks import PlanarPose
+            position = message.pose.pose.position
+            map_from_base = PlanarPose(position.x, position.y, yaw)
+            self._pending_pose = self.gnss_reference[2].inverse().compose(map_from_base).message()
         self._pending_source = source
         self._pending_since = time.monotonic()
         self._last_trajectory_error = ""
-        self._start_future = None
+        if self._start_future is not None:
+            # A GNSS seed may already be in flight when the operator takes over.
+            # Finish that trajectory once its ID arrives, then send the latest pose.
+            return True
         if self.trajectory_id is None:
             candidates = sorted(self._known_active_ids - {int(self.reference_trajectory_id)})
             if candidates:
@@ -211,17 +259,17 @@ class LocalizationManager(Node):
         return True
 
     def _relocalize(self, request, response):
+        self.allow_gnss_seed = False
         self._pending_pose = None
         self._pending_source = ""
         self._pending_since = None
-        self._start_future = None
         self.gate.reset("relocalization requested; waiting for a new RViz 2D Pose Estimate")
         self._publish_status(self._now_ns())
         if self.trajectory_id is None:
             candidates = sorted(self._known_active_ids - {int(self.reference_trajectory_id)})
             if candidates:
                 self.trajectory_id = candidates[-1]
-        if self.trajectory_id is not None and self._finish_future is None:
+        if self.trajectory_id is not None and self._finish_future is None and self._start_future is None:
             self._request_finish_current()
         response.success, response.message = True, "relocalization requested; submit a new initial pose"
         return response
@@ -250,6 +298,7 @@ class LocalizationManager(Node):
             self._last_trajectory_error = f"finish_trajectory failed: {exc}"
             self._set_gate_reason(self._last_trajectory_error)
             return
+        self._known_active_ids.discard(self.trajectory_id)
         self.trajectory_id = None
         if self._pending_pose is not None:
             self._request_start()
@@ -271,12 +320,13 @@ class LocalizationManager(Node):
             use_initial_pose=True,
             initial_pose=self._pending_pose,
             relative_to_trajectory_id=int(self.reference_trajectory_id))
+        submitted_pose = self._pending_pose
         self._start_future = self.start_client.call_async(request)
-        self._start_future.add_done_callback(self._start_done)
+        self._start_future.add_done_callback(lambda future: self._start_done(future, submitted_pose))
         self._set_gate_reason("initial pose submitted; waiting for Cartographer trajectory")
         return True
 
-    def _start_done(self, future):
+    def _start_done(self, future, submitted_pose):
         self._start_future = None
         try:
             response = future.result()
@@ -286,6 +336,9 @@ class LocalizationManager(Node):
                 self._set_gate_reason(self._last_trajectory_error)
                 return
             self.trajectory_id = int(response.trajectory_id)
+            if self._pending_pose is not submitted_pose:
+                self._request_finish_current()
+                return
             self._pending_pose = None
             self._pending_since = None
             self.gate.last_pose = None
@@ -456,7 +509,7 @@ class LocalizationManager(Node):
                     self._request_finish_current()
                 else:
                     self._request_start()
-        active = self._trajectory_active()
+        active = (self._pending_pose is None and self._finish_future is None and self._trajectory_active())
         current_state = (None if self.trajectory_id is None else
                          self._known_trajectory_states.get(int(self.trajectory_id)))
         if (self.trajectory_id is not None and self._states_checked and
@@ -466,6 +519,9 @@ class LocalizationManager(Node):
             # before StartTrajectory can legitimately omit the new id.
             self.gate.mark_paused("localization trajectory is no longer active")
         self.gate.update(now_ns, active, self._pose, self._last_scan)
+        if (self.allow_gnss_seed and self.gnss_reference and not self.gate.initial_pose_received
+                and self.gate.state == "LOCALIZATION_CHECK"):
+            self.gate.reason = "waiting for valid in-map GNSS position and heading, or operator initial pose"
         self._publish_status(now_ns)
 
     def _publish_status(self, now_ns):

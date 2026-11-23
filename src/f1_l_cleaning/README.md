@@ -99,7 +99,7 @@ ros2 launch f1_l_cleaning l_bringup.launch.py \
   map:="$PWD/maps/lidar_20261026_170703.pbstream" start_rviz:=true
 ```
 
-雷达需独立运行。先在 App 或 RViz 的 map 坐标系发布初始位姿，等待定位就绪，再调用任务：
+雷达需独立运行。带地理参考的地图可在 GNSS 观测满足条件时自动初始化。旧地图或 GNSS 暂不可用时，在 App 或 RViz 的 `map` 坐标系发布初始位姿。等待定位就绪后，再调用任务。
 
 ```bash
 ros2 topic echo /l_cleaning/localization_status --once

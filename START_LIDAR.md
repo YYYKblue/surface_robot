@@ -18,7 +18,7 @@
 | 启动入口 | `lidar_mapping.launch.py` |
 | 栅格分辨率 | 默认 `0.05 m/格` |
 
-本包仅保留纯雷达建图，不需要启动 IMU 发布节点，不使用轮速里程计。
+本节展示纯雷达对照模式。单点定位与双天线辅助建图使用[融合入口](src/f1_mapping_bringup/README.md)。
 入口自动根据 `config/lidar_planar.yaml` 发布雷达安装 TF，平面参数为 x=-0.2143195 m、y=0、yaw=π。
 实际高度未知，`base_link` 在此定义为车体中心在雷达扫描平面的投影；TF 的 z/roll/pitch=0 是二维约定，不是实测值。
 原雷达与 IMU 联合入口及配置已删除，统一使用 `lidar_mapping.launch.py`。
@@ -26,9 +26,9 @@
 
 ## Windows App 建图（新增）
 
-完成一次性部署后，可在 Windows App 的“建图与选图”页执行开始建图、命名保存、保存并结束、地图预览和加载，无需日常打开 Linux 终端。Nano 常驻入口为 `f1_operator_gateway operator_system.launch.py workspace_root:=/home/nvidia/surface_ws`；它复用现有雷达服务。
+完成一次性部署后，可在 Windows App 的“建图与选图”页执行开始建图、命名保存、保存并结束、地图预览和加载。Nano 网关复用独立的 `pavo2-scan.service` 和 `f1-rtk.service`。App 默认启用 GNSS 辅助，本文以下独立终端流程使用 `use_rtk:=false` 做纯雷达对照。
 
-保存仍采用本文第 6 节的 Cartographer 快照与栅格导出链路，自动写入 Nano 工作空间 `maps/`。空名称使用时间戳；自定义名称重名时追加序号。加载地图后必须重新设置初始位姿。具体界面见 [App 操作](operator_app/README.md#建图与选图)，开机配置见 [部署指南](DEPLOY_NANO.md#app-建图选图与开机服务)。
+地图自动写入 Nano 工作空间 `maps/`。空名称使用时间戳，重名时追加序号。地图有地理参考且当前 GNSS 观测满足条件时可自动初始化，其他情况下在 App 或 RViz 设置初始位姿。[App 操作](operator_app/README.md#建图与选图) · [开机服务](DEPLOY_NANO.md#app-建图选图与开机服务)
 
 下面的手动终端流程保留用于独立建图和排查；不要与 App 受管模式重复启动。
 
@@ -120,7 +120,7 @@ ros2 node list
 在已完成第 2、3 节的终端执行：
 
 ```bash
-ros2 launch f1_mapping_bringup lidar_mapping.launch.py
+ros2 launch f1_mapping_bringup lidar_mapping.launch.py use_rtk:=false
 ```
 
 保持这个终端运行。默认不打开 RViz，适合无图形界面的 SSH 会话，实机建图默认 `use_sim_time=false`。
@@ -128,7 +128,7 @@ ros2 launch f1_mapping_bringup lidar_mapping.launch.py
 如果在 **Nano 本地图形桌面**操作，希望同时打开 RViz，则使用下面的命令启动同一套建图；两条命令选一条：
 
 ```bash
-ros2 launch f1_mapping_bringup lidar_mapping.launch.py use_rviz:=true
+ros2 launch f1_mapping_bringup lidar_mapping.launch.py use_rtk:=false use_rviz:=true
 ```
 
 初始阶段保持雷达静止，等待轨迹、子图和地图建立，再缓慢平移、转弯，保持相邻扫描有足够环境结构重叠。

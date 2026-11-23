@@ -25,7 +25,7 @@ class RuntimeGateway(RuntimeControl, Gateway):
         self.map_store = MapStore(tmp_path)
         self.runtime_log = tmp_path / 'log'
         self.params.update(mapping_resolution=.05, scan_topic='/pavo2_scan', publish_lidar_tf=True,
-                           output_enabled=False, rectangle_config='', l_config='', localization_config='')
+                           use_rtk=True, output_enabled=False, rectangle_config='', l_config='', localization_config='')
         self.pose = dict(x=0, y=0, yaw=0)
         self.map_signature = None
         self.tf_buffer = SimpleNamespace(clear=lambda: None)
@@ -120,6 +120,7 @@ def test_duplicate_start_only_spawns_once_and_reset_clears_old_map(node, monkeyp
     node._runtime_request('app', packet)
     assert len(processes) == 1
     assert 'mode:=mapping' in processes[0]
+    assert 'use_rtk:=true' in processes[0]
 
 
 def test_save_failure_preserves_mapping_and_snapshot_then_retry_succeeds(node, monkeypatch):

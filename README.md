@@ -6,11 +6,11 @@
 
 人工暂停续跑、取消及地图删除／卸载的接口和使用边界见[功能说明](docs/TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
 
-2026-11-23 更新 RTK 统一接口和 20 Hz 配置，其余项目概览沿用 2026-11-16 核对结果。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
+2026-11-23 更新 RTK 统一接口、20 Hz 配置及 GNSS 辅助建图定位。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
 
 F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主电机输出支持整数 0–100，Windows App 提供滑条、数值输入和快捷值，反馈区分设定值、固件报告值与目标 PWM；RC 原始通道独立用于诊断。旧固件协议会明确阻止控制。新标度 25% 为 PWM 偏移 100 μs，旧 25 档为 125 μs；自主清洗的纠偏、靠近和换边保留新 25% 输出，沿墙前进辅助由 App 0–100 设置映射为 0–50 输出，实际效果需实船验证。接口包、桥接、网关、依赖节点和 Windows App 应一起升级，见[协议与迁移](src/f1_nano_bridge/README.md#f103-v3-连续输出2026-11-11)。
 
-项目包含 PAVO2 纯雷达建图、固定地图定位、F103 串口控制、矩形四边清洗、开放多段直墙清洗和 WebSocket 操作员网关。历史配置加载修复基线为 `9db6798`。已记录的软件回归、现场反馈及后续验收项见[开发与验收记录](docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#7-测试和证据要求)；历史基本测试反馈不代表新增左转换边或本次v3输出已完成实船验收。
+项目包含 PAVO2 雷达与 GNSS 辅助建图、固定地图定位、F103 串口控制、矩形四边清洗、开放多段直墙清洗和 WebSocket 操作员网关。历史配置加载修复基线为 `9db6798`。已记录的软件回归、现场反馈及后续验收项见[开发与验收记录](docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#7-测试和证据要求)；历史基本测试反馈不代表新增左转换边或本次v3输出已完成实船验收。
 
 当前实机雷达为 **PAVO2-LS-50HC（360°）**。2026-11-11 用户完成换装并确认安装外参不变；提供的扫描检查为约 50.35 Hz、4500 点/帧、0.08°/点，随后反馈建图、定位和矩形清洗效果良好。详细数据与记录边界见[雷达换装记录](src/f1_lidar_driver/README.md#当前设备与换装记录2026-11-11)。
 
@@ -22,7 +22,7 @@ F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主�
 | [`f1_nano_bridge`](src/f1_nano_bridge/README.md) | F103 串口协议、CTRL/ACK、控制租约、超时保护和 IMU 遥测 |
 | [`f1_lidar_driver`](src/f1_lidar_driver/README.md) | PAVO2 驱动与 SDK、雷达参数、独立启动及开机服务模板 |
 | [`f1_rtk_driver`](src/f1_rtk_driver/README.md) | 独立读取 WTRTK-982，发布船中心 `base_fix`、船头真北航向 `bow_heading` 及原始天线观测 |
-| [`f1_mapping_bringup`](src/f1_mapping_bringup/README.md) | Cartographer 2D 纯雷达建图、静态雷达 TF 和扫描检查 |
+| [`f1_mapping_bringup`](src/f1_mapping_bringup/README.md) | Cartographer 2D 雷达与 GNSS 辅助建图、静态雷达 TF 和扫描检查 |
 | [`f1_localization`](src/f1_localization/README.md) | 固定地图定位、初始位姿、轨迹管理和定位就绪门控 |
 | [`f1_pool_cleaning`](src/f1_pool_cleaning/README.md) | 墙感知、简单动作靠近、沿墙控制、矩形四边任务及覆盖记录 |
 | [`f1_l_cleaning`](src/f1_l_cleaning/README.md) | 开放多段直墙路线，复用右转并支持前行出墙端、左移、左转 |
@@ -50,7 +50,7 @@ Qt App ←→ WebSocket :8765 ←→ 网关 → f1_nano_bridge ←→ F103
 
 同一 App 可同时操作水面 W/A/S/D 与水下箭头；两条连接和控制状态独立。水下 ←/→ 为左转/右转；顶部“两台手动停止”仅撤销两台手动输出，不取消水面自动任务。H7 不接入时 `under-control.service` 常驻等待，接入后自动发现并停止握手，重连不恢复旧运动。2026-11-12 已在 Nano 启用新服务并禁用旧 H7 桥，当时 H7 缺席，实机动作尚未验收，见[部署记录](docs/UNDER_CONTROL_NANO_DEPLOYMENT.md)。
 
-建图使用纯雷达，不融合桥发布的 IMU。清洗使用已有 `.pbstream` 冻结地图，操作者先在 Windows App 地图中发布初始位姿，或在 RViz 的 `map` 坐标系设置 `2D Pose Estimate`，定位达到 `LOCALIZATION_READY` 后才可开始任务。建图与固定地图定位应择一运行，避免重复发布地图和 TF。
+建图由雷达扫描匹配和可选的单点位置、双天线航向约束组成。清洗使用已有 `.pbstream` 冻结地图。有地理参考时可用新鲜 GNSS 观测初始化，也可通过 App 或 RViz 提供初始位姿。定位达到 `LOCALIZATION_READY` 后才可开始任务。建图与固定地图定位应择一运行，避免重复发布地图和 TF。
 
 | 任务 | 启动入口 | 任务接口 | 示例地图 |
 |---|---|---|---|
@@ -69,7 +69,7 @@ Qt App ←→ WebSocket :8765 ←→ 网关 → f1_nano_bridge ←→ F103
 
 矩形任务包含四条边；开放任务采用多段墙链，不构造首尾闭合墙。示例地图默认提取阶梯三条短边加原大 L，共五条边。默认用船体左侧射线选择墙，锁定最近投影点，以旋转、前后移动和侧移进入合理起始范围，再复用旧版沿墙控制。靠近不做路径搜索或环境碰撞检查。矩形绕行后只补齐起始边前段；开放任务从选中位置到链尾停，不返回、不补洗；要清洗整条链，应从首边入口附近启动。路线完成与覆盖记录分别报告。两种任务都保持墙在船左侧，共享 `/f1/*` 硬件接口；同一机器人仅运行一套 bridge 和定位，网关只允许一个清洗任务活动。组合入口可以让当前地图支持的控制器同时待命。
 
-App 的受管入口支持无地图待机、纯雷达建图、命名保存、地图列表/预览/加载/卸载/删除；地图保存到 Nano 工作空间 `maps/`，空名称使用时间戳。App 支持“开放多边清洗”／“矩形清洗”选择、地图初始位姿发布、启动条件和完成结果显示。推荐使用[网关组合入口](src/f1_operator_gateway/README.md)启动一套共享定位和当前地图支持的任务；独立开放任务 bringup 使用网关 `localization_prefix:=/l_cleaning`，不再重映射任务接口。App 的 `manual_stop`、断线和输入超时只停止网关持有的手动会话；自动任务应使用自己的 `pause` / `resume` / `cancel` 服务。
+App 的受管入口支持无地图待机、雷达与 GNSS 辅助建图、命名保存、地图列表/预览/加载/卸载/删除；地图保存到 Nano 工作空间 `maps/`，空名称使用时间戳。App 支持“开放多边清洗”／“矩形清洗”选择、地图初始位姿发布、启动条件和完成结果显示。推荐使用[网关组合入口](src/f1_operator_gateway/README.md)启动一套共享定位和当前地图支持的任务；独立开放任务 bringup 使用网关 `localization_prefix:=/l_cleaning`，不再重映射任务接口。App 的 `manual_stop`、断线和输入超时只停止网关持有的手动会话；自动任务应使用自己的 `pause` / `resume` / `cancel` 服务。
 
 受管模式下，`rectangle_config` / `l_config` 留空会加载各清洗包的默认 YAML。标准配置中两个控制器都使用 `map → base_link` TF 并要求定位就绪；App 的共享定位正常不代表每个控制器已取得有效位姿。2026-11-09 已修复空参数导致 YAML 被跳过的问题并在 Nano 验证，操作者随后反馈“目前测试正常”。参数核对与排查见[定位正常但开放任务不能启动](DEPLOY_NANO.md#定位正常但开放任务不能启动)，具体证据范围见[修复验证记录](src/f1_operator_gateway/README.md#控制器配置加载修复验证2026-11-09)。
 
@@ -91,7 +91,7 @@ source install/local_setup.bash
 colcon list --names-only
 ```
 
-按需构建可使用 `--packages-up-to f1_l_cleaning f1_operator_gateway`，当前依赖关系下会覆盖八个包。网关为完整部署声明了雷达驱动、bridge、定位及清洗包的运行依赖，`--packages-up-to f1_operator_gateway` 会一并构建这些依赖。独立 RTK 采集使用 `--packages-up-to f1_rtk_driver` 构建统一接口与驱动两个包。
+按需构建可使用 `--packages-up-to f1_l_cleaning f1_operator_gateway`，当前依赖关系下会覆盖九个包。网关为完整部署声明了雷达驱动、bridge、定位及清洗包的运行依赖，`--packages-up-to f1_operator_gateway` 会一并构建这些依赖。独立 RTK 采集使用 `--packages-up-to f1_rtk_driver` 构建统一接口与驱动两个包。
 
 ## 启动入口
 
@@ -106,7 +106,7 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 雷达由独立服务常驻运行；迁移后的服务使用本仓库 `f1_lidar_driver`，切换说明见[驱动部署](src/f1_lidar_driver/README.md#nano-由操作者切换现有开机服务)。没有服务实例时可单独执行 `ros2 launch f1_lidar_driver lidar.launch.py`，不要重复启动。
 
-独立采集船中心位置和船头真北航向时使用 `ros2 launch f1_rtk_driver rtk.launch.py`。Cartographer 仍使用雷达扫描。串口检查、ROS 话题和 Nano 验证步骤见 [独立 RTK 部署](DEPLOY_NANO.md#独立-rtk-部署)。
+Nano 通过 `pavo2-scan.service` 和 `f1-rtk.service` 开机采集，App 受管建图与固定地图定位默认接收有效 GNSS 约束。带地理参考的地图可用 GNSS 自动初始化，旧地图通过 App 或 RViz 手动初始化。[Nano 服务与串口检查](DEPLOY_NANO.md#独立-rtk-部署) · [融合与录包验收](src/f1_mapping_bringup/README.md#单点位置与双天线航向融合)
 
 确认驱动已发布 `/pavo2_scan` 后建图：
 

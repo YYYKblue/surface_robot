@@ -1,6 +1,6 @@
 # 纯雷达 Cartographer 2D
 
-本包仅保留此模式，入口为 `lidar_mapping.launch.py`。仅订阅 `/pavo2_scan`，无需启动 IMU 发布节点。
+纯雷达对照模式使用 `lidar_mapping.launch.py use_rtk:=false`，默认融合模式见[建图说明](README.md)。仅订阅 `/pavo2_scan`，无需启动 IMU 发布节点。
 原雷达与 IMU 联合入口及配置已删除。建图原理见 [代码与原理说明](CARTOGRAPHER_PRINCIPLES.md)。
 
 ## 当前坐标和输入
@@ -66,7 +66,7 @@ ros2 run f1_mapping_bringup scan_check --samples 100
 先确认 PAVO2 驱动与 `pavo2-scan.service` 已部署、真实扫描可用；本入口只启动 SLAM，不启动雷达驱动。
 
 ```bash
-ros2 launch f1_mapping_bringup lidar_mapping.launch.py
+ros2 launch f1_mapping_bringup lidar_mapping.launch.py use_rtk:=false
 ```
 
 有图形桌面时可用 `use_rviz:=true` 同时打开地图；无图形的 SSH 终端保持默认 false。

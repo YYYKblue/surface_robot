@@ -5,7 +5,7 @@ find_package(ament_cmake_python REQUIRED)
 
 ament_python_install_package(wit_rtk)
 install(PROGRAMS scripts/rtk_driver DESTINATION lib/${PROJECT_NAME})
-install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY launch config deploy DESTINATION share/${PROJECT_NAME})
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)

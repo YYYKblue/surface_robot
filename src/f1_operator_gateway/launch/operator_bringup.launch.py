@@ -35,7 +35,7 @@ def nodes(context):
         result.append(include("f1_localization", "localization.launch.py", {
             "map": value("map"), "cleaning_prefix": "f1_localization",
             "scan_topic": value("scan_topic"), "start_rviz": value("start_rviz"),
-            "localization_config": value("localization_config"),
+            "localization_config": value("localization_config"), "use_rtk": value("use_rtk"),
             "publish_lidar_tf": value("publish_lidar_tf"),
         }))
     if value("start_bridge") == "true":
@@ -76,6 +76,7 @@ def generate_launch_description():
         DeclareLaunchArgument("start_bridge", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("start_gateway", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("start_localization", default_value="true", choices=["true", "false"]),
+        DeclareLaunchArgument("use_rtk", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("publish_lidar_tf", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("start_rviz", default_value="false", choices=["true", "false"]),
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),

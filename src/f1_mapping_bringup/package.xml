@@ -2,7 +2,7 @@
 <package format="3">
   <name>f1_mapping_bringup</name>
   <version>0.1.0</version>
-  <description>Lidar-only Cartographer 2D bringup for PAVO2.</description>
+  <description>PAVO2 Cartographer 2D mapping with optional GNSS position and heading constraints.</description>
   <maintainer email="bboss@example.com">bboss</maintainer>
   <license>TODO</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
@@ -11,13 +11,17 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>cartographer_ros</exec_depend>
+  <exec_depend>cartographer_ros_msgs</exec_depend>
+  <exec_depend>f1_interfaces</exec_depend>
+  <exec_depend>f1_rtk_driver</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>f1_lidar_driver</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <test_depend>ament_cmake_pytest</test_depend>
-  <test_depend>geometry_msgs</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

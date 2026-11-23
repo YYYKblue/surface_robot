@@ -1,4 +1,4 @@
-"""Lidar-only SLAM with a planar vehicle-centre pose and lidar mounting TF."""
+"""Planar lidar SLAM with optional GNSS position and heading observations."""
 import math
 import os
 from pathlib import Path
@@ -29,6 +29,9 @@ def lidar_nodes(context):
     if not value("scan_topic").startswith("/") or len(value("scan_topic")) < 2:
         raise ValueError("scan_topic must be an absolute ROS topic name")
     config_dir, basename = value("configuration_directory"), value("configuration_basename")
+    use_rtk = value("use_rtk") == "true"
+    if not basename:
+        basename = "rtk_mapping.lua" if use_rtk else "pavo2_2d.lua"
     if Path(basename).name != basename or not (Path(config_dir) / basename).is_file():
         raise ValueError("configuration_basename must name a Lua file in configuration_directory")
     mounting = None
@@ -49,11 +52,15 @@ def lidar_nodes(context):
         Node(package="cartographer_ros", executable=slam, name="cartographer_node",
              output="screen", parameters=parameters,
              arguments=["-configuration_directory", config_dir, "-configuration_basename", basename],
-             remappings=[("scan", value("scan_topic"))]),
+             remappings=[("scan", value("scan_topic"))] + (
+                 [("landmark", "/f1/rtk/landmarks")] if use_rtk else [])),
         Node(package="cartographer_ros", executable=grid, name="cartographer_occupancy_grid_node",
              output="screen", parameters=parameters,
              arguments=["-resolution", str(resolution), "-publish_period_sec", "1.0"]),
     ])
+    if use_rtk:
+        nodes.append(Node(package="f1_mapping_bringup", executable="gnss_landmarks",
+                          output="screen", parameters=[value("gnss_config"), *parameters]))
     if value("use_rviz") == "true":
         nodes.append(Node(package="rviz2", executable="rviz2", name="mapping_rviz",
                           output="screen", parameters=parameters,
@@ -66,7 +73,10 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),
         DeclareLaunchArgument("configuration_directory", default_value=f"{share}/config"),
-        DeclareLaunchArgument("configuration_basename", default_value="pavo2_2d.lua"),
+        DeclareLaunchArgument("configuration_basename", default_value="",
+                              description="Optional custom Lua; enable landmarks in custom fused configs"),
+        DeclareLaunchArgument("use_rtk", default_value="true", choices=["true", "false"]),
+        DeclareLaunchArgument("gnss_config", default_value=f"{share}/config/gnss_fusion.yaml"),
         DeclareLaunchArgument("lidar_extrinsics_file", default_value=f"{share}/config/lidar_planar.yaml"),
         DeclareLaunchArgument("publish_lidar_tf", default_value="true", choices=["true", "false"],
                              description="Publish planar base_link -> lidar TF; disable if already provided"),

@@ -12,7 +12,7 @@
 |---|---|---|
 | `f1_lidar_driver` | [pavo2_scan_node.cpp](../src/f1_lidar_driver/src/pavo2_scan_node.cpp)、`vendor/pavo2_sdk/` | 连接雷达、发布扫描，不发布安装 TF |
 | `f1_rtk_driver` | [串口节点](../src/f1_rtk_driver/wit_rtk/node.py)、[船体换算](../src/f1_rtk_driver/wit_rtk/alignment.py) | WTRTK-982 独立采集，发布主天线与船体观测 |
-| `f1_mapping_bringup` | [lidar_mapping.launch.py](../src/f1_mapping_bringup/launch/lidar_mapping.launch.py)、`config/pavo2_2d.lua` | Cartographer 纯雷达建图、地图发布、平面安装 TF |
+| `f1_mapping_bringup` | [lidar_mapping.launch.py](../src/f1_mapping_bringup/launch/lidar_mapping.launch.py)、`config/pavo2_2d.lua` | Cartographer 雷达与 GNSS 辅助建图、地图发布、平面安装 TF |
 | `f1_localization` | [localization_node.py](../src/f1_localization/f1_localization/localization_node.py)、`localization.py`、`map_io.py` | 冻结地图、初始位姿、轨迹生命周期、定位门控和栅格读取 |
 | `f1_pool_cleaning` | [controller_node.py](../src/f1_pool_cleaning/f1_pool_cleaning/controller_node.py)、`autonomous.py`、`mission.py`、`map_profile.py`、`open_route.py` | 矩形任务及两类任务共用的简单靠近、沿墙、覆盖、感知实现 |
 | `f1_l_cleaning` | [controller_node.py](../src/f1_l_cleaning/f1_l_cleaning/controller_node.py)、`route.py`、`topics.py` | 继承共享控制器，提供开放多段路线及 `/l_cleaning/*` 接口 |
@@ -23,14 +23,16 @@
 | `operator_app/underwater.py` | [underwater.py](../operator_app/underwater.py) | 独立水下连接、箭头面板、控制代次和新鲜度门控 |
 | `under_control` | [server.py](../under_control/server.py)、`session.py`、`serial_worker.py`、`protocol.py` | H7 网络网关、会话与串口请求/回包；独立 Python 服务，不是 ROS 包 |
 
-`f1_localization` 依赖接口和建图配置包，建图配置包再依赖雷达驱动。因此 `--packages-up-to f1_localization` 构建四个仓库包，`--packages-up-to f1_operator_gateway` 构建八个。`--packages-up-to f1_rtk_driver` 构建 `f1_interfaces` 和 RTK 驱动。雷达和 RTK 驱动各自独立启动。
+`f1_localization` 依赖接口和建图配置包，建图配置包再依赖雷达驱动与 RTK 驱动的报文解析库。因此 `--packages-up-to f1_localization` 构建五个仓库包，`--packages-up-to f1_operator_gateway` 构建九个。`--packages-up-to f1_rtk_driver` 构建 `f1_interfaces` 和 RTK 驱动。雷达和 RTK 驱动各自独立启动。
 
 ## 2. 数据与控制流
 
 ```mermaid
 flowchart LR
     RTK[WTRTK-982] -->|GGA / HPR| R[f1_rtk_driver]
-    R -->|base_fix / bow_heading| REC[ROS 订阅与录包]
+    R -->|base_fix / bow_heading / raw| GNSS[船中心 ENU 地标约束]
+    GNSS --> SLAM
+    R --> REC[ROS 订阅与录包]
     L[PAVO2 驱动] -->|/pavo2_scan| SLAM[Cartographer 建图或固定地图定位]
     L --> P[墙线感知]
     SLAM -->|位姿| N[简单动作靠近]
@@ -49,7 +51,9 @@ flowchart LR
     B <-->|CTRL / ACK / IMU| MCU[F103]
 ```
 
-RTK 的 `base_fix` 给出船中心的 WGS84 经纬度，`bow_heading` 给出船头顺时针真北航向。它们使用船体安装参数，当前由独立订阅者读取。建图与固定地图定位仍从 Cartographer 取得地图内位姿。[RTK 坐标和话题](../src/f1_rtk_driver/README.md#数据约定)
+RTK 的 `base_fix` 给出船中心的 WGS84 经纬度，`bow_heading` 给出船头顺时针真北航向。适配器配对同一 UTC 历元的两项观测。建图使用定向地标保存场地地理参考，固定地图定位读回该参考来初始化，并通过 `FixedFramePoseData` 融合新观测。任务继续从 Cartographer 取得地图内位姿。[RTK 坐标和话题](../src/f1_rtk_driver/README.md#数据约定)
+
+Nano 的雷达和 RTK 分别由 `pavo2-scan.service`、`f1-rtk.service` 开机采集。App 网关在待机时等待建图或选图请求，再启动对应的 Cartographer 进程。两类接收机报文各为 20 Hz 时，只有通过质量和时间检查的配对观测才进入融合，后端默认最多接收 2 Hz。旧地图没有地理参考时由操作者提供初始位姿。[Nano 部署与检查](../DEPLOY_NANO.md#gnss-辅助建图与定位)
 
 图中的网关任务服务调用与初始位姿调用分别进入控制器和定位管理器。IMU 由桥发布，但当前建图和固定地图定位均不融合 IMU 或轮速。TF 链为 `map → odom → base_link → pavo2s_frame`；雷达静态安装参数来自 `f1_mapping_bringup/config/lidar_planar.yaml`。建图 Lua 的跟踪帧为 `pavo2s_frame`，纯定位 Lua 的跟踪帧为 `base_link`，对外船体位姿都使用 `map → base_link`。
 

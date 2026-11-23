@@ -199,7 +199,7 @@ class LocalizationGate:
         self.reason = reason
         self.stable_since_ns = None
 
-    def _boundary_ok(self, pose):
+    def within_map_bounds(self, pose):
         x, y = self.config.pool_xy(pose.x, pose.y)
         margin = self.config.boundary_margin_m
         return (-margin <= x <= self.config.length_m + margin
@@ -239,7 +239,7 @@ class LocalizationGate:
             self.reason = "map to base_link pose is stale"
             self.stable_since_ns = None
             return self.ready
-        if not self._boundary_ok(pose):
+        if not self.within_map_bounds(pose):
             self.state, self.ready = "LOCALIZATION_CHECK", False
             self.reason = "localized pose is outside the configured map boundary"
             self.stable_since_ns = None

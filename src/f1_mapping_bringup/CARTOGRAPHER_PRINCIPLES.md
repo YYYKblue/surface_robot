@@ -1,5 +1,7 @@
 # 结合本包代码理解 Cartographer 纯雷达建图
 
+本文对应 `use_rtk:=false` 的雷达基线。默认模式还会向位姿图提供单点位置和双天线航向观测，见[融合说明](README.md#单点位置与双天线航向融合)。
+
 这里的算法名称是 **Cartographer**。本仓库的 `f1_mapping_bringup` 是 ROS 2
 启动与配置包，SLAM 核心由目标机安装的 `cartographer_ros` 和 Cartographer 提供，
 并非在本仓库 Python 中实现。下文把本包实际配置与上游核心代码对应起来；
