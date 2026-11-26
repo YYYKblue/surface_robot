@@ -6,8 +6,10 @@ interaction, command deadline, latest-input watchdog and telemetry shaping.
 import math
 import time
 from dataclasses import replace
+from functools import partial
 
 import rclpy
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
 from nav_msgs.msg import OccupancyGrid
 from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
@@ -16,7 +18,7 @@ from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
 from tf2_ros import Buffer, TransformListener
 
-from f1_interfaces.msg import ActuatorCommand, ControlState
+from f1_interfaces.msg import ActuatorCommand, ControlState, Heading, RtkStatus
 from f1_interfaces.srv import AcquireControl, ReleaseControl
 
 from .protocol import ManualInput, decode
@@ -82,9 +84,16 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         state_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         map_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.rtk_samples = {}
+        for key, kind, topic in (("status", RtkStatus, "status"), ("heading", Heading, "bow_heading"),
+                                 ("corrections", DiagnosticArray, "corrections")):
+            self.create_subscription(kind, "/f1/rtk/" + topic, partial(self._rtk_sample, key), state_qos)
         self.create_subscription(ControlState, "/f1/control_state", self._control, state_qos)
         self.create_subscription(OccupancyGrid, "/map", self._map, map_qos)
-        self.create_subscription(LaserScan, self.get_parameter("scan_topic").value, self._scan, state_qos)
+        scan_topic = self.get_parameter("scan_topic").value
+        if self.open_water_scan:
+            scan_topic += "/water"
+        self.create_subscription(LaserScan, scan_topic, self._scan, state_qos)
         self.tick_timer = self.create_timer(.02, self._tick)
         self.telemetry_timer = self.create_timer(1.0 / max(.5, float(self.get_parameter("telemetry_hz").value)), self._telemetry)
         self.tracks_timer = self.create_timer(.5, self._publish_tracks)
@@ -432,6 +441,49 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
             self._last_tracks = packet["tasks"]
             self.hub.broadcast(packet)
 
+    def _rtk_sample(self, key, message):
+        self.rtk_samples[key] = (message, time.monotonic())
+
+    def _rtk_view(self, now):
+        clock_ns = self.get_clock().now().nanoseconds
+
+        def recent(key, limit):
+            sample = self.rtk_samples.get(key)
+            if sample is None:
+                return None
+            message, arrival = sample
+            stamp = message.header.stamp
+            age = (clock_ns - stamp.sec * 10**9 - stamp.nanosec) * 1e-9
+            if 0 <= age <= limit and now - arrival <= limit:
+                return message
+            return None
+
+        status = recent("status", 1.5)
+        heading = recent("heading", 1.5)
+        fix = "stale"
+        degrees = None
+        if status is not None:
+            fix = "disconnected" if not status.connected else "none"
+            if status.connected and status.fix_valid:
+                fix = {1: "single", 2: "differential", 4: "fixed", 5: "float"}.get(status.fix_quality, "other")
+            if (status.connected and status.heading_valid and status.heading_quality == 4 and heading
+                    and heading.valid and heading.quality == 4 and 0 <= heading.heading_deg < 360):
+                degrees = heading.heading_deg
+
+        corrections = recent("corrections", 2.5)
+        state = "stale"
+        if corrections:
+            for item in corrections.status:
+                if item.name == "f1/rtk/ntrip":
+                    state = item.message
+                    if state == "streaming" and item.level != DiagnosticStatus.OK:
+                        state = "delayed"
+                    if state == "retrying" and any(v.key == "error" and v.value in (
+                            "caster response 401", "caster response 403") for v in item.values):
+                        state = "auth_error"
+                    break
+        return dict(fix=fix, bow_heading_deg=degrees, corrections=state)
+
     def _telemetry(self):
         self.telemetry_sequence += 1
         now = time.monotonic()
@@ -444,7 +496,7 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         if hasattr(self.hub, "stats"):
             stream["transport"] = self.hub.stats(include_clients=False)
         self.hub.broadcast({"type": "telemetry", "state": self.control_state,
-                            "drive_output": self._drive_output(),
+                            "drive_output": self._drive_output(), "rtk": self._rtk_view(now),
                             "stream": stream,
                             "control_fresh": control_age < .3,
                             "pose": self.pose,

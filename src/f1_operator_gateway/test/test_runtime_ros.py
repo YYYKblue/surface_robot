@@ -2,24 +2,32 @@
 import asyncio
 import base64
 from concurrent.futures import ThreadPoolExecutor
+from functools import reduce
+from operator import xor
 import json
 import math
 from pathlib import Path
 import time
 import zlib
 
+import pytest
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from nav_msgs.msg import OccupancyGrid
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import LaserScan, NavSatFix
+from std_msgs.msg import Header
+from f1_interfaces.msg import Heading, RawSentence
 import websockets
 
 from operator_gateway.node import OperatorGateway
 
 
-def test_real_mapping_save_reconnect_and_load_without_hardware(tmp_path):
+@pytest.mark.parametrize("backend", ["cartographer", "open_water"])
+def test_real_mapping_save_reconnect_and_load_without_hardware(tmp_path, monkeypatch, backend):
+    monkeypatch.setenv("F1_MAPPING_BACKEND", backend)
+    open_water = backend == "open_water"
     rclpy.init(args=['--ros-args', '-p', 'port:=0', '-p', 'managed_runtime:=true',
                      '-p', 'workspace_root:=' + str(tmp_path), '-p', 'localization_prefix:=/f1_localization'])
     gateway = OperatorGateway()
@@ -30,6 +38,11 @@ def test_real_mapping_save_reconnect_and_load_without_hardware(tmp_path):
         QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                    durability=DurabilityPolicy.TRANSIENT_LOCAL))
     publisher = peer.create_publisher(LaserScan, '/pavo2_scan', qos_profile_sensor_data)
+    if open_water:
+        water = peer.create_publisher(LaserScan, '/pavo2_scan/water', qos_profile_sensor_data)
+        raw = peer.create_publisher(RawSentence, '/f1/rtk/raw', 10)
+        center = peer.create_publisher(NavSatFix, '/f1/rtk/base_fix', 10)
+        heading = peer.create_publisher(Heading, '/f1/rtk/bow_heading', 10)
     scan = LaserScan()
     scan.header.frame_id = 'pavo2s_frame'
     scan.angle_min = -math.pi
@@ -38,6 +51,23 @@ def test_real_mapping_save_reconnect_and_load_without_hardware(tmp_path):
     scan.range_min, scan.range_max, scan.scan_time = .1, 15., .02
     started = time.monotonic()
     def publish():
+        if open_water:
+            stamp = peer.get_clock().now().to_msg()
+            header = Header(stamp=stamp, frame_id="base_link")
+            ticks = int((time.monotonic() - started) * 100)
+            utc = f"12{ticks//6000%60:02}{ticks//100%60:02}.{ticks%100:02}"
+            longitude = 114. + (ticks * .0025) / 102523.  # eastward survey at 0.25 m/s
+            minutes = (longitude - 114.) * 60.
+            body = f"GNGGA,{utc},2300.000000,N,114{minutes:09.6f},E,4,12,1.0,0,M,0,M,,"
+            raw.publish(RawSentence(header=header, sentence=f"${body}*{reduce(xor, body.encode()):02X}"))
+            center.publish(NavSatFix(header=header, latitude=23., longitude=longitude))
+            heading.publish(Heading(header=header, utc=utc, quality=4, valid=True, heading_deg=90.))
+            scan.header.stamp = stamp
+            scan.ranges = [0.] * 360
+            publisher.publish(scan)
+            scan.ranges = [math.inf] * 360
+            water.publish(scan)
+            return
         # Rotate the sensor in a fixed rectangular room. Identical stationary
         # scans are intentionally rejected by Cartographer's motion filter.
         yaw = (time.monotonic() - started) * .5

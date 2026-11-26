@@ -9,6 +9,7 @@
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   <depend>f1_interfaces</depend>
   <depend>rclpy</depend>
+  <depend>diagnostic_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>

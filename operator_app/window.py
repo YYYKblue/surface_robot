@@ -121,6 +121,9 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         body = QHBoxLayout(); body.setSpacing(14); layout.addLayout(body, 1)
         map_card = QFrame(); map_card.setObjectName("card"); map_layout = QVBoxLayout(map_card)
         map_title = QHBoxLayout(); map_title.addWidget(QLabel("作业地图")); map_title.addStretch(); self.data_age = QLabel("等待遥测"); self.data_age.setObjectName("muted"); map_title.addWidget(self.data_age); map_layout.addLayout(map_title)
+        self.rtk_status = QLabel()
+        self.rtk_status.setWordWrap(True)
+        map_layout.addWidget(self.rtk_status)
         self.canvas = MapCanvas(); map_layout.addWidget(self.canvas, 1)
         self.wall_distance = QLabel("船体中心距左墙：无有效观测")
         self.wall_distance.setToolTip("base_link 原点到雷达拟合左墙线的垂直距离；不是滚刷间隙或任意最近障碍物距离")
@@ -566,6 +569,17 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.conditions.setText(condition)
         self.conditions.setToolTip("\n".join(b.get("message", "") for b in blockers))
         self.data_age.setText("实时遥测" if fresh else "遥测已过期")
+        rtk = packet.get("rtk") or {}
+        fix = {"fixed": "固定解", "float": "浮点解", "single": "单点", "differential": "差分定位",
+               "none": "无解", "disconnected": "串口断开", "other": "其他解",
+               "stale": "数据过期"}.get(rtk.get("fix"), "—")
+        angle = rtk.get("bow_heading_deg")
+        heading = f"{angle:05.1f}° · 固定" if isinstance(angle, (int, float)) and 0 <= angle < 360 else "—"
+        corrections = {"streaming": "正常写入", "delayed": "写入或接收延迟", "disabled": "未启用",
+                       "waiting_receiver": "等待接收机", "waiting_gga": "等待定位", "connecting": "连接中",
+                       "connected": "等待差分流", "retrying": "重连中", "auth_error": "鉴权失败",
+                       "config_error": "配置异常", "stale": "数据过期"}.get(rtk.get("corrections"), "—")
+        self.rtk_status.setText(f"RTK 定位：{fix}　 船头航向：{heading}　 千寻差分：{corrections}")
         phase = task.get("phase", "")
         mode = "实际输出" if task.get("output_enabled") else "预览模式（不驱动硬件）"
         phase_label = ("故障停机（请先取消任务）" if phase == "PAUSED" and task.get("pause_kind") == "fault"

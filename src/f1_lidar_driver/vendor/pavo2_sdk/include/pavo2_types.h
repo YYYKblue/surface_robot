@@ -21,6 +21,7 @@ typedef struct pavo_response_scan
     uint16_t angle;
     uint16_t distance;
     uint16_t intensity;
+    bool raw_no_echo = false;  // Sampled zero distance, before SDK filters.
 } pavo_response_scan_t;
 
 typedef struct pavo_point_cloud_scan

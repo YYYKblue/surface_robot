@@ -672,6 +672,8 @@ bool Pavo2FrameParser::parsePointCloud(char* data_ptr, std::size_t data_size)
         }
     }
 
+    for (auto& point : scan.data) point.raw_no_echo = point.distance == 0;
+
     if(hr_level == 1)
         algorithm.FarHighRelectivityPreProcess(&(scan.data[0]), (int)scan.data.size());
     else if(hr_level == 2)
@@ -801,6 +803,7 @@ void Pavo2MsgParser::parseRecvData(std::unique_ptr<Pavo2RecvDataUnit>&& data_ptr
             point.angle = first_angle + agular_increment * i;
             point.intensity = UInt16Val2HostOrder(pcl_ptr);
             point.distance = UInt16Val2HostOrder(pcl_ptr + 2);
+            point.raw_no_echo = point.distance == 0;
             pcl_ptr += 4;
         }
     }

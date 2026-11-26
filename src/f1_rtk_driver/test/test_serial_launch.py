@@ -1,15 +1,18 @@
 from contextlib import ExitStack, contextmanager
 from functools import reduce
 import math
+import json
 from operator import xor
 import os
 import pty
 import signal
 import subprocess
 import time
+from types import SimpleNamespace
 
 import pytest
 import rclpy
+from diagnostic_msgs.msg import DiagnosticArray
 from rclpy.time import Time
 from sensor_msgs.msg import NavSatFix, NavSatStatus
 
@@ -60,6 +63,7 @@ def launch_driver(tmp_path, monkeypatch, config_text=None):
     monkeypatch.setenv("ROS_DOMAIN_ID", str(40 + os.getpid() % 40))
     monkeypatch.setenv("ROS_LOCALHOST_ONLY", "1")
     monkeypatch.setenv("ROS_LOG_DIR", str(tmp_path / "ros_log"))
+    monkeypatch.delenv("F1_RTK_NTRIP_CONFIG", raising=False)
     port = tmp_path / "receiver"
     command = ["ros2", "launch", "f1_rtk_driver", "rtk.launch.py", f"port:={port}"]
     if config_text is not None:
@@ -235,3 +239,123 @@ def test_twenty_hz_receiver_stream(tmp_path, monkeypatch):
         assert len(centers) == len(epochs) + 1
         assert centers[-1].status.status == NavSatStatus.STATUS_FIX
         assert centers[-1].header.stamp == fixes[-1].header.stamp
+
+
+def test_ntrip_writes_only_rtcm_while_publishing_twenty_hz(tmp_path, monkeypatch):
+    from test_ntrip import Caster, rtcm
+
+    with Caster() as caster:
+        private = tmp_path / "ntrip.json"
+        private.write_text(json.dumps(dict(host="127.0.0.1", port=caster.port, mountpoint="TEST",
+                                          username="test-user", password="test-secret",
+                                          gga_interval_sec=0.2, reconnect_sec=0.2)))
+        private.chmod(0o600)
+        config = ("/f1/rtk/rtk_driver:\n  ros__parameters:\n"
+                  f"    ntrip_config_file: '{private}'\n")
+        with launch_driver(tmp_path, monkeypatch, config) as (probe, received, until, matches, connect):
+            diagnostics = []
+            probe.create_subscription(DiagnosticArray, "/f1/rtk/corrections", diagnostics.append, 10)
+            master = connect()
+            os.set_blocking(master.fileno(), False)
+            wire = bytearray()
+
+            def feed(utc):
+                master.write(at_epoch(GGA.replace(b",1,18,", b",4,18,"), utc) + at_epoch(HPR, utc))
+                try:
+                    wire.extend(os.read(master.fileno(), 65536))
+                except BlockingIOError:
+                    pass
+
+            until(lambda: caster.ggas and wire and matches(fix_quality=4), lambda: feed(b"120000.00"))
+            for messages in received.values():
+                messages.clear()
+            start = time.monotonic()
+            epochs = [f"1200{1 + i // 20:02d}.{i % 20 * 5:02d}" for i in range(100)]
+            for i, epoch in enumerate(epochs):
+                deadline = start + i * 0.05
+                while (remaining := deadline - time.monotonic()) > 0:
+                    rclpy.spin_once(probe, timeout_sec=remaining)
+                feed(epoch.encode())
+
+            def measured(name):
+                # DDS may deliver a warm-up sample after the counters are cleared.
+                # Select the exact 100 measured GGA epochs via their shared receipt stamp.
+                stamps = {(m.header.stamp.sec, m.header.stamp.nanosec) for m in received["raw"]
+                          if m.sentence.startswith("$GNGGA,") and m.sentence.split(",")[1] in epochs}
+                return [m for m in received[name] if (m.header.stamp.sec, m.header.stamp.nanosec) in stamps]
+
+            until(lambda: len(measured("fix")) >= 100 and len(measured("base_fix")) >= 100
+                  and diagnostics and diagnostics[-1].status[0].message == "streaming")
+            assert len(measured("fix")) == len(measured("base_fix")) == 100
+            assert [m.utc for m in received["heading"] if m.utc in epochs] == epochs
+            assert observed_hz(measured("fix")) == pytest.approx(20, rel=0.1)
+            assert matches(fix_quality=4, heading_quality=4, rejected_lines=0)
+            assert wire and len(wire) % len(rtcm()) == 0
+            assert bytes(wire) == rtcm() * (len(wire) // len(rtcm()))
+            values = {entry.key: entry.value for entry in diagnostics[-1].status[0].values}
+            assert int(values["written_bytes"]) > 0 and values["fix_quality"] == "4"
+            assert "test-secret" not in str(diagnostics)
+
+            # Disconnect the network while continuing receiver input, then recover.
+            caster.drop.set()
+            until(lambda: len(caster.headers) >= 2 and matches(fix_quality=4), lambda: feed(b"120006.00"))
+            # Invalid GGA closes the stream and no old location is resent.
+            invalid = GGA.replace(b",1,18,", b",0,18,")
+            master.write(at_epoch(invalid, b"120007.00") + at_epoch(HPR, b"120007.00"))
+            until(lambda: matches(fix_valid=False) and diagnostics[-1].status[0].message == "waiting_gga")
+
+
+def test_bad_private_config_does_not_stop_acquisition(tmp_path, monkeypatch):
+    private = tmp_path / "bad.json"
+    private.write_text('{"password":"test-secret"}')
+    private.chmod(0o600)
+    config = f"/f1/rtk/rtk_driver:\n  ros__parameters:\n    ntrip_config_file: '{private}'\n"
+    with launch_driver(tmp_path, monkeypatch, config) as (probe, received, until, matches, connect):
+        diagnostics = []
+        probe.create_subscription(DiagnosticArray, "/f1/rtk/corrections", diagnostics.append, 10)
+        master = connect()
+        until(lambda: matches(fix_valid=True, heading_valid=True) and diagnostics,
+              lambda: master.write(GGA + HPR))
+        assert diagnostics[-1].status[0].message == "config_error"
+        assert "test-secret" not in (tmp_path / "launch.log").read_text()
+
+
+def test_partial_serial_writes_resume_and_old_session_tail_is_discarded(monkeypatch):
+    from test_ntrip import GGA as VALID_GGA, rtcm
+    from wit_rtk.node import RtkDriver
+    from wit_rtk.ntrip import Config, NtripClient
+
+    client = NtripClient(Config("localhost", 8002, "TEST", "user", "password"))
+    client.set_receiver(True)
+    now = time.monotonic()
+    client.update_gga(VALID_GGA, now)
+    client.queue.append((now, rtcm()))
+    client.queued_bytes = len(rtcm())
+    driver = SimpleNamespace(ntrip=client, pending_rtcm=None, last_rtcm_write=None,
+                             device=SimpleNamespace(fileno=lambda: 42))
+    output = bytearray()
+    calls = 0
+
+    def write(_, data):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise BlockingIOError()
+        size = min(2, len(data))
+        output.extend(data[:size])
+        return size
+
+    monkeypatch.setattr(os, "write", write)
+    RtkDriver.write_corrections(driver, now)
+    assert bytes(output) == rtcm()[:2] and driver.pending_rtcm is not None
+    RtkDriver.write_corrections(driver, now)
+    assert bytes(output) == rtcm() and driver.pending_rtcm is None
+    assert client.snapshot()["written_bytes"] == len(rtcm())
+
+    # A pending tail from before a receiver disconnect must not enter the new session.
+    driver.pending_rtcm = (client.generation, now, rtcm()[2:])
+    client.set_receiver(False)
+    client.set_receiver(True)
+    client.update_gga(VALID_GGA, now)
+    RtkDriver.write_corrections(driver, now)
+    assert bytes(output) == rtcm() and driver.pending_rtcm is None

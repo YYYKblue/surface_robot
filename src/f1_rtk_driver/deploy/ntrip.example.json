@@ -1,0 +1,10 @@
+{
+  "host": "rtk.ntrip.qxwz.com",
+  "port": 8002,
+  "mountpoint": "RTCM32_GGB",
+  "username": "REPLACE_WITH_ACCOUNT",
+  "password": "REPLACE_WITH_PASSWORD",
+  "gga_interval_sec": 1.0,
+  "reconnect_sec": 5.0,
+  "data_timeout_sec": 10.0
+}

@@ -6,6 +6,8 @@
     status_rate_hz: 20.0
     stale_timeout_sec: 1.5
     reconnect_sec: 1.0
+    # Optional private JSON via F1_RTK_NTRIP_CONFIG, or ntrip_config_file parameter.
+    # Leave unset to preserve the environment-file selection; never put credentials here.
     antenna_frame: gnss_ant1
     base_frame: base_link
     # Clockwise from the bow to the M -> S baseline.

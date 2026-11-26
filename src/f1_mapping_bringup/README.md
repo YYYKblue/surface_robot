@@ -36,6 +36,30 @@ ros2 launch f1_mapping_bringup lidar_mapping.launch.py use_rviz:=true
 ros2 launch f1_mapping_bringup lidar_mapping.launch.py --show-args
 ```
 
+## 湖心整圈无回波建图
+
+在开阔水域选用 `open_water`。船中心的 RTK 固定位置与双天线固定航向决定扫描在地图上的位置。雷达持续发帧时，即使整圈都没有测距回波，沿航迹经过的水域也能逐步画入地图。此模式可从岸边启动后驶向湖心，在同一张图中记录岸边回波与湖心观测。
+
+```bash
+source install/setup.bash
+ros2 launch f1_mapping_bringup lidar_mapping.launch.py mapping_backend:=open_water no_echo_radius_m:=3.0
+```
+
+独立命令与 App 管理的建图进程择一运行。通过 App 建图时，让启动网关的进程继承 `F1_MAPPING_BACKEND=open_water`，再按原来的“开始建图”“保存地图”操作。Nano 的 `f1-operator.service` 可通过 systemd drop-in 的 `[Service]` 下设置 `Environment=F1_MAPPING_BACKEND=open_water`。可选的 `F1_NO_ECHO_RADIUS_M` 控制无回波距离。首次部署需同时更新并运行本版雷达驱动、建图包和 App 网关。默认模式为 `cartographer`。
+
+| 现场观测 | 写入地图的结果 |
+| --- | --- |
+| 同一方向连续两帧采到原始零距离，间隔不超过 0.1 秒 | 从雷达沿该方向标记推定空闲，默认最远 3 米，碰到已有占据格即停止 |
+| 有有效回波 | 沿束标记自由空间，30 米内的回波终点写为占据，超过 30 米只记录截断的自由段 |
+| 无效或被滤掉的读数、扫描中断 | 相应方向没有新增观测 |
+| GGA 失去固定解、航向无效，或扫描与位姿时间相差超过 0.12 秒 | 暂停写入，条件恢复后沿用原地理原点继续 |
+
+`/pavo2_scan/water` 的 `+inf` 表示设备原始零距离，`NaN` 表示无效。经现有卫星数、HDOP、时效与连续性筛选的 GGA 质量 4 和 HPR 质量 4 才会进入此模式专用的 `/f1/rtk/open_water_landmarks`。合格位姿最高 5 Hz，实时地图有更新时以 1 Hz 发布。复盘这一路径需额外录制 `/pavo2_scan/water`，普通扫描中的零值不能区分上述情况。
+
+空闲是针对水平扫描面的推定，水下障碍、低矮浮物、遮挡或弱反射都可能漏检。3 米是可调的初始推定距离，应以本船实测选择。超过已观测范围的栅格保持未知。栅格按航迹的包围范围扩展，内部分配上限为 16777216 格、单边最多 16384 格。大范围测区可在开始前调大 `resolution`。达到上限的新观测会跳过并记录错误，已建部分仍可保存。
+
+`/write_state` 将这张栅格、船的位姿序列和地理原点一起保存为 `.pbstream`，现有导出工具从同一快照生成 PGM 和 YAML。保存后可重新加载显示；湖心全无回波时的固定地图重定位和自主航行属于独立能力。
+
 ## 单点位置与双天线航向融合
 
 Nano 上先核对两路采集服务，再用 App 建图。独立调试可用下列建图命令。建图与固定地图定位各占用一套 Cartographer，运行其中一种模式。

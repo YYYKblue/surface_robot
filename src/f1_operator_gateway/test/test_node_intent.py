@@ -402,6 +402,7 @@ def stream_gateway():
     node = gateway(True)
     node.runtime_enabled = False
     node.diagnostic_history = DiagnosticHistory(node._diagnostic_event)
+    node.rtk_samples = {}
     node.telemetry_sequence = 0
     node.control_received = time.monotonic()
     node.pose = dict(x=1., y=2., yaw=0.)
@@ -503,3 +504,28 @@ def test_map_callback_defers_all_grid_work_and_commits_revision_with_ready_resul
     node.runtime_accept_map = False
     node._publish_map()
     assert node.map_revision == 8  # Never commit a late result while stopping.
+
+
+def test_rtk_state_uses_independent_quality_freshness_and_correction_status():
+    from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+    from f1_interfaces.msg import Heading, RtkStatus
+
+    node = stream_gateway()
+    status = RtkStatus(connected=True, fix_valid=True, fix_quality=1, heading_valid=True, heading_quality=4)
+    heading = Heading(valid=True, quality=4, heading_deg=83.6)
+    item = DiagnosticStatus(name="f1/rtk/ntrip", message="streaming")
+    corrections = DiagnosticArray(status=[item])
+    for key, message in (("status", status), ("heading", heading), ("corrections", corrections)):
+        message.header.stamp.sec = 100
+        node._rtk_sample(key, message)
+    assert node._rtk_view(time.monotonic()) == dict(fix="single", bow_heading_deg=83.6, corrections="streaming")
+    item.level = DiagnosticStatus.WARN
+    status.fix_quality = 4
+    heading.valid = False
+    assert node._rtk_view(time.monotonic()) == dict(fix="fixed", bow_heading_deg=None, corrections="delayed")
+    item.message = "retrying"
+    item.values = [KeyValue(key="error", value="caster response 401")]
+    assert node._rtk_view(time.monotonic())["corrections"] == "auth_error"
+    status.header.stamp.sec = 97
+    assert node._rtk_view(time.monotonic())["fix"] == "stale"
+    assert node._rtk_view(time.monotonic() + 3)["corrections"] == "stale"

@@ -1,8 +1,10 @@
 """Read WTRTK-982 serial output and publish independent position and heading."""
 
 import math
+import os
 import time
 
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 import rclpy
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.clock import Clock, ClockType
@@ -16,6 +18,7 @@ from f1_interfaces.msg import Heading, RawSentence, RtkStatus
 from wit_rtk.alignment import EpochPairs, base_coordinates, bow_heading, utc_nanoseconds
 from wit_rtk.discovery import ReceiverDiscovery
 from wit_rtk.nmea import Fix, parse_sentence
+from wit_rtk.ntrip import NtripClient, load_config
 
 
 class RtkDriver(Node):
@@ -62,9 +65,26 @@ class RtkDriver(Node):
         self.last_valid_heading = None
         self.pairs = EpochPairs(self.stale_timeout)
         self.last_base_fix = None
+        self.corrections_pub = self.create_publisher(DiagnosticArray, "corrections", 10)
+        self.ntrip = None
+        self.ntrip_error = ""
+        self.pending_rtcm = None
+        self.last_rtcm_write = None
+        config_file = self.declare_parameter(
+            "ntrip_config_file", os.environ.get("F1_RTK_NTRIP_CONFIG", ""),
+            ParameterDescriptor(read_only=True)).value
+        if config_file:
+            try:
+                self.ntrip = NtripClient(load_config(config_file), self.stale_timeout)
+            except (OSError, ValueError, TypeError):
+                self.ntrip_error = "Cannot load private NTRIP config; check JSON fields and mode 600"
+                self.get_logger().error(self.ntrip_error)
+        if self.ntrip is not None:
+            self.ntrip.start()
         steady = Clock(clock_type=ClockType.STEADY_TIME)
         self.create_timer(0.025, self.poll, clock=steady)
         self.create_timer(1.0 / status_rate_hz, self.publish_status, clock=steady)
+        self.create_timer(1.0, self.publish_corrections, clock=steady)
 
     def header(self):
         return Header(stamp=self.get_clock().now().to_msg(), frame_id=self.frame)
@@ -84,7 +104,10 @@ class RtkDriver(Node):
                         return
                 self.serial_error = ""
                 self.get_logger().info(f"Opened RTK {self.device.port} at {self.baudrate} baud")
+                if self.ntrip is not None:
+                    self.ntrip.set_receiver(True)
             data = self.device.read(4096)
+            self.write_corrections(now)
         except (OSError, serial.SerialException) as exc:
             self.disconnect(str(exc), now)
             return
@@ -122,6 +145,9 @@ class RtkDriver(Node):
         if sample is None:
             return
         if isinstance(sample, Fix):
+            if self.ntrip is not None:
+                valid = sample.valid and utc_nanoseconds(sample.utc) is not None
+                self.ntrip.update_gga(line if valid else None, now)
             self.fix = sample
             self.fix_valid = sample.valid
             if sample.valid:
@@ -199,6 +225,9 @@ class RtkDriver(Node):
             self.invalidate_base_fix(self.header())
 
     def disconnect(self, error, now):
+        if self.ntrip is not None:
+            self.ntrip.set_receiver(False)
+        self.pending_rtcm = None
         if self.device is not None:
             self.device.close()
             self.device = None
@@ -225,7 +254,56 @@ class RtkDriver(Node):
             fix_utc=self.fix.utc if self.fix else "", satellites=self.fix.satellites if self.fix else -1,
             hdop=self.fix.hdop if self.fix else math.nan, rejected_lines=self.rejected))
 
+    def write_corrections(self, now):
+        if self.ntrip is None:
+            return
+        budget = 4096
+        while budget > 0:
+            if self.pending_rtcm is None:
+                self.pending_rtcm = self.ntrip.take_frame(now)
+            if self.pending_rtcm is None:
+                return
+            generation, stamp, data = self.pending_rtcm
+            current, gga = self.ntrip.observation()
+            if current != generation or gga is None or now - stamp > self.ntrip.MAX_QUEUE_AGE:
+                self.pending_rtcm = None
+                continue
+            try:
+                # pyserial opens the POSIX descriptor O_NONBLOCK; never wait for TX drain.
+                size = os.write(self.device.fileno(), data[:budget])
+            except BlockingIOError:
+                return
+            if size <= 0:
+                return
+            self.ntrip.record_written(size)
+            self.last_rtcm_write = now
+            budget -= size
+            self.pending_rtcm = (generation, stamp, data[size:]) if size < len(data) else None
+
+    def publish_corrections(self):
+        values = self.ntrip.snapshot() if self.ntrip else dict(
+            state="config_error" if self.ntrip_error else "disabled", error=self.ntrip_error)
+        values.pop("generation", None)
+        values.update(
+            serial_connected=self.device is not None,
+            fix_quality=self.fix.quality if self.fix else -1,
+            fix_valid=self.fix_valid,
+            differential_age_sec=self.fix.differential_age if self.fix else math.nan,
+            reference_station_id=self.fix.station_id if self.fix else "",
+            write_age_sec=-1.0 if self.last_rtcm_write is None else time.monotonic() - self.last_rtcm_write)
+        state = values["state"]
+        healthy = (state == "streaming" and values["serial_connected"] and values["rtcm_age_sec"] <= 2.0
+                   and 0 <= values["write_age_sec"] <= 2.0)
+        level = DiagnosticStatus.OK if healthy or state == "disabled" else DiagnosticStatus.WARN
+        if state == "config_error":
+            level = DiagnosticStatus.ERROR
+        self.corrections_pub.publish(DiagnosticArray(header=self.header(), status=[DiagnosticStatus(
+            level=level, name="f1/rtk/ntrip", hardware_id="WTRTK-982", message=state,
+            values=[KeyValue(key=key, value=str(value)) for key, value in values.items()])]))
+
     def destroy_node(self):
+        if self.ntrip is not None:
+            self.ntrip.close()
         if self.discovery is not None:
             self.discovery.close()
         if self.device is not None:

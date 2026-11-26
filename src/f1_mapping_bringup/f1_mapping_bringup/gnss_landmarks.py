@@ -95,6 +95,7 @@ class GnssLandmarks:
         def setting(name, default):
             return node.declare_parameter(name, default, ParameterDescriptor(read_only=True)).value
 
+        self.fixed_only = setting("require_fixed_position", False)
         self.position_weight = setting("gnss_translation_weight", 0.5)
         self.heading_weight = setting("gnss_rotation_weight", 8.0)
         rate = setting("gnss_constraint_rate_hz", 2.0)
@@ -118,7 +119,8 @@ class GnssLandmarks:
         if not isinstance(fix, Fix):
             return
         # HDOP and satellite count qualify the position, independently of HPR.
-        if not (fix.valid and fix.quality in (1, 2, 4, 5) and 0 < fix.hdop <= 3 and fix.satellites >= 5):
+        accepted = (4,) if self.fixed_only else (1, 2, 4, 5)
+        if not (fix.valid and fix.quality in accepted and 0 < fix.hdop <= 3 and fix.satellites >= 5):
             self.invalidate(message.header)
             return
         epoch = utc_nanoseconds(fix.utc)

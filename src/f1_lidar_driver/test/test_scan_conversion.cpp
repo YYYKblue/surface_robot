@@ -1,5 +1,5 @@
 // Exercise the migrated production conversion without opening any sensor socket.
-// Including the unchanged translation unit keeps this migration byte-identical.
+// Reuse the driver conversion with synthetic raw SDK samples.
 #define main imported_pavo2_driver_main
 #include "../src/pavo2_scan_node.cpp"
 #undef main
@@ -56,6 +56,43 @@ TEST_P(ScanConversion, PreservesCoordinatesTimingRangesIntensityAndQos)
   }
   EXPECT_EQ(publisher->get_actual_qos().get_rmw_qos_profile().reliability, RMW_QOS_POLICY_RELIABILITY_RELIABLE);
   EXPECT_EQ(publisher->get_actual_qos().get_rmw_qos_profile().depth, 10U);
+}
+
+TEST_P(ScanConversion, WaterScanDistinguishesRawZerosFromRejectedMeasurements)
+{
+  using Scan = sensor_msgs::msg::LaserScan;
+  auto node = rclcpp::Node::make_shared("water_conversion_test");
+  auto original = node->create_publisher<Scan>("source_scan", 1);
+  auto water = node->create_publisher<Scan>("source_scan/water", rclcpp::SensorDataQoS());
+  Scan::SharedPtr received;
+  auto subscription = node->create_subscription<Scan>(
+    "source_scan/water", rclcpp::SensorDataQoS(), [&](Scan::SharedPtr scan) { received = scan; });
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (!water->get_subscription_count() && std::chrono::steady_clock::now() < deadline) {
+    rclcpp::spin_some(node);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_GT(water->get_subscription_count(), 0u);
+  std::vector<pavo2::pavo_response_scan_t> points = {
+    {0, 0, 0, true}, {8, 0, 0}, {16, 20, 0}, {24, 500, 4}, {32, 60000, 0}, {40, 500, 0, true}};
+  publish_scan(original, points, node->now(), .02, "pavo2s_frame", GetParam(), .1, 100., water);
+  while (!received && std::chrono::steady_clock::now() < deadline) rclcpp::spin_some(node);
+  ASSERT_NE(received, nullptr);
+  auto values = received->ranges;
+  if (GetParam()) std::reverse(values.begin(), values.end());
+  EXPECT_EQ(values[0], std::numeric_limits<float>::infinity());
+  EXPECT_TRUE(std::isnan(values[1]));
+  EXPECT_TRUE(std::isnan(values[2]));
+  EXPECT_FLOAT_EQ(values[3], 1.F);
+  EXPECT_TRUE(std::isnan(values[4]));
+  EXPECT_TRUE(std::isnan(values[5]));
+
+  received.reset();
+  points[3].angle = 0;  // missing or disordered source samples
+  publish_scan(original, points, node->now(), .02, "pavo2s_frame", GetParam(), .1, 100., water);
+  const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
+  while (std::chrono::steady_clock::now() < until) rclcpp::spin_some(node);
+  EXPECT_EQ(received, nullptr);
 }
 
 INSTANTIATE_TEST_SUITE_P(ExistingDriverBehavior, ScanConversion, ::testing::Bool());

@@ -9,6 +9,8 @@ WorkingDirectory=/home/nvidia/surface_ws
 Environment=ROS_DOMAIN_ID=33
 Environment=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 Environment=PYTHONUNBUFFERED=1
+# Optional private JSON credentials; unset means independent acquisition only.
+EnvironmentFile=-/etc/f1-rtk.env
 ExecStart=/bin/bash -ec 'source /opt/ros/humble/setup.bash; source /home/nvidia/surface_ws/install/local_setup.bash; exec ros2 launch f1_rtk_driver rtk.launch.py'
 Restart=always
 RestartSec=3

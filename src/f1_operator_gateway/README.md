@@ -51,6 +51,10 @@ Nano 的 `deploy/f1-operator.service` 在启动前通过 `wait-operator-clock.py
 
 ### 地图文件与恢复
 
+网关从 `/f1/rtk/status`、`/f1/rtk/bow_heading` 和 `/f1/rtk/corrections` 取最新观测，通过 WebSocket 的 `telemetry.rtk` 提供定位解、船头角度和差分状态。航向无效时为 null。串口断开、数据过期及差分鉴权失败都有独立显示。
+
+开阔水域建图可给网关进程设置 `F1_MAPPING_BACKEND=open_water`。App 仍使用现有建图、保存、选图按钮。该模式的扫描健康检查订阅 `/pavo2_scan/water`，接受完整角度元数据下的新鲜无回波束，借此允许在湖心开始和保存地图。写入地图还需接收机固定位置和有效固定航向。部署时同时更新雷达、建图与网关三个包。[开阔水域参数及限制](../f1_mapping_bringup/README.md#湖心整圈无回波建图)
+
 名称只接受中文/字母/数字/下划线/短横线（最多 80 字符），拒绝路径和 Windows 保留名称。空名称使用 Nano 配置时区的时间戳；重名自动加序号。保存先写 `maps/.snapshot-<id>/`，调用 `/write_state`（包含未完成子图），再运行 `cartographer_pbstream_to_ros_map` 导出相同快照。
 
 三份文件校验后以不覆盖已有文件的方式发布到 `maps/`，YAML 写入同名 PGM 的相对路径。目录列表拒绝不完整三件套；发布并非三个文件的单一文件系统事务，突然掉电可能留下不可用条目，原快照仍可供检查。快照文件在导出失败时保留，App 显示“待导出”，可重试；重新启动网关仍可发现保留快照。写状态服务长时间无响应时显示“结果待确认”，保持操作锁定而不重复发起写入。

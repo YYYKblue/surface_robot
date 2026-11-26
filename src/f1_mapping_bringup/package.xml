@@ -10,18 +10,21 @@
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
-  <exec_depend>cartographer_ros</exec_depend>
-  <exec_depend>cartographer_ros_msgs</exec_depend>
+  <depend>cartographer_ros</depend>
+  <depend>cartographer</depend>
+  <depend>nav_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>cartographer_ros_msgs</depend>
   <exec_depend>f1_interfaces</exec_depend>
   <exec_depend>f1_rtk_driver</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
+  <depend>geometry_msgs</depend>
   <exec_depend>f1_lidar_driver</exec_depend>
-  <exec_depend>tf2_ros</exec_depend>
+  <depend>tf2_ros</depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
+  <depend>sensor_msgs</depend>
   <test_depend>ament_cmake_pytest</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

@@ -64,3 +64,13 @@ def test_bad_target_lines_raise(line):
 def test_unrelated_sentences_are_ignored():
     assert parse_sentence(sentence("GNRMC,000000.00,V")) is None
     assert parse_sentence(sentence("GNHPR2,000000.00,25,0,0,4")) is None
+
+
+def test_differential_age_is_distinct_from_observation_age():
+    body = "GPGGA,235959.00,1230.00,S,17930.00,W,4,10,1,5,M,2,M,1.2,0042"
+    fix = parse_sentence(sentence(body))
+    assert fix.valid and fix.quality == 4
+    assert fix.differential_age == 1.2 and fix.station_id == "0042"
+    for bad in ("", "-1", "nan", "invalid"):
+        fix = parse_sentence(sentence(body.replace(",1.2,0042", f",{bad},0042")))
+        assert fix.valid and math.isnan(fix.differential_age)

@@ -16,6 +16,8 @@ class Fix:
     latitude: float = math.nan
     longitude: float = math.nan
     altitude: float = math.nan
+    differential_age: float = math.nan
+    station_id: str = ""
 
     @property
     def valid(self):
@@ -68,7 +70,16 @@ def parse_gga(fields):
     if fields[9] and fields[11] and fields[10] == fields[12] == "M":
         # NavSatFix expects ellipsoidal height; GGA reports MSL and geoid separation.
         altitude = number(fields[9]) + number(fields[11])
-    return Fix(fields[1], quality, satellites, hdop, latitude, longitude, altitude)
+    age = math.nan
+    if len(fields) > 13 and fields[13]:
+        try:
+            age = number(fields[13])
+            if age < 0:
+                age = math.nan
+        except ValueError:
+            pass
+    station = fields[14] if len(fields) > 14 else ""
+    return Fix(fields[1], quality, satellites, hdop, latitude, longitude, altitude, age, station)
 
 
 def quality_code(field):

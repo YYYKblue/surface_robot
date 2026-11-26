@@ -6,7 +6,7 @@ from pathlib import Path
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node
 
 from f1_mapping_bringup.configuration import load_lidar_planar_transform, static_tf_arguments
@@ -48,19 +48,41 @@ def lidar_nodes(context):
             name="base_to_lidar_planar", output="screen", parameters=parameters,
             arguments=static_tf_arguments("pavo2s_frame", mounting),
         ))
-    nodes.extend([
-        Node(package="cartographer_ros", executable=slam, name="cartographer_node",
-             output="screen", parameters=parameters,
-             arguments=["-configuration_directory", config_dir, "-configuration_basename", basename],
-             remappings=[("scan", value("scan_topic"))] + (
-                 [("landmark", "/f1/rtk/landmarks")] if use_rtk else [])),
-        Node(package="cartographer_ros", executable=grid, name="cartographer_occupancy_grid_node",
-             output="screen", parameters=parameters,
-             arguments=["-resolution", str(resolution), "-publish_period_sec", "1.0"]),
-    ])
+    open_water = LaunchConfiguration("mapping_backend", default="cartographer").perform(context) == "open_water"
+    # LandmarkList carries no GGA quality field. Keep the fixed-only feed distinct
+    # from observations published by the standard mixed-quality adapter.
+    fixed_feed = [("/f1/rtk/landmarks", "/f1/rtk/open_water_landmarks")] if open_water else []
+    if open_water:
+        if not use_rtk:
+            raise ValueError("open_water mapping requires use_rtk:=true")
+        model = mounting or load_lidar_planar_transform(value("lidar_extrinsics_file"))
+        nodes.append(Node(
+            package="f1_mapping_bringup", executable="open_water_mapper", output="screen",
+            parameters=[*parameters, {
+                "configuration_directory": config_dir,
+                "mount": [model[0], model[1], model[5]],
+                "resolution": resolution,
+                "no_echo_radius_m": float(value("no_echo_radius_m")),
+            }],
+            remappings=[("water_scan", value("scan_topic") + "/water"), *fixed_feed],
+        ))
+    else:
+        nodes.extend([
+            Node(package="cartographer_ros", executable=slam, name="cartographer_node",
+                 output="screen", parameters=parameters,
+                 arguments=["-configuration_directory", config_dir, "-configuration_basename", basename],
+                 remappings=[("scan", value("scan_topic"))] + (
+                     [("landmark", "/f1/rtk/landmarks")] if use_rtk else [])),
+            Node(package="cartographer_ros", executable=grid, name="cartographer_occupancy_grid_node",
+                 output="screen", parameters=parameters,
+                 arguments=["-resolution", str(resolution), "-publish_period_sec", "1.0"]),
+        ])
     if use_rtk:
+        gnss_parameters = [value("gnss_config"), *parameters]
+        if open_water:
+            gnss_parameters.append({"require_fixed_position": True, "gnss_constraint_rate_hz": 5.0})
         nodes.append(Node(package="f1_mapping_bringup", executable="gnss_landmarks",
-                          output="screen", parameters=[value("gnss_config"), *parameters]))
+                          output="screen", parameters=gnss_parameters, remappings=fixed_feed))
     if value("use_rviz") == "true":
         nodes.append(Node(package="rviz2", executable="rviz2", name="mapping_rviz",
                           output="screen", parameters=parameters,
@@ -71,6 +93,10 @@ def lidar_nodes(context):
 def generate_launch_description():
     share = get_package_share_directory("f1_mapping_bringup")
     return LaunchDescription([
+        DeclareLaunchArgument("mapping_backend", choices=["cartographer", "open_water"],
+                              default_value=EnvironmentVariable("F1_MAPPING_BACKEND", default_value="cartographer")),
+        DeclareLaunchArgument("no_echo_radius_m", default_value=EnvironmentVariable(
+            "F1_NO_ECHO_RADIUS_M", default_value="3.0")),
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),
         DeclareLaunchArgument("configuration_directory", default_value=f"{share}/config"),
         DeclareLaunchArgument("configuration_basename", default_value="",
