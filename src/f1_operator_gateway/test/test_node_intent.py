@@ -403,11 +403,14 @@ def stream_gateway():
     node.runtime_enabled = False
     node.diagnostic_history = DiagnosticHistory(node._diagnostic_event)
     node.rtk_samples = {}
+    node.water_samples = {}
     node.telemetry_sequence = 0
     node.control_received = time.monotonic()
     node.pose = dict(x=1., y=2., yaw=0.)
     node.active_client = None
     node._task_telemetry = lambda: {"tasks": {"l": {"phase": "IDLE"}}}
+    node.tasks = {}
+    node.patrol_plan = {}
     node.task_tracks = {"l": TaskTrack()}
     node._last_tracks = None
     node.map_data = dict(revision=7, encoding="indexed8_zlib", data_zlib_base64="encoded",
@@ -527,3 +530,19 @@ def test_rtk_state_uses_independent_quality_freshness_and_correction_status():
     status.header.stamp.sec = 97
     assert node._rtk_view(time.monotonic())["fix"] == "stale"
     assert node._rtk_view(time.monotonic() + 3)["corrections"] == "stale"
+
+
+def test_water_telemetry_expires_each_probe_by_sample_and_arrival():
+    from f1_interfaces.msg import WaterQualityReading
+    from builtin_interfaces.msg import Time
+    from math import nan
+    node = stream_gateway()
+    reading = WaterQualityReading(sensor="ec", status="range_required", stamp=Time(sec=100),
+                                  value=nan, temperature_c=24., tds_ppm=0., salinity_ppm=20.)
+    node._water_sample(reading)
+    node._water_sample(WaterQualityReading(sensor="ph", status="ok", stamp=Time(sec=94)))
+    node._telemetry()
+    assert node.hub.sent[-1][1]["water_quality"] == {
+        "ec": dict(status="range_required", temperature_c=24., tds_ppm=0., salinity_ppm=20.),
+        "ph": dict(status="stale")}
+    assert node._water_view(time.monotonic() + 4)["ec"] == {"status": "stale"}

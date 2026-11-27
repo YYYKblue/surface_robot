@@ -89,6 +89,6 @@ def test_deployed_route_and_map_derived_pose_gate(route_parameters, route_config
         length_m=x_max - x_min, width_m=y_max - y_min))
     for edge in route.edges:
         for point in (edge.start, edge.end):
-            assert gate._boundary_ok(PoseSample(1, *point, edge.yaw_rad))
-    assert not gate._boundary_ok(PoseSample(1, 50., 50., 0.))
+            assert gate.within_map_bounds(PoseSample(1, *point, edge.yaw_rad))
+    assert not gate.within_map_bounds(PoseSample(1, 50., 50., 0.))
 

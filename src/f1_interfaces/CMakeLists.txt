@@ -15,6 +15,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Heading.msg"
   "msg/RawSentence.msg"
   "msg/RtkStatus.msg"
+  "msg/WaterQualityReading.msg"
   "srv/SetInitialPose.srv"
   "srv/AcquireControl.srv"
   "srv/ReleaseControl.srv"

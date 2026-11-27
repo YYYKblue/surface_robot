@@ -691,6 +691,10 @@ class SocketWorker(QThread):
             self._receive(dict(type="telemetry", stream=dict(session="mock-stream", sequence=sequence,
                 generated_monotonic=now, generated_unix=time.time(), server_queue_ms=0., control_age_ms=0.), state=dict(control),
                 drive_output=dict(drive_output), control_fresh=True,
+                water_quality={"ph": dict(status="ok", value=7.90, temperature_c=26.5),
+                    "ec": dict(status="ok", value=1000., temperature_c=26.5, salinity_ppm=500, tds_ppm=550),
+                    "chlorine": dict(status="ok", value=.65),
+                    "turbidity": dict(status="ok", value=3.25, temperature_c=21.9)},
                 pose=pose if runtime["mode"] != "idle" else None,
                 runtime=dict(runtime), tasks=json.loads(json.dumps({k: {field: value for field, value in t.items()
                     if field != "actual_track"} for k, t in tasks.items()})) if runtime["mode"] == "localization" else {}, task_busy=bool(occupied),

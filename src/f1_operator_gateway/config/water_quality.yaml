@@ -1,0 +1,13 @@
+water_quality:
+  ros__parameters:
+    # Verified by Modbus address-register replies on available CH340 adapters.
+    port: auto
+    baudrate: 4800
+    # Commissioned addresses on this detector.
+    ph_address: 1
+    ec_address: 2
+    chlorine_address: 3
+    turbidity_address: 4
+    # Confirmed probe variants for this detector.
+    ec_k: 10
+    turbidity_range_ntu: 1000

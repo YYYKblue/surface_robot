@@ -1,0 +1,17 @@
+[Unit]
+Description=F1 RS485 water quality sensors
+After=network.target
+
+[Service]
+Type=simple
+User=nvidia
+WorkingDirectory=/home/nvidia/surface_ws
+Environment=ROS_DOMAIN_ID=33
+Environment=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+ExecStart=/bin/bash -ec 'source /opt/ros/humble/setup.bash; source install/local_setup.bash; exec ros2 run f1_operator_gateway water_quality --ros-args --params-file /etc/f1-water-quality.yaml'
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target

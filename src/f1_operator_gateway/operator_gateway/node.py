@@ -18,7 +18,7 @@ from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
 from tf2_ros import Buffer, TransformListener
 
-from f1_interfaces.msg import ActuatorCommand, ControlState, RtkStatus
+from f1_interfaces.msg import ActuatorCommand, ControlState, RtkStatus, WaterQualityReading
 from f1_interfaces.srv import AcquireControl, ReleaseControl
 
 from .protocol import ManualInput, decode
@@ -84,6 +84,8 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         state_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         map_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.water_samples = {}
+        self.create_subscription(WaterQualityReading, "/f1/water_quality", self._water_sample, 8)
         self.rtk_samples = {}
         for key, kind, topic in (("status", RtkStatus, "status"),
                                  ("corrections", DiagnosticArray, "corrections")):
@@ -444,6 +446,29 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
             self._last_tracks = packet["tasks"]
             self.hub.broadcast(packet)
 
+    def _water_sample(self, message):
+        if message.sensor in ("ph", "ec", "chlorine", "turbidity"):
+            self.water_samples[message.sensor] = (message, time.monotonic())
+
+    def _water_view(self, now):
+        result = {}
+        clock_ns = self.get_clock().now().nanoseconds
+        for key, (message, arrival) in self.water_samples.items():
+            age_ns = clock_ns - message.stamp.sec * 10**9 - message.stamp.nanosec
+            if not 0 <= age_ns <= 3_000_000_000 or now - arrival > 3:
+                result[key] = {"status": "stale"}
+                continue
+            entry = {"status": message.status}
+            if message.detail:
+                entry["detail"] = message.detail
+            if message.status in ("ok", "range_required"):
+                for field in ("value", "temperature_c", "salinity_ppm", "tds_ppm"):
+                    value = getattr(message, field)
+                    if math.isfinite(value):
+                        entry[field] = value
+            result[key] = entry
+        return result
+
     def _rtk_sample(self, key, message):
         self.rtk_samples[key] = (message, time.monotonic())
 
@@ -494,7 +519,7 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
             stream["transport"] = self.hub.stats(include_clients=False)
         self.hub.broadcast({"type": "telemetry", "state": self.control_state,
                             "drive_output": self._drive_output(), "rtk": self._rtk_view(now),
-                            "stream": stream,
+                            "water_quality": self._water_view(now), "stream": stream,
                             "control_fresh": control_age < .3,
                             "pose": self.pose,
                             "active_client": self.active_client, "runtime": self._runtime_view(), **self._task_telemetry()})

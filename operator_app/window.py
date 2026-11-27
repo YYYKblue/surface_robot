@@ -146,12 +146,53 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         mapping = QScrollArea(); mapping.setWidgetResizable(True); mapping.setFrameShape(QFrame.NoFrame)
         mapping.setWidget(mapping_content); tabs.addTab(mapping, "建图与选图")
         self._build_diagnostics(tabs)
+        water = QWidget()
+        water_layout = QVBoxLayout(water)
+        self.water_readings = {}
+        for key, name in (("ph", "pH"), ("ec", "电导率"), ("chlorine", "余氯"), ("turbidity", "浊度")):
+            water_layout.addWidget(QLabel(name))
+            label = QLabel("等待水质数据")
+            label.setWordWrap(True)
+            self.water_readings[key] = label
+            water_layout.addWidget(label)
+            water_layout.addSpacing(8)
+        water_layout.addStretch()
+        tabs.addTab(water, "水质")
         if self.under_url:
             self.under_panel = UnderwaterPanel(self.under_url, mock=self.under_mock,
                                               log=self._log, parent=self)
             body.addWidget(self.under_panel, 1)
         camera = QFrame(); camera.setObjectName("card"); camera_layout = QVBoxLayout(camera); camera_layout.addWidget(QLabel("前向摄像头")); camera_label = QLabel("摄像头画面预留\n接入 WebRTC 后显示"); camera_label.setAlignment(Qt.AlignCenter); camera_label.setMinimumHeight(125); camera_label.setStyleSheet("background:#172a39;color:#a9bdc9;border-radius:8px;"); camera_layout.addWidget(camera_label); side_layout.addWidget(camera)
         self.status_bar = QLabel("等待网关状态"); self.status_bar.setObjectName("muted"); layout.addWidget(self.status_bar)
+
+    def _refresh_water(self, packet, fresh):
+        readings = packet.get("water_quality", {})
+        statuses = {"offline": "设备离线或无应答", "unconfigured": "待配置串口或地址",
+                    "config_error": "地址或波特率配置错误", "protocol_error": "通讯帧异常",
+                    "stale": "采样已过期"}
+        formats = {"ph": (2, ""), "ec": (1, " μS/cm"), "chlorine": (2, " mg/L"),
+                   "turbidity": (2, " NTU")}
+        for key, label in self.water_readings.items():
+            entry = readings.get(key, {}) if isinstance(readings, dict) else {}
+            status = entry.get("status") if isinstance(entry, dict) else None
+            if fresh and status in ("ok", "range_required"):
+                digits, unit = formats[key]
+                parts = []
+                value = entry.get("value")
+                if status == "range_required":
+                    parts.append("待确认电极常数" if key == "ec" else "待确认量程")
+                elif type(value) in (int, float) and math.isfinite(value):
+                    parts.append(f"{value:.{digits}f}{unit}")
+                for field, name, precision, unit in (("temperature_c", "温度", 1, "°C"),
+                        ("salinity_ppm", "盐度", 0, "ppm"), ("tds_ppm", "TDS", 0, "ppm")):
+                    number = entry.get(field)
+                    if type(number) in (int, float) and math.isfinite(number):
+                        parts.append(f"{name} {number:.{precision}f} {unit}")
+                text = "　".join(parts) or "等待水质数据"
+            else:
+                text = statuses.get(status, "等待水质数据") if fresh else "无实时遥测"
+            label.setText(text)
+            label.setToolTip(str(entry.get("detail", "")) if fresh and isinstance(entry, dict) else "")
 
     def _build_manual(self, parent):
         box = QVBoxLayout(parent); box.setContentsMargins(4, 8, 4, 8)
@@ -605,6 +646,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.conditions.setText(condition)
         self.conditions.setToolTip("\n".join(b.get("message", "") for b in blockers))
         self.data_age.setText("实时遥测" if fresh else "遥测已过期")
+        self._refresh_water(packet, fresh)
         rtk = packet.get("rtk") or {}
         fix = {"fixed": "固定解", "float": "浮点解", "single": "单点", "differential": "差分定位",
                "none": "无解", "disconnected": "串口断开", "other": "其他解",

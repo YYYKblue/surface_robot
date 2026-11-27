@@ -865,3 +865,23 @@ def test_area_patrol_mock_preview_spacing_execution(app):
         assert "巡游航段已完成" in window.result_label.text()
     finally:
         window.close()
+
+
+def test_water_tab_reports_range_disconnect_and_expiry(app):
+    window = OperatorWindow("unused", mock=True)
+    try:
+        wait_until(lambda: "1000.0 μS/cm" in window.water_readings["ec"].text())
+        assert window.water_readings["chlorine"].text() == "0.65 mg/L"
+        window.telemetry["water_quality"] = {
+            "ec": dict(status="range_required", temperature_c=26.5, tds_ppm=0),
+            "ph": dict(status="offline"), "turbidity": dict(status="stale")}
+        window._refresh_controls()
+        assert window.water_readings["ec"].text() == "待确认电极常数　温度 26.5 °C　TDS 0 ppm"
+        assert "离线" in window.water_readings["ph"].text()
+        assert "过期" in window.water_readings["turbidity"].text()
+        assert window.water_readings["chlorine"].text() == "等待水质数据"
+        window.last_telemetry_at -= 2
+        window._refresh_controls()
+        assert all(label.text() == "无实时遥测" for label in window.water_readings.values())
+    finally:
+        window.close()
