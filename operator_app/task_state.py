@@ -1,5 +1,6 @@
 """UI labels and derived task state; no robot control decisions live here."""
 PHASES = {
+    "PATROLLING": "水域巡游中",
     "IDLE": "待启动", "CANCELLED": "已取消", "STOPPED": "任务已停止（重新开始将创建新任务）", "PAUSED": "已暂停",
     "COMPLETE": "任务完成", "ACQUIRING": "正在获取控制权", "PLANNING": "正在规划路线",
     "NAVIGATING": "正在导航到清洗起点", "SETTLING": "正在调整姿态", "ACQUIRE_WALL": "正在寻找左墙",
@@ -14,7 +15,7 @@ PHASES = {
     "APPROACH_START": "正在确认起始范围", "ALIGN_START": "正在调整起始船头方向",
     "MOVE_START_ALONG": "正在调整沿墙起始位置", "MOVE_START_SIDE": "正在侧移接近起始范围",
 }
-TASK_NAMES = {"l": "开放多边清洗", "rectangle": "矩形清洗"}
+TASK_NAMES = {"area_patrol": "水域弓字形巡游", "l": "开放多边清洗", "rectangle": "矩形清洗"}
 BLOCKERS = {
     "task_stale": "任务不可用或状态过期", "task_service": "任务服务不可用",
     "localization": "定位尚未就绪", "feedback": "反馈数据未就绪", "pose": "位姿数据未就绪",

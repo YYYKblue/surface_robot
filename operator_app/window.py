@@ -7,12 +7,12 @@ try:
     from PySide6.QtCore import QEvent, QTimer, Qt
     from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QGridLayout,
                                    QHBoxLayout, QLabel, QMainWindow, QPushButton,
-                                   QSlider, QSpinBox, QTabWidget, QVBoxLayout, QWidget, QScrollArea, QLineEdit, QAbstractSpinBox)
+                                   QSlider, QSpinBox, QDoubleSpinBox, QTabWidget, QVBoxLayout, QWidget, QScrollArea, QLineEdit, QAbstractSpinBox)
 except ImportError:
     from PyQt5.QtCore import QEvent, QTimer, Qt
     from PyQt5.QtWidgets import (QApplication, QComboBox, QFrame, QGridLayout,
                                  QHBoxLayout, QLabel, QMainWindow, QPushButton,
-                                 QSlider, QSpinBox, QTabWidget, QVBoxLayout, QWidget, QScrollArea, QLineEdit, QAbstractSpinBox)
+                                 QSlider, QSpinBox, QDoubleSpinBox, QTabWidget, QVBoxLayout, QWidget, QScrollArea, QLineEdit, QAbstractSpinBox)
 
 try:
     from .map_canvas import MapCanvas
@@ -141,7 +141,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         manual.setWidget(manual_content); tabs.addTab(manual, "手动控制")
         task_content = QWidget(); self._build_task(task_content)
         task = QScrollArea(); task.setWidgetResizable(True); task.setFrameShape(QFrame.NoFrame)
-        task.setWidget(task_content); tabs.addTab(task, "清洗任务")
+        task.setWidget(task_content); tabs.addTab(task, "自动任务")
         mapping_content = QWidget(); self._build_mapping(mapping_content)
         mapping = QScrollArea(); mapping.setWidgetResizable(True); mapping.setFrameShape(QFrame.NoFrame)
         mapping.setWidget(mapping_content); tabs.addTab(mapping, "建图与选图")
@@ -242,13 +242,14 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
 
     def _build_task(self, parent):
         box = QVBoxLayout(parent); box.setContentsMargins(4, 8, 4, 8)
-        box.addWidget(QLabel("清洗任务类型"))
+        box.addWidget(QLabel("自动任务类型"))
         self.task_combo = QComboBox()
-        for kind in ("rectangle", "l"):
+        for kind in ("rectangle", "l", "area_patrol"):
             self.task_combo.addItem(TASK_NAMES[kind], kind)
         self.task_combo.currentIndexChanged.connect(self._refresh_controls)
         box.addWidget(self.task_combo)
-        box.addWidget(QLabel("清洗速度 · 沿墙前进辅助输出"))
+        self.speed_label = QLabel("清洗速度 · 沿墙前进辅助输出")
+        box.addWidget(self.speed_label)
         speed_row = QHBoxLayout()
         self.cleaning_speed_slider = QSlider(Qt.Horizontal)
         self.cleaning_speed_slider.setRange(0, 100)
@@ -273,6 +274,23 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.forward_boost_status = QLabel("仅在任务开始前设置；距墙端 80 cm 内关闭前进辅助")
         self.forward_boost_status.setWordWrap(True)
         box.addWidget(self.forward_boost_status)
+        self.spacing_panel = QWidget()
+        row = QHBoxLayout(self.spacing_panel)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(QLabel("航线间距"))
+        self.spacing_input = QDoubleSpinBox()
+        self.spacing_input.setRange(.10, 10.)
+        self.spacing_input.setSingleStep(.05)
+        self.spacing_input.setSuffix(" m")
+        self.spacing_input.setValue(.40)
+        row.addWidget(self.spacing_input)
+        self.spacing_input.valueChanged.connect(self._refresh_controls)
+        self.spacing_apply = QPushButton("更新航线")
+        self.spacing_apply.clicked.connect(lambda: self._send_request("task", action="set_lane_spacing",
+            task_type="area_patrol", spacing_m=self.spacing_input.value()))
+        row.addWidget(self.spacing_apply)
+        box.addWidget(self.spacing_panel)
+        self.last_patrol_spacing = None
         self.map_status = QLabel("地图：等待加载")
         self.map_status.setWordWrap(True); box.addWidget(self.map_status)
         self.pose_button = QPushButton("设置初始位置和船头方向")
@@ -492,6 +510,19 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         elif self._cleaning_speed_editing:
             boost_text = f"准备设置 {self.cleaning_speed_value.value()} / 100；结束编辑后提交"
         self.forward_boost_status.setText(boost_text)
+        patrol = kind == "area_patrol"
+        for widget in (self.speed_label, self.cleaning_speed_slider, self.cleaning_speed_value,
+                       self.cleaning_speed_confirmed, self.forward_boost_status):
+            widget.setVisible(not patrol)
+        self.spacing_panel.setVisible(patrol)
+        self.spacing_panel.setEnabled(operator and task_fresh and not busy and not local_pending
+                                     and task.get("can_set_lane_spacing") is True)
+        spacing = task.get("lane_spacing_m")
+        if patrol and isinstance(spacing, (int, float)) and self.last_patrol_spacing != spacing:
+            self.last_patrol_spacing = spacing
+            self.spacing_input.setValue(spacing)
+        self.task_buttons["start"].setText("开始巡游" if patrol else "开始清洗")
+        self.task_buttons["start"].setToolTip("启动所选自动任务")
         for index in range(self.task_combo.count()):
             option = tasks.get(self.task_combo.itemData(index), {})
             item = self.task_combo.model().item(index)
@@ -501,7 +532,10 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.publish_pose_button.setEnabled(self.pose_button.isEnabled() and self.initial_pose is not None)
         if not self.pose_button.isEnabled() and selecting:
             self.pose_button.setChecked(False)
-        self.task_buttons["start"].setEnabled(fresh and supported and operator and not local_pending and not self._cleaning_speed_editing and not selecting and task.get("can_start") is True)
+        patrol_spacing_ready = not patrol or self.spacing_input.value() == spacing
+        self.task_buttons["start"].setEnabled(fresh and supported and operator and not local_pending
+            and not self._cleaning_speed_editing and not selecting and task.get("can_start") is True
+            and patrol_spacing_ready)
         active = packet.get("active_tasks", [])
         pending_start = any(p.get("action") in ("start", "resume") for _, p in self.pending_requests.values())
         stopping = any(p.get("action") in ("pause", "stop", "cancel") for _, p in self.pending_requests.values())
@@ -509,7 +543,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self.task_buttons["pause"].setText("继续任务" if paused else "暂停任务")
         resumable = ("task_resume" in self.capabilities and task.get("can_resume") is True)
         self.task_buttons["pause"].setEnabled(fresh and operator and not local_pending and
-            (resumable if paused else bool(active) and task.get("phase") != "ACQUIRING"))
+            (resumable if paused else bool(active) and task.get("phase") not in ("ACQUIRING", "PLANNING")))
         self.task_buttons["pause"].setToolTip(
             "; ".join(b.get("message", "") for b in task.get("resume_blockers", [])) if paused
             else "关闭输出并保留当前任务，等待继续或取消")
@@ -566,6 +600,8 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
             condition = "其他操作端持有控制权限"
         elif local_pending:
             condition = "操作处理中，等待机器人确认"
+        elif patrol and task.get("can_start") and not patrol_spacing_ready:
+            condition = "请先点击更新航线，确认当前间距"
         self.conditions.setText(condition)
         self.conditions.setToolTip("\n".join(b.get("message", "") for b in blockers))
         self.data_age.setText("实时遥测" if fresh else "遥测已过期")
@@ -596,6 +632,13 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
                 details += "\n正在补齐起始边前半段"
             if task.get("completion_scope") in ("remaining_open_route", "remaining_l_route"):
                 details += "\n开放墙链仅清洗起始位置之后的路线；清洗全链请从首边入口开始"
+        if patrol and task_fresh:
+            details = (f"当前间距 {task.get('lane_spacing_m', 0):.2f} m · "
+                       f"完成航带 {task.get('lanes_done', 0)}/{task.get('lane_count', 0)}"
+                       f"\n选中水域 {task.get('reachable_m2', 0):.2f} m² · "
+                       f"跳过 {task.get('skipped_m2', 0):.2f} m²\n"
+                       f"实走带宽覆盖 {task.get('area_coverage', 0):.1%}"
+                       "\n蓝色虚线为计划航线，绿色实线为本次轨迹")
         self.start_details.setText(details)
         result = self.completed_results.get(kind)
         self.result_label.setText(result[1] if result else "")
@@ -821,6 +864,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self._telemetry_sequence = None
         self._last_received_at = self.last_telemetry_at = 0.
         self._tracks.clear()
+        self.last_patrol_spacing = None
         self._retired_runtime_sessions.clear()
         self._runtime_changed_at = 0.
         self.telemetry = {}
@@ -870,6 +914,11 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
             if record_embedded and isinstance(embedded, dict):
                 self._tracks[kind] = embedded
             track = self._tracks.get(kind)
+            task.pop("patrol_plan", None)
+            plan = (track or {}).get("patrol_plan", {})
+            if (kind == "area_patrol" and plan.get("plan_id") and plan["plan_id"] == task.get("plan_id")
+                    and plan.get("map_id") == task.get("map_id") and plan.get("frame_id") == "map"):
+                task["patrol_plan"] = plan
             if (track and track.get("map_id") == task.get("map_id")
                     and track.get("run_id") == task.get("run_id")):
                 task["actual_track"] = track
@@ -938,7 +987,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
             if not self._accept_gateway_session(packet.get("session_id")):
                 return
             for kind, track in packet.get("tasks", {}).items():
-                if kind in ("rectangle", "l") and isinstance(track, dict):
+                if kind in ("rectangle", "l", "area_patrol") and isinstance(track, dict):
                     self._tracks[kind] = track
             self.telemetry = self._attach_tracks(self.telemetry, record_embedded=False)
             self._refresh_controls()
@@ -1027,6 +1076,8 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
                     preview = "预览任务完成" if not task.get("output_enabled") else "任务完成"
                     if task.get("completion_scope") in ("remaining_open_route", "remaining_l_route"):
                         result = "本次剩余开放墙链执行完成；不返回、不补洗"
+                    elif kind == "area_patrol":
+                        result = f"巡游航段已完成，实走带宽覆盖 {task.get('area_coverage', 0):.1%}"
                     elif task.get("completion_scope") == "rectangle_route":
                         result = "矩形路线及起始边补齐执行完成"
                     else:

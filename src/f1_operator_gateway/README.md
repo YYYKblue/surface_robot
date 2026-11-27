@@ -1,5 +1,8 @@
 # f1_operator_gateway
 
+自动任务新增 `area_patrol`，使用 `/area_patrol/*` 并与沿边任务共用定位和任务互斥。受管与固定地图启动入口均支持 `patrol_config:=`。WebSocket 的 `task/set_lane_spacing` 接收 `request_id`、`task_type=area_patrol` 和 `spacing_m`。规划折线随轨迹通道传送，启动时按实时船位规划较大侧，遥测提供所选面积 `reachable_m2`、同连通区内跳过的面积 `skipped_m2`、`plan_id`、`lane_count`、`lanes_done`、`area_coverage`。使用步骤见[巡游说明](../f1_area_patrol/README.md)。
+
+
 人工暂停续跑、取消及地图删除／卸载的接口和使用边界见[功能说明](../../docs/TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
 
 更新：2026-11-16。Windows Qt App 的水面 Nano 侧 WebSocket 入口（默认 `:8765`），提供手动控制、双任务操作、初始位姿、状态转发，以及受管建图、地图保存与选择。模块职责与入口对比见[架构导读](../../docs/ARCHITECTURE.md)。

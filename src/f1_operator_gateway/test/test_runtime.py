@@ -25,7 +25,7 @@ class RuntimeGateway(RuntimeControl, Gateway):
         self.map_store = MapStore(tmp_path)
         self.runtime_log = tmp_path / 'log'
         self.params.update(mapping_resolution=.05, scan_topic='/pavo2_scan', publish_lidar_tf=True,
-                           use_rtk=True, output_enabled=False, rectangle_config='', l_config='', localization_config='')
+                           use_rtk=True, output_enabled=False, rectangle_config='', l_config='', patrol_config='', localization_config='')
         self.pose = dict(x=0, y=0, yaw=0)
         self.map_signature = None
         self.tf_buffer = SimpleNamespace(clear=lambda: None)

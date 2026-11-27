@@ -10,7 +10,8 @@ from f1_pool_cleaning.ros_support import stamp_ns
 
 
 class Lease:
-    def __init__(self, node):
+    def __init__(self, node, owner_prefix="pool"):
+        self.owner_prefix = owner_prefix
         self.node = node
         self.token = self.owner = self.connection = ""
         self.epoch = self.granted_ns = self.sequence = self.generation = 0
@@ -25,7 +26,7 @@ class Lease:
     def _bridge(self, msg):
         previous = self.bridge
         self.bridge, self.received = msg, time.monotonic()
-        if self.node.mission.pause_context and (
+        if self.node._lease_paused() and (
                 not msg.connected or msg.source != "NANO" or not msg.armed or msg.result != "OK"
                 or (previous and (msg.connection_id, msg.epoch) != (previous.connection_id, previous.epoch))):
             self.node._halt("bridge changed during pause; cancel required")
@@ -62,14 +63,11 @@ class Lease:
         error = self.error(acquiring=True)
         if error or not self.acquire.service_is_ready():
             return False, error or "bridge acquire service unavailable"
-        self.owner = "pool:" + secrets.token_hex(12)
+        self.owner = self.owner_prefix + ":" + secrets.token_hex(12)
         self.generation += 1
         generation = self.generation
         connection, epoch = self.bridge.connection_id, self.bridge.epoch
-        if resuming:
-            self.node.mission.phase = "ACQUIRING"
-        else:
-            self.node.mission.halt("waiting for bridge lease", "ACQUIRING")
+        self.node._lease_waiting(resuming)
         self.pending_at = time.monotonic()
         self.pending = self.acquire.call_async(AcquireControl.Request(owner=self.owner))
         self.pending.add_done_callback(lambda f: self._acquired(f, generation, connection, epoch, resuming))
@@ -97,26 +95,7 @@ class Lease:
             self.node._halt(error or reply.message or "acquire delayed or epoch changed")
             return
         now = self.node.get_clock().now().nanoseconds
-        error = (self.node._localization_error() or self.node._stream_error()
-                 or ("clock fault latched" if self.node.clock_fault else ""))
-        # Revalidate observations after async acquisition; never reuse pre-lease effort.
-        if not resuming:
-            self.node.mission.halt("lease acquired", "IDLE")
-        elif self.node._pause_identity() != getattr(self.node, "paused_identity", None):
-            error = "localization/perception changed during resume"
-        # Explicit start already required a valid wall. If a fresh fit is lost
-        # during acquisition, enter bounded neutral recovery instead of latching
-        # PAUSED before the first actuator command.
-        if error:
-            ok, reason = False, error
-        elif resuming:
-            ok, reason = self.node.mission.resume(self.node._feedback(), now)
-        elif hasattr(self.node.mission, "resume_after_acquire"):
-            # Keep the ray-selected wall and its reference point locked across
-            # async acquisition, even if the boat drifted before the reply.
-            ok, reason = self.node.mission.resume_after_acquire(self.node._feedback(), now)
-        else:
-            ok, reason = self.node.mission.start(self.node._feedback(), now, allow_wall_recovery=True)
+        ok, reason = self.node._lease_ready(resuming, now)
         if not ok:
             self._release(reply.token)
             self.node._halt(reason)

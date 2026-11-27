@@ -831,3 +831,37 @@ def test_map_delete_confirmation_and_unload_controls(app, monkeypatch):
         assert not window.mapping_buttons['unload'].isEnabled()
     finally:
         window.close()
+
+
+def test_area_patrol_mock_preview_spacing_execution(app):
+    window = OperatorWindow("unused", mock=True)
+    window.show()
+    try:
+        wait_until(lambda: "area_patrol" in window.telemetry.get("tasks", {}))
+        window.task_combo.setCurrentIndex(window.task_combo.findData("area_patrol"))
+        wait_until(lambda: window.spacing_panel.isEnabled())
+        window.spacing_input.setValue(.30)
+        window.spacing_apply.click()
+        wait_until(lambda: window.telemetry["tasks"]["area_patrol"].get("lane_spacing_m") == .30)
+        wait_until(lambda: bool(window.canvas.task_overlay.get("patrol_plan")))
+        plan = window.canvas.task_overlay["patrol_plan"]
+        assert len(plan["points"]) == 6
+        assert window.cleaning_speed_slider.isHidden()
+        window.pose_button.setChecked(True)
+        window._pose_selected(dict(x=1., y=1., yaw=0., map_revision=1))
+        window._publish_pose()
+        wait_until(lambda: window.task_buttons["start"].isEnabled(), timeout=4.)
+        window.spacing_input.setValue(.35)
+        assert not window.task_buttons["start"].isEnabled()
+        window.spacing_input.setValue(.30)
+        assert window.task_buttons["start"].isEnabled()
+        window._task("start")
+        wait_until(lambda: window.telemetry["tasks"]["area_patrol"]["phase"] == "PATROLLING")
+        assert not window.spacing_panel.isEnabled()
+        window._task("pause")
+        wait_until(lambda: window.telemetry["tasks"]["area_patrol"]["phase"] == "PAUSED")
+        window.task_buttons["pause"].click()
+        wait_until(lambda: window.telemetry["tasks"]["area_patrol"]["phase"] == "COMPLETE", timeout=12.)
+        assert "巡游航段已完成" in window.result_label.text()
+    finally:
+        window.close()

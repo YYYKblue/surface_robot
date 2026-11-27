@@ -525,3 +525,22 @@ def test_cleaning_speed_failure_and_timeout_never_claim_new_setting_or_retry():
     speed_status(g, value=75)
     g._task_tick()
     assert g.command_pending is None and g.sent[-1]['success']
+
+
+def test_patrol_spacing_waits_for_matching_readback_and_locks_other_tasks():
+    g = Gateway()
+    g.status("area_patrol", lane_spacing_m=.4)
+    packet = dict(task("area_patrol","set_lane_spacing"), spacing_m=.55)
+    assert g._task_view("area_patrol")["can_set_lane_spacing"]
+    g._operation_request("app", packet)
+    client = g.task_clients["area_patrol"]["set_lane_spacing"]
+    assert client.calls[-1][0].spacing_m == .55
+    respond(client)
+    g._task_tick()
+    assert g.command_pending
+    g.status("area_patrol", lane_spacing_m=.55)
+    g._task_tick()
+    assert g.sent[-1]["success"] and not g.command_pending
+    g.status("area_patrol", phase="PATROLLING")
+    assert not g._task_view("area_patrol")["can_set_lane_spacing"]
+    assert not g._task_view("rectangle")["can_start"]

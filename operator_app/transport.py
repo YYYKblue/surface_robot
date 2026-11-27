@@ -445,7 +445,7 @@ class SocketWorker(QThread):
         self._receive({"type": "hello", "client_id": "mock", "session_id": "mock-stream",
                        "drive_output": dict(drive_output), "capabilities": ["task_selection", "initial_pose",
                        "start_conditions", "task_stop", "task_resume", "task_tracks", "mapping", "map_catalog", "map_delete", "map_unload",
-                       "forward_boost", "cleaning_speed_v1", "continuous_drive_percent_v1"]})
+                       "forward_boost", "cleaning_speed_v1", "area_patrol_v1", "continuous_drive_percent_v1"]})
         control = dict(state="READY", connected=True, source="NANO", motion_authorized=False,
             connection_id="mock-serial", epoch=1, armed=True,
             allow_fifth_thruster=True, firmware_protocol_version=3, firmware_protocol_compatible=True,
@@ -467,7 +467,7 @@ class SocketWorker(QThread):
         tasks = {kind: dict(task_type=kind, phase="IDLE", run_id="", output_enabled=False,
                            cleaning_speed=0, forward_boost_percent=0,
                            forward_boost_enabled=False, forward_boost_active=False,
-                           map_id="mock-map", edge_count=2 if kind == "l" else 4) for kind in ("l", "rectangle")}
+                           map_id="mock-map", edge_count=2 if kind == "l" else 4) for kind in ("l", "rectangle", "area_patrol")}
         pose = dict(x=1.15, y=1., yaw=0.)
         # Synthetic wall endpoints; target lines are independent centre segments.
         route = [[0., 2.], [3.2, 2.], [3.2, 0.], [0., 0.], [0., 2.]]
@@ -481,6 +481,28 @@ class SocketWorker(QThread):
         for kind, task in tasks.items():
             task["actual_track"] = dict(frame_id="map", map_id="mock-map", run_id="",
                                         segments=[], point_count=0, truncated=False)
+        def mock_patrol(spacing):
+            t = tasks["area_patrol"]
+            y0 = min(1.6, max(.4, pose["y"]))
+            sign = 1 if 1.6-y0 >= y0-.4-1e-9 else -1
+            depth = 1.6-y0 if sign == 1 else y0-.4
+            rows = 1 + math.floor(depth/spacing + 1e-9)
+            points = []
+            forward = pose["x"] <= 1.6
+            for row in range(rows):
+                y = y0 + sign*row*spacing
+                xs = (.5, 2.7) if forward else (2.7, .5)
+                if row == 0:
+                    xs = (pose["x"], xs[1])
+                forward = not forward
+                points.extend([[x,y] for x in xs])
+            plan_id = uuid.uuid4().hex
+            t.update(lane_spacing_m=spacing, lane_count=rows, lanes_done=0, reachable_m2=2.2*depth, skipped_m2=2.2*(1.2-depth),
+                     area_coverage=0., plan_id=plan_id, completion_scope="area_patrol")
+            t["actual_track"]["patrol_plan"] = dict(frame_id="map", map_id="mock-map",
+                                                    plan_id=plan_id, points=points)
+
+        mock_patrol(.4)
         start_pose = dict(pose)
         last_tracks = 0.
         sequence = 0
@@ -545,14 +567,24 @@ class SocketWorker(QThread):
                         for task in tasks.values():
                             task.update(phase="IDLE", run_id="", cleaning_speed=0, forward_boost_percent=0, forward_boost_enabled=False)
                             task["actual_track"].update(run_id="", segments=[], point_count=0)
+                        mock_patrol(.4)
                     else:
                         success, message = False, "当前模式不支持此操作"
                 elif op == "initial_pose" and not occupied:
                     initialized, ready = now, False
                     pose = {key: packet[key] for key in ("x", "y", "yaw")}
+                    mock_patrol(tasks["area_patrol"]["lane_spacing_m"])
                 elif op == "task":
                     kind, action = packet["task_type"], packet["action"]
-                    if action == "set_cleaning_speed":
+                    if action == "set_lane_spacing" and kind == "area_patrol":
+                        value = packet.get("spacing_m")
+                        if type(value) not in (int, float) or not .10 <= value <= 10.:
+                            success, message = False, "航线间距必须为 0.10–10 m"
+                        elif occupied is None and tasks[kind]["phase"] in ("IDLE", "CANCELLED", "STOPPED", "COMPLETE"):
+                            mock_patrol(value)
+                        else:
+                            success, message = False, "只能在任务开始前设置航线间距"
+                    elif action == "set_cleaning_speed":
                         value = packet.get("value")
                         if type(value) is not int or not 0 <= value <= 100:
                             success, message = False, "清洗速度必须为 0–100 整数"
@@ -569,6 +601,11 @@ class SocketWorker(QThread):
                                            start_edge_id="edge_0", current_edge_id="edge_0", start_region=region,
                                            completion_scope="remaining_open_route" if kind == "l" else "rectangle_route",
                                            coverage_complete=False, returning_to_start=False)
+                        if kind == "area_patrol":
+                            mock_patrol(tasks[kind]["lane_spacing_m"])
+                            tasks[kind].update(phase="PATROLLING", start_edge_id="", current_edge_id="",
+                                               completion_scope="area_patrol", coverage_complete=None,
+                                               lanes_done=0, area_coverage=0.)
                         tasks[kind].update(forward_boost_cutoff_reached=False, boost_edge_index=None)
                         start_pose = dict(pose)
                         tasks[kind]["actual_track"].update(run_id=tasks[kind]["run_id"],
@@ -593,7 +630,14 @@ class SocketWorker(QThread):
                                        success=success, message=message, **fields))
             if active:
                 elapsed = now-started
-                if elapsed < 3:
+                if active == "area_patrol":
+                    t = tasks[active]
+                    points = [[start_pose["x"], start_pose["y"]], *t["actual_track"]["patrol_plan"]["points"]]
+                    progress = min(elapsed/8, 1.)*(len(points)-1)
+                    idx = min(int(progress), len(points)-2)
+                    a, b, fraction = points[idx], points[idx+1], progress-idx
+                    t.update(lanes_done=int(progress)//2, area_coverage=min(elapsed/8, 1.))
+                elif elapsed < 3:
                     a, b, fraction = [start_pose["x"], start_pose["y"]], segments[0]["points"][0], elapsed/3
                 else:
                     progress = min((elapsed-3)/5, 1.)*tasks[active]["edge_count"]
@@ -612,9 +656,9 @@ class SocketWorker(QThread):
                 history["segments"][-1].append([pose["x"], pose["y"]])
                 history["point_count"] += 1
                 if now-started > 8:
-                    tasks[active].update(phase="COMPLETE", completed_at_ns=time.time_ns(), coverage_complete=True)
+                    tasks[active].update(phase="COMPLETE", completed_at_ns=time.time_ns(), coverage_complete=None if active == "area_patrol" else True)
                     active = None
-                elif now-started > 3:
+                elif active != "area_patrol" and now-started > 3:
                     tasks[active]["phase"] = "FOLLOW"
             occupied = active or next((k for k, t in tasks.items() if t["phase"] == "PAUSED"), None)
             for task in tasks.values():
@@ -629,6 +673,8 @@ class SocketWorker(QThread):
                     forward_boost_reason=("disabled" if not task["forward_boost_enabled"] else
                         "active" if boost_active else "inactive_task" if editable else
                         "endpoint_cutoff" if task.get("forward_boost_cutoff_reached") else "waiting_follow"))
+                if task["task_type"] == "area_patrol":
+                    task.update(can_set_lane_spacing=editable and occupied is None, can_set_cleaning_speed=False)
                 blockers = []
                 if not ready:
                     blockers.append(dict(code="localization", message="等待定位稳定"))

@@ -216,6 +216,38 @@ class PoolController(Node):
         if self.require_localization_ready and self.mission.active and not self.localization_ready:
             self._halt("localization not ready: " + self.localization_reason)
 
+    def _lease_paused(self):
+        return bool(self.mission.pause_context)
+
+    def _lease_waiting(self, resuming):
+        if resuming:
+            self.mission.phase = "ACQUIRING"
+        else:
+            self.mission.halt("waiting for bridge lease", "ACQUIRING")
+
+    def _lease_ready(self, resuming, now):
+        error = (self._localization_error() or self._stream_error()
+                 or ("clock fault latched" if self.clock_fault else ""))
+        # Revalidate observations after async acquisition; never reuse pre-lease effort.
+        if not resuming:
+            self.mission.halt("lease acquired", "IDLE")
+        elif self._pause_identity() != getattr(self, "paused_identity", None):
+            error = "localization/perception changed during resume"
+        # Explicit start already required a valid wall. If a fresh fit is lost
+        # during acquisition, enter bounded neutral recovery instead of latching
+        # PAUSED before the first actuator command.
+        if error:
+            ok, reason = False, error
+        elif resuming:
+            ok, reason = self.mission.resume(self._feedback(), now)
+        elif hasattr(self.mission, "resume_after_acquire"):
+            # Keep the ray-selected wall and its reference point locked across
+            # async acquisition, even if the boat drifted before the reply.
+            ok, reason = self.mission.resume_after_acquire(self._feedback(), now)
+        else:
+            ok, reason = self.mission.start(self._feedback(), now, allow_wall_recovery=True)
+        return ok, reason
+
     def _localization_error(self):
         if not self.require_localization_ready:
             return ""

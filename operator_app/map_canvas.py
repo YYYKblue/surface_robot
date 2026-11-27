@@ -73,7 +73,8 @@ class MapCanvas(QWidget):
 
     def set_task_overlay(self, task, *, live):
         previous = self.task_overlay
-        changed = (previous.get("actual_track") is not task.get("actual_track")
+        changed = (previous.get("patrol_plan") is not task.get("patrol_plan")
+                   or previous.get("actual_track") is not task.get("actual_track")
                    or previous.get("map_id") != task.get("map_id")
                    or previous.get("run_id") != task.get("run_id"))
         self.task_overlay, self.overlay_live = task, live
@@ -231,6 +232,15 @@ class MapCanvas(QWidget):
                 self._scaled_key = scaled_key
             painter.drawImage(round(ox), round(oy-height*scale), self._scaled_image)
             painter.setBrush(Qt.NoBrush)
+            plan = self.task_overlay.get("patrol_plan")
+            if plan and plan.get("frame_id") == "map":
+                key = (id(plan), scaled_key, self.width(), self.height(), self.map_revision)
+                if key != getattr(self, "_plan_key", None):
+                    self._plan_line = QPolygonF([self.map_to_screen(*point) for point in plan["points"]])
+                    self._plan_key = key
+                    self._plan_cache_owner = plan
+                painter.setPen(QPen(QColor("#3973ab"), 1, Qt.DashLine))
+                painter.drawPolyline(self._plan_line)
             painter.setPen(QPen(QColor("#00877e"), 3))
             for polyline in self._screen_tracks():
                 if len(polyline) > 1:

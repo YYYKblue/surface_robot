@@ -12,7 +12,7 @@ MAX_PAYLOAD = 128 * 1024
 OPERATIONS = {"hello", "manual_input", "manual_stop", "task", "initial_pose", "mapping"}
 DIRECTIONS = {"STOP", "FORWARD", "REVERSE", "LEFT", "RIGHT"}
 MODES = {"FRONT", "BOTH", "BACK"}
-TASKS = {"start", "pause", "resume", "stop", "cancel", "set_forward_boost", "set_cleaning_speed"}
+TASKS = {"start", "pause", "resume", "stop", "cancel", "set_lane_spacing", "set_forward_boost", "set_cleaning_speed"}
 
 
 @dataclass(frozen=True)
@@ -103,9 +103,15 @@ def decode(raw):
         if action not in TASKS:
             raise ValueError("invalid task action")
         task_type = packet.get("task_type", "rectangle")
-        if task_type not in ("rectangle", "l"):
+        if task_type not in ("rectangle", "l", "area_patrol"):
             raise ValueError("invalid task_type")
         result = dict(op=op, action=action, task_type=task_type, request_id=request_id)
+        if action == "set_lane_spacing":
+            if task_type != "area_patrol" or not request_id:
+                raise ValueError("set_lane_spacing requires area_patrol and request_id")
+            result["spacing_m"] = float(_number(packet.get("spacing_m"), "spacing_m", .10, 10.))
+        if task_type == "area_patrol" and action in ("set_forward_boost", "set_cleaning_speed"):
+            raise ValueError("cleaning speed is unavailable for area_patrol")
         if action == "resume":
             run_id = packet.get("run_id")
             if not request_id or not isinstance(run_id, str) or not 1 <= len(run_id) <= 80:

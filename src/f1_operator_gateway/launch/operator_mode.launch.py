@@ -19,7 +19,7 @@ def nodes(context):
         package, filename = "f1_operator_gateway", "operator_bringup.launch.py"
         arguments = {key: value(key) for key in ("map", "scan_topic", "publish_lidar_tf", "use_rtk", "output_enabled")}
         arguments.update(start_bridge="false", start_gateway="false")
-        for key in ("rectangle_config", "l_config", "localization_config"):
+        for key in ("rectangle_config", "l_config", "patrol_config", "localization_config"):
             if value(key):
                 arguments[key] = value(key)
     return [IncludeLaunchDescription(PythonLaunchDescriptionSource(str(
@@ -31,7 +31,7 @@ def generate_launch_description():
         DeclareLaunchArgument("mode", choices=["mapping", "localization"]),
         *[DeclareLaunchArgument(name, default_value=value) for name, value in dict(
             map="", scan_topic="/pavo2_scan", publish_lidar_tf="true", use_rtk="true", output_enabled="false",
-            resolution="0.05", rectangle_config="", l_config="", localization_config="").items()],
+            resolution="0.05", rectangle_config="", l_config="", patrol_config="", localization_config="").items()],
         RegisterEventHandler(OnProcessExit(on_exit=[EmitEvent(event=Shutdown(reason="owned mode process exited"))])),
         OpaqueFunction(function=nodes),
     ])

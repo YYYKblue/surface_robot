@@ -21,7 +21,7 @@ class RuntimeControl:
     def _init_runtime(self):
         defaults = dict(managed_runtime=False, workspace_root="", map_timezone="Asia/Shanghai",
                         scan_topic="/pavo2_scan", output_enabled=False, publish_lidar_tf=True, use_rtk=True,
-                        mapping_resolution=.05, rectangle_config="", l_config="", localization_config="")
+                        mapping_resolution=.05, rectangle_config="", l_config="", patrol_config="", localization_config="")
         for name, value in defaults.items():
             self.declare_parameter(name, value)
         self.runtime_enabled = bool(self.get_parameter("managed_runtime").value)
@@ -94,6 +94,7 @@ class RuntimeControl:
         if hasattr(self, "map_stream"):
             self.map_stream.reset()
         self._last_tracks = None
+        self.patrol_plan = {}
         self.tf_buffer.clear()
         self.tasks, self.task_received = {}, {}
         self.localization, self.localization_received = {}, 0.
@@ -104,7 +105,7 @@ class RuntimeControl:
 
     def _runtime_conflicts(self):
         names = self.get_node_names()
-        prefixes = ("cartographer", "pool_localization", "pool_controller", "l_controller", "pool_perception", "l_perception")
+        prefixes = ("cartographer", "pool_localization", "pool_controller", "l_controller", "area_patrol", "pool_perception", "l_perception")
         conflicts = [name for name in names if name.startswith(prefixes)]
         if self.get_parameter("publish_lidar_tf").value and "base_to_lidar_planar" in names:
             conflicts.append("base_to_lidar_planar")
@@ -192,7 +193,7 @@ class RuntimeControl:
                 from f1_pool_cleaning.map_profile import profile
                 self.map_store.validate(packet["name"])
                 derived = profile(str(self.map_store.path(packet["name"])))
-                kinds, errors = [], {}
+                kinds, errors = ["area_patrol"], {}
                 for kind, geometry, key in (("rectangle", derived.rectangle, "rectangle"), ("l", derived.route, "route")):
                     if geometry is not None:
                         kinds.append(kind)
@@ -239,7 +240,7 @@ class RuntimeControl:
         arguments = ["ros2", "launch", "f1_operator_gateway", "operator_mode.launch.py",
                      "mode:=" + ("mapping" if mapping else "localization")]
         for key in ("scan_topic", "publish_lidar_tf", "use_rtk", "output_enabled",
-                    "rectangle_config", "l_config", "localization_config"):
+                    "rectangle_config", "l_config", "patrol_config", "localization_config"):
             value = self.get_parameter(key).value
             if value != "":
                 arguments.append(f"{key}:={str(value).lower() if isinstance(value, bool) else value}")

@@ -16,6 +16,7 @@
 | srv | `AcquireControl` | 申请控制租约 |
 | srv | `ReleaseControl` | 释放控制租约 |
 | srv | `SetInitialPose` | 向泳池定位管理器提交 RViz2 使用的 `map` 坐标初始位姿 |
+| srv | `SetLaneSpacing` | 设置下次弓字形巡游的航线间距（米） |
 | srv | `SetEdge` | 在任务空闲时为下一次矩形或大 L 任务指定地图起始边 |
 | srv | `SetCleaningSpeed` | 启动前设置清洗速度原始整数值 0–100，由控制器映射为前进辅助输出 0–50 |
 

@@ -57,6 +57,9 @@ def nodes(context):
             "scan_topic": value("scan_topic"), "output_enabled": value("output_enabled"),
             "localization_status_topic": "/f1_localization/localization_status",
         }))
+    result.append(Node(package="f1_area_patrol", executable="area_patrol", output="screen",
+        parameters=[controller_config("patrol_config", "f1_area_patrol", "area_patrol.yaml"),
+                    {"map": value("map"), "output_enabled": value("output_enabled") == "true"}]))
     if value("start_gateway") == "true":
         result.append(Node(package="f1_operator_gateway", executable="f1_operator_gateway", output="screen",
             parameters=[dict(bind_address=value("bind_address"), port=int(value("port")),
@@ -82,6 +85,7 @@ def generate_launch_description():
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),
         DeclareLaunchArgument("localization_config", default_value=""),
         DeclareLaunchArgument("rectangle_config", default_value=config("f1_pool_cleaning", "pool_cleaning.yaml")),
+        DeclareLaunchArgument("patrol_config", default_value=""),
         DeclareLaunchArgument("l_config", default_value=config("f1_l_cleaning", "l_cleaning.yaml")),
         DeclareLaunchArgument("bridge_config", default_value=config("f1_nano_bridge", "bridge.yaml")),
         OpaqueFunction(function=nodes),

@@ -26,6 +26,7 @@ F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主�
 | [`f1_localization`](src/f1_localization/README.md) | 固定地图定位、初始位姿、轨迹管理和定位就绪门控 |
 | [`f1_pool_cleaning`](src/f1_pool_cleaning/README.md) | 墙感知、简单动作靠近、沿墙控制、矩形四边任务及覆盖记录 |
 | [`f1_l_cleaning`](src/f1_l_cleaning/README.md) | 开放多段直墙路线，复用右转并支持前行出墙端、左移、左转 |
+| [`f1_area_patrol`](src/f1_area_patrol/README.md) | 已知水域弓字形巡游、地图航线预览、实际带宽覆盖统计 |
 | [`f1_operator_gateway`](src/f1_operator_gateway/README.md) | 水面 App 的 WebSocket 手动控制、任务服务和遥测入口（8765） |
 | [`under_control/`](under_control/README.md) | 独立水下 H7 网关、会话与 RS485 桥（8766），由 systemd 托管，不依赖 ROS |
 | [`operator_app/`](operator_app/README.md) | Qt 操作员界面，包含建图/选图、底图、实时位姿、实际轨迹、手动输入和任务按钮 |
@@ -69,11 +70,11 @@ Qt App ←→ WebSocket :8765 ←→ 网关 → f1_nano_bridge ←→ F103
 
 矩形任务包含四条边；开放任务采用多段墙链，不构造首尾闭合墙。示例地图默认提取阶梯三条短边加原大 L，共五条边。默认用船体左侧射线选择墙，锁定最近投影点，以旋转、前后移动和侧移进入合理起始范围，再复用旧版沿墙控制。靠近不做路径搜索或环境碰撞检查。矩形绕行后只补齐起始边前段；开放任务从选中位置到链尾停，不返回、不补洗；要清洗整条链，应从首边入口附近启动。路线完成与覆盖记录分别报告。两种任务都保持墙在船左侧，共享 `/f1/*` 硬件接口；同一机器人仅运行一套 bridge 和定位，网关只允许一个清洗任务活动。组合入口可以让当前地图支持的控制器同时待命。
 
-App 的受管入口支持无地图待机、雷达与 GNSS 辅助建图、命名保存、地图列表/预览/加载/卸载/删除；地图保存到 Nano 工作空间 `maps/`，空名称使用时间戳。App 支持“开放多边清洗”／“矩形清洗”选择、地图初始位姿发布、启动条件和完成结果显示。推荐使用[网关组合入口](src/f1_operator_gateway/README.md)启动一套共享定位和当前地图支持的任务；独立开放任务 bringup 使用网关 `localization_prefix:=/l_cleaning`，不再重映射任务接口。App 的 `manual_stop`、断线和输入超时只停止网关持有的手动会话；自动任务应使用自己的 `pause` / `resume` / `cancel` 服务。
+App 的受管入口支持无地图待机、雷达与 GNSS 辅助建图、命名保存、地图列表/预览/加载/卸载/删除；地图保存到 Nano 工作空间 `maps/`，空名称使用时间戳。App 支持“开放多边清洗”／“矩形清洗”／“水域弓字形巡游”选择、地图初始位姿发布、启动条件和完成结果显示。推荐使用[网关组合入口](src/f1_operator_gateway/README.md)启动一套共享定位和当前地图支持的任务；独立开放任务 bringup 使用网关 `localization_prefix:=/l_cleaning`，不再重映射任务接口。App 的 `manual_stop`、断线和输入超时只停止网关持有的手动会话；自动任务应使用自己的 `pause` / `resume` / `cancel` 服务。
 
 受管模式下，`rectangle_config` / `l_config` 留空会加载各清洗包的默认 YAML。标准配置中两个控制器都使用 `map → base_link` TF 并要求定位就绪；App 的共享定位正常不代表每个控制器已取得有效位姿。2026-11-09 已修复空参数导致 YAML 被跳过的问题并在 Nano 验证，操作者随后反馈“目前测试正常”。参数核对与排查见[定位正常但开放任务不能启动](DEPLOY_NANO.md#定位正常但开放任务不能启动)，具体证据范围见[修复验证记录](src/f1_operator_gateway/README.md#控制器配置加载修复验证2026-11-09)。
 
-当前沿墙默认中心墙距为 **32–36 cm**、目标 **33 cm**，滚刷与第五路侧推幅度均为 **50%**。默认沿墙前进依靠滚刷，四主电机作航向纠偏。Windows App 的“清洗速度”滑条在任务开始前选择 **0–100**，Nano 控制器按 **`(value + 1) // 2`** 映射为 **0–50** 挡：50 对应原提速输出 25，100 对应输出 50，默认 0 关闭辅助。稳定沿墙且船中心沿墙方向距当前墙端大于 **80 cm** 时，四电推以所选映射值、BOTH 辅助前进；进入 80 cm 内（含边界）后本墙段不再提速，纠偏仍保留。运行中及暂停时不能调整，控制器重启/重新加载地图后恢复 0。纠偏、靠近和换边仍使用原有 25 输出，滑条数值不表示实测船速。本次 Windows 更新使用源码命令行启动，不打包 exe，见 [App 启动说明](operator_app/README.md#命令行启动)。船中心距当前墙端 **40 cm** 时关刷并进入换边，末段结束任务。App 只绘制实际轨迹，显示精简不改变这些控制参数。具体规则见[清洗控制说明](src/f1_pool_cleaning/README.md)。
+当前沿墙默认中心墙距为 **32–36 cm**、目标 **33 cm**，滚刷与第五路侧推幅度均为 **50%**。默认沿墙前进依靠滚刷，四主电机作航向纠偏。Windows App 的“清洗速度”滑条在任务开始前选择 **0–100**，Nano 控制器按 **`(value + 1) // 2`** 映射为 **0–50** 挡：50 对应原提速输出 25，100 对应输出 50，默认 0 关闭辅助。稳定沿墙且船中心沿墙方向距当前墙端大于 **80 cm** 时，四电推以所选映射值、BOTH 辅助前进；进入 80 cm 内（含边界）后本墙段不再提速，纠偏仍保留。运行中及暂停时不能调整，控制器重启/重新加载地图后恢复 0。纠偏、靠近和换边仍使用原有 25 输出，滑条数值不表示实测船速。本次 Windows 更新使用源码命令行启动，不打包 exe，见 [App 启动说明](operator_app/README.md#命令行启动)。船中心距当前墙端 **40 cm** 时关刷并进入换边，末段结束任务。沿墙任务画面只绘制实际轨迹，显示精简不改变这些控制参数。具体规则见[清洗控制说明](src/f1_pool_cleaning/README.md)。
 
 App 的[诊断日志](operator_app/README.md#诊断日志)保留最近 2000 条记录并支持导出，网关暂存最近 50 条停止/桥状态事件供重连补读。开机服务先等待校时，允许稳定的离线本地时间回退；运行中时钟故障触发停机、重启至无地图待机，不恢复旧任务，详见[服务部署](DEPLOY_NANO.md#app-建图选图与开机服务)。
 
@@ -91,7 +92,7 @@ source install/local_setup.bash
 colcon list --names-only
 ```
 
-按需构建可使用 `--packages-up-to f1_l_cleaning f1_operator_gateway`，当前依赖关系下会覆盖九个包。网关为完整部署声明了雷达驱动、bridge、定位及清洗包的运行依赖，`--packages-up-to f1_operator_gateway` 会一并构建这些依赖。独立 RTK 采集使用 `--packages-up-to f1_rtk_driver` 构建统一接口与驱动两个包。
+按需构建可使用 `--packages-up-to f1_l_cleaning f1_operator_gateway`，当前依赖关系下会覆盖十个包。网关为完整部署声明了雷达驱动、bridge、定位及清洗包的运行依赖，`--packages-up-to f1_operator_gateway` 会一并构建这些依赖。独立 RTK 采集使用 `--packages-up-to f1_rtk_driver` 构建统一接口与驱动两个包。
 
 ## 启动入口
 

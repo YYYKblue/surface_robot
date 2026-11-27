@@ -4,14 +4,14 @@ import math
 import time
 from collections import OrderedDict
 
-from f1_interfaces.srv import SetInitialPose, SetCleaningSpeed
+from f1_interfaces.srv import SetInitialPose, SetCleaningSpeed, SetLaneSpacing
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 from std_srvs.srv import Trigger, SetBool
 
 from .tracks import TaskTrack
 
-TASK_PREFIXES = {"rectangle": "/pool_cleaning", "l": "/l_cleaning"}
+TASK_PREFIXES = {"rectangle": "/pool_cleaning", "l": "/l_cleaning", "area_patrol": "/area_patrol"}
 TERMINAL = {"IDLE", "CANCELLED", "STOPPED", "COMPLETE"}
 MAX_AGE = .6
 
@@ -35,6 +35,10 @@ class TaskControl:
                    for action in ("start", "pause", "resume", "stop", "cancel")}
             for kind, namespace in TASK_PREFIXES.items()}
         for kind, namespace in TASK_PREFIXES.items():
+            if kind == "area_patrol":
+                self.task_clients[kind]["set_lane_spacing"] = self.create_client(
+                    SetLaneSpacing, namespace + "/set_lane_spacing")
+                continue
             self.task_clients[kind]["set_forward_boost"] = self.create_client(
                 SetBool, f"{namespace}/set_forward_boost")
             self.task_clients[kind]["set_cleaning_speed"] = self.create_client(
@@ -50,6 +54,8 @@ class TaskControl:
         self.initial_pose_client = self.create_client(SetInitialPose, prefix + "/set_initial_pose")
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                          durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.patrol_plan = {}
+        self.create_subscription(String, "/area_patrol/plan", self._patrol_plan, qos)
         self.create_subscription(String, prefix + "/localization_status", self._localization, qos)
         for kind, namespace in TASK_PREFIXES.items():
             self.create_subscription(String, namespace + "/status",
@@ -62,6 +68,11 @@ class TaskControl:
             return value if isinstance(value, dict) else {}
         except (ValueError, TypeError):
             return {}
+
+    def _patrol_plan(self, message):
+        value = self._json_object(message)
+        if value.get("frame_id") == "map" and isinstance(value.get("points"), list):
+            self.patrol_plan = value
 
     def _task_status(self, kind, message):
         value = self._json_object(message)
@@ -155,6 +166,9 @@ class TaskControl:
         value.update(can_resume=not resume_error and not self.command_pending,
                      resume_blockers=([dict(code="resume", message=resume_error)] if resume_error else []))
         value.update(task_type=kind, fresh=fresh, can_start=not blockers, start_blockers=blockers)
+        if kind == "area_patrol":
+            value["can_set_lane_spacing"] = not self._spacing_error() and not self.command_pending
+            return value
         boost_error = self._forward_boost_error(kind)
         value.update(can_set_forward_boost=not boost_error and not self.command_pending,
                      forward_boost_setting_error=boost_error)
@@ -224,6 +238,17 @@ class TaskControl:
                 self.operation_replies.popitem(last=False)
         self.hub.send(client_id, result)
 
+    def _spacing_error(self):
+        kind = "area_patrol"
+        task = self.tasks.get(kind, {})
+        if (not self._runtime_task_allowed() or self._runtime_busy() or self.task_locks or self.uncertain_tasks
+                or not self._source_fresh(task, self.task_received.get(kind, 0))
+                or task.get("phase") not in TERMINAL or not task.get("map_id")
+                or task["map_id"] != self.localization.get("map_id")
+                or not self.task_clients[kind]["set_lane_spacing"].service_is_ready()):
+            return "只能在已加载地图且任务空闲时设置巡游间距"
+        return ""
+
     def _operation_request(self, client_id, packet):
         if not self._runtime_task_allowed() and (packet["op"] == "initial_pose" or packet.get("action") in ("start", "resume")):
             self._rpc_reply(client_id, packet, False, "当前模式不能设置定位或启动清洗")
@@ -264,6 +289,8 @@ class TaskControl:
             return
         if packet["op"] == "initial_pose":
             error = self._initial_pose_error(packet)
+        elif packet["action"] == "set_lane_spacing":
+            error = self._spacing_error()
         elif packet["action"] == "start":
             error = "; ".join(item["message"] for item in self._task_view(packet["task_type"])["start_blockers"])
         elif packet["action"] == "resume":
@@ -317,6 +344,14 @@ class TaskControl:
             self.hub.send(pending["client"], dict(type="reply", op=pending["packet"]["op"],
                 request_id=pending["packet"].get("request_id", ""), success=False, pending=True,
                 message="操作超时，结果尚未确认；不会自动重发"))
+        if pending["stage"] == "spacing_status":
+            task = self.tasks.get("area_patrol", {})
+            if (self._source_fresh(task, self.task_received.get("area_patrol", 0))
+                    and task.get("stamp_ns", 0) >= pending["sent_ns"]
+                    and task.get("map_id") == pending["map_id"]
+                    and task.get("lane_spacing_m") == pending["packet"]["spacing_m"]):
+                self._finish_operation(pending, True, "巡游间距已确认")
+            return
         if pending["stage"] == "boost_status":
             packet = pending["packet"]
             task = self.tasks.get(packet["task_type"], {})
@@ -378,7 +413,13 @@ class TaskControl:
                 if error or self.tasks.get(kind, {}).get("run_id") != pending["old_run"]:
                     self._finish_operation(pending, False, error or "任务已变化")
                     return
-            if action in ("set_forward_boost", "set_cleaning_speed"):
+            if action == "set_lane_spacing":
+                error = self._spacing_error()
+                if error:
+                    self._finish_operation(pending, False, error)
+                    return
+                request = SetLaneSpacing.Request(spacing_m=packet["spacing_m"])
+            elif action in ("set_forward_boost", "set_cleaning_speed"):
                 error = self._forward_boost_error(kind, numeric=action == "set_cleaning_speed")
                 if error:
                     self._finish_operation(pending, False, error)
@@ -432,6 +473,9 @@ class TaskControl:
             return
         kind = pending["packet"].get("task_type")
         action = pending["packet"].get("action")
+        if result.success and action == "set_lane_spacing":
+            pending["stage"] = "spacing_status"
+            return
         if result.success and action == "set_forward_boost":
             pending["stage"] = "boost_status"
             return
@@ -467,7 +511,7 @@ class TaskControl:
             if task["fresh"]:
                 history.update(task.get("map_id"), task.get("run_id"),
                     getattr(self, "pose", None),
-                    recording=(task.get("phase") not in TERMINAL | {"PAUSED", "ACQUIRING"} and loc["ready"]
+                    recording=(task.get("phase") not in TERMINAL | {"PAUSED", "ACQUIRING", "PLANNING"} and loc["ready"]
                                and loc.get("map_id") == task.get("map_id")),
                     epoch=(loc.get("trajectory_id"), loc.get("initial_pose_stamp_ns")))
             else:

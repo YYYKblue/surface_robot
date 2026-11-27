@@ -1,0 +1,17 @@
+area_patrol:
+  ros__parameters:
+    # Initial low-output trial values. Distances are metres from base_link.
+    lane_spacing_m: 0.40
+    arrival_m: 0.18
+    lookahead_m: 0.45
+    pose_jump_m: 0.35
+    slowdown_m: 0.25
+    turn_enter_deg: 20.0
+    turn_exit_deg: 10.0
+    drive_percent: 22
+    slow_percent: 14
+    turn_percent: 20
+    side_percent: 25
+    stall_sec: 20.0
+    # Optional map-frame polygon, flattened [x1, y1, x2, y2, x3, y3, ...].
+    # work_polygon_xy: [0.0, 0.0, 4.0, 0.0, 4.0, 2.0, 0.0, 2.0]

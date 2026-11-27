@@ -1,0 +1,3 @@
+#!/usr/bin/env python3
+from f1_area_patrol.preview import main
+main()

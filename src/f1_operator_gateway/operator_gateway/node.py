@@ -196,7 +196,7 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
             self.hub.send(client_id, {"type": "hello", "protocol": "f1-operator-v1", "telemetry_hz": 10,
                 "session_id": self.diagnostic_history.session,
                 "drive_output": self._drive_output(),
-                "client_id": client_id, "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_resume", "task_tracks", "diagnostic_history", "forward_boost", "cleaning_speed_v1", "compact_stream_v1", "indexed8_map", "continuous_drive_percent_v1"]
+                "client_id": client_id, "capabilities": ["task_selection", "initial_pose", "start_conditions", "task_stop", "task_resume", "task_tracks", "diagnostic_history", "forward_boost", "cleaning_speed_v1", "area_patrol_v1", "compact_stream_v1", "indexed8_map", "continuous_drive_percent_v1"]
                     + (["mapping", "map_catalog", "map_delete", "map_unload"] if self.runtime_enabled else [])})
             if self.map_data:
                 self.hub.send(client_id, self._map_packet())
@@ -430,8 +430,13 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         self.hub.broadcast({"type": "diagnostics", "diagnostics": history})
 
     def _tracks_packet(self):
-        return dict(type="tracks", session_id=self.diagnostic_history.session,
-                    tasks={kind: track.snapshot() for kind, track in self.task_tracks.items()})
+        tasks = {kind: track.snapshot() for kind, track in self.task_tracks.items()}
+        task = self.tasks.get("area_patrol", {})
+        plan = self.patrol_plan
+        if (plan.get("plan_id") and plan["plan_id"] == task.get("plan_id")
+                and plan.get("map_id") == task.get("map_id")):
+            tasks["area_patrol"]["patrol_plan"] = plan
+        return dict(type="tracks", session_id=self.diagnostic_history.session, tasks=tasks)
 
     def _publish_tracks(self):
         packet = self._tracks_packet()

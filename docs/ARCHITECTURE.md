@@ -18,12 +18,13 @@
 | `f1_l_cleaning` | [controller_node.py](../src/f1_l_cleaning/f1_l_cleaning/controller_node.py)、`route.py`、`topics.py` | 继承共享控制器，提供开放多段路线及 `/l_cleaning/*` 接口 |
 | `f1_nano_bridge` | [node.py](../src/f1_nano_bridge/nano_ros_bridge/node.py)、`session.py`、`protocol.py`、`transport.py` | 控制租约、协议编解码、串口、CTRL/ACK、IMU 遥测 |
 | `f1_interfaces` | `msg/`、`srv/` | 公共消息与服务定义；修改后需要重建使用方 |
+| `f1_area_patrol` | [planner.py](../src/f1_area_patrol/f1_area_patrol/planner.py)、`mission.py`、`controller.py` | 启动船位较大侧的弓字形航线、位姿闭环执行和实走覆盖估计 |
 | `f1_operator_gateway` | [node.py](../src/f1_operator_gateway/operator_gateway/node.py)、`task_control.py`、`runtime.py`、`map_store.py`、`tracks.py`、`diagnostics.py` | 手动会话、任务操作、受管进程、地图保存、轨迹遥测与诊断历史 |
 | `operator_app` | [window.py](../operator_app/window.py)、`transport.py`、`map_canvas.py`、`mapping_panel.py`、`diagnostics.py` | Qt 界面、WebSocket、地图交互、建图选图与诊断日志；不持有硬件 token |
 | `operator_app/underwater.py` | [underwater.py](../operator_app/underwater.py) | 独立水下连接、箭头面板、控制代次和新鲜度门控 |
 | `under_control` | [server.py](../under_control/server.py)、`session.py`、`serial_worker.py`、`protocol.py` | H7 网络网关、会话与串口请求/回包；独立 Python 服务，不是 ROS 包 |
 
-`f1_localization` 依赖接口和建图配置包，建图配置包再依赖雷达驱动与 RTK 驱动的报文解析库。因此 `--packages-up-to f1_localization` 构建五个仓库包，`--packages-up-to f1_operator_gateway` 构建九个。`--packages-up-to f1_rtk_driver` 构建 `f1_interfaces` 和 RTK 驱动。雷达和 RTK 驱动各自独立启动。
+`f1_localization` 依赖接口和建图配置包，建图配置包再依赖雷达驱动与 RTK 驱动的报文解析库。因此 `--packages-up-to f1_localization` 构建五个仓库包，`--packages-up-to f1_operator_gateway` 构建十个。`--packages-up-to f1_rtk_driver` 构建 `f1_interfaces` 和 RTK 驱动。雷达和 RTK 驱动各自独立启动。
 
 ## 2. 数据与控制流
 
