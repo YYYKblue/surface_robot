@@ -2,16 +2,10 @@
   ros__parameters:
     port: auto
     baudrate: 115200
-    # ROS status heartbeat; configure GGA and HPR periods on the receiver.
+    # ROS status heartbeat; configure the GGA period on the receiver.
     status_rate_hz: 20.0
     stale_timeout_sec: 1.5
     reconnect_sec: 1.0
     # Optional private JSON via F1_RTK_NTRIP_CONFIG, or ntrip_config_file parameter.
     # Leave unset to preserve the environment-file selection; never put credentials here.
     antenna_frame: gnss_ant1
-    base_frame: base_link
-    # Clockwise from the bow to the M -> S baseline.
-    baseline_clockwise_from_bow_deg: 42.0
-    # Main antenna (M) relative to base_link, x forward and y to port.
-    antenna_x_m: -0.191
-    antenna_y_m: 0.213

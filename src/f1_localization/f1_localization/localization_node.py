@@ -1,4 +1,4 @@
-"""Manage Cartographer fixed-map localization from GNSS or operator initialization."""
+"""Manage Cartographer fixed-map localization from an operator-supplied initial pose."""
 
 import math
 import subprocess
@@ -100,9 +100,8 @@ class LocalizationManager(Node):
         steady = Clock(clock_type=ClockType.STEADY_TIME)
         self.timer = self.create_timer(.05, self._tick, clock=steady)
         self.gnss_reference = None
-        self.allow_gnss_seed = True
         if self.get_parameter("use_rtk").value:
-            from f1_mapping_bringup.gnss_landmarks import GnssLandmarks
+            from f1_mapping_bringup.gnss_positions import GnssPositions
             from .gnss_reference import read_reference
             path = self.get_parameter("gnss_state_file").value
             try:
@@ -110,8 +109,8 @@ class LocalizationManager(Node):
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
                 self.get_logger().error(f"Cannot read GNSS reference from {path}: {exc}; using lidar")
             else:
-                origin = self.gnss_reference[0] if self.gnss_reference else None
-                self.gnss = GnssLandmarks(self, origin, self._gnss_pose)
+                origin = self.gnss_reference[0]
+                self.gnss = GnssPositions(self, origin, self._gnss_position)
                 if origin is None:
                     self.get_logger().info("Map has no GNSS origin; initialize manually before GNSS fusion")
 
@@ -134,26 +133,19 @@ class LocalizationManager(Node):
         self.declare_parameter("trajectory_query_period_sec", .50)
         self.declare_parameter("use_rtk", False, ParameterDescriptor(read_only=True))
         self.declare_parameter("gnss_state_file", "", ParameterDescriptor(read_only=True))
+        self.antenna_x = self.declare_parameter("antenna_x_m", -.191).value
+        self.antenna_y = self.declare_parameter("antenna_y_m", .213).value
 
-    def _gnss_pose(self, enu_from_base, header):
-        """Allow optional backend observations; only seed an idle, uninitialized manager."""
-        if self.gate.state == "PAUSED" or self._finish_future is not None or self._pending_pose is not None:
-            return False
-        if self.gnss_reference is None:
-            return self.gate.initial_pose_received and self._trajectory_active()
+    def _gnss_position(self, xy, frame):
+        if (not self.gate.initial_pose_received or not self._trajectory_active()
+                or self.gate.state == "PAUSED" or self._finish_future or self._pending_pose):
+            return None
         _, map_from_enu, _ = self.gnss_reference
-        map_from_base = map_from_enu.compose(enu_from_base)
-        if not self.gate.within_map_bounds(map_from_base):
-            return False
-        if (self.trajectory_id is None and self.allow_gnss_seed and self._states_checked
-                and not self.gate.initial_pose_received and self._finish_future is None
-                and self.start_client.service_is_ready()
-                and self._known_trajectory_states.get(self.reference_trajectory_id) == TrajectoryStates.FROZEN):
-            seed = PoseWithCovarianceStamped()
-            seed.header.frame_id, seed.header.stamp = self.config.map_frame, header.stamp
-            seed.pose.pose = map_from_base.message()
-            self._accept_initial_pose(seed, "gnss")
-        return self.gate.initial_pose_received and self._trajectory_active()
+        if map_from_enu is None:
+            return xy, frame
+        from f1_mapping_bringup.gnss_positions import PlanarPose
+        antenna = map_from_enu.compose(PlanarPose(*xy, 0.))
+        return ((antenna.x, antenna.y), "map") if self.gate.within_map_bounds(antenna) else None
 
     def _map_geometry(self):
         path = self.get_parameter("map").value if self.has_parameter("map") else ""
@@ -233,19 +225,19 @@ class LocalizationManager(Node):
         self._publish_status(now)
         # A new initial pose invalidates the previous trajectory and all of its
         # stability evidence.  The task controller sees not-ready immediately.
-        self.allow_gnss_seed = False
         self._pending_pose = message.pose.pose
         if self.gnss_reference:
             # StartTrajectory uses the first reference node, while seeds are in map.
-            from f1_mapping_bringup.gnss_landmarks import PlanarPose
+            from f1_mapping_bringup.gnss_positions import PlanarPose
             position = message.pose.pose.position
             map_from_base = PlanarPose(position.x, position.y, yaw)
-            self._pending_pose = self.gnss_reference[2].inverse().compose(map_from_base).message()
+            self._pending_pose = self.gnss_reference[2].inverse().compose(
+                map_from_base.compose(PlanarPose(self.antenna_x, self.antenna_y, 0.))).message()
         self._pending_source = source
         self._pending_since = time.monotonic()
         self._last_trajectory_error = ""
         if self._start_future is not None:
-            # A GNSS seed may already be in flight when the operator takes over.
+            # A previous initial pose may already be in flight.
             # Finish that trajectory once its ID arrives, then send the latest pose.
             return True
         if self.trajectory_id is None:
@@ -259,7 +251,6 @@ class LocalizationManager(Node):
         return True
 
     def _relocalize(self, request, response):
-        self.allow_gnss_seed = False
         self._pending_pose = None
         self._pending_source = ""
         self._pending_since = None
@@ -519,9 +510,6 @@ class LocalizationManager(Node):
             # before StartTrajectory can legitimately omit the new id.
             self.gate.mark_paused("localization trajectory is no longer active")
         self.gate.update(now_ns, active, self._pose, self._last_scan)
-        if (self.allow_gnss_seed and self.gnss_reference and not self.gate.initial_pose_received
-                and self.gate.state == "LOCALIZATION_CHECK"):
-            self.gate.reason = "waiting for valid in-map GNSS position and heading, or operator initial pose"
         self._publish_status(now_ns)
 
     def _publish_status(self, now_ns):

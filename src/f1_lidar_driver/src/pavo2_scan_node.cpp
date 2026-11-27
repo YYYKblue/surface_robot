@@ -3,7 +3,6 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
-#include <limits>
 #include <string>
 #include <thread>
 #include <vector>
@@ -31,8 +30,7 @@ void publish_scan(
   const rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr & publisher,
   const std::vector<pavo2::pavo_response_scan_t> & points,
   const rclcpp::Time & stamp, double scan_time, const std::string & frame_id,
-  bool inverted, double range_min, double range_max,
-  rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr water = nullptr)
+  bool inverted, double range_min, double range_max)
 {
   sensor_msgs::msg::LaserScan scan;
   scan.header.stamp = stamp;
@@ -43,7 +41,8 @@ void publish_scan(
   for (std::size_t i = 0; i < points.size(); ++i) {
     float range = points[i].distance * kDistanceUnit;
     float intensity = points[i].intensity;
-    if (range < range_min || range > range_max) {
+    // The SDK may copy a neighbour's distance into a beam with no return.
+    if (points[i].raw_no_echo || range < range_min || range > range_max) {
       range = 0.0F;
       intensity = 0.0F;
     }
@@ -60,25 +59,6 @@ void publish_scan(
   scan.range_min = range_min;
   scan.range_max = range_max;
   publisher->publish(scan);
-  if (water && water->get_subscription_count() > 0) {
-    // Only use scans whose source samples lie on the declared angular grid.
-    // A missing UDP segment or a repeated-angle diagnostic scan has no such geometry.
-    const int step = static_cast<int>(points[1].angle) - points[0].angle;
-    if (step <= 0) return;
-    for (std::size_t i = 1; i < points.size(); ++i) {
-      if (static_cast<int>(points[i].angle) - points[i - 1].angle != step) return;
-    }
-    for (std::size_t i = 0; i < points.size(); ++i) {
-      const auto j = inverted ? points.size() - 1U - i : i;
-      if (points[i].raw_no_echo && points[i].distance == 0) {
-        scan.ranges[j] = std::numeric_limits<float>::infinity();
-      } else if (points[i].raw_no_echo || !scan.ranges[j]) {
-        // Reject a zero sample filled from its neighbour by an SDK filter.
-        scan.ranges[j] = std::numeric_limits<float>::quiet_NaN();
-      }
-    }
-    water->publish(scan);
-  }
 }
 }  // namespace
 
@@ -128,8 +108,6 @@ int main(int argc, char * argv[])
 
   const auto publisher = node->create_publisher<sensor_msgs::msg::LaserScan>(
     scan_topic, rclcpp::QoS(10).reliable());
-  auto water = node->create_publisher<sensor_msgs::msg::LaserScan>(
-    scan_topic + "/water", rclcpp::SensorDataQoS());
   const double scan_time = 1.0 / static_cast<double>(motor_speed);
   const auto lidar_ip = node->get_parameter("lidar_ip").as_string();
   const auto lidar_port = node->get_parameter("lidar_port").as_int();
@@ -169,7 +147,7 @@ int main(int argc, char * argv[])
     if (points.size() >= 2U) {
       publish_scan(
         publisher, points, stamp, scan_time, frame_id,
-        inverted, range_min, range_max, water);
+        inverted, range_min, range_max);
     }
     if (rclcpp::ok()) {
       rclcpp::spin_some(node);

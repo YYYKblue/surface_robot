@@ -26,9 +26,9 @@
 
 - 驱动负责连接 PAVO2 并发布 `sensor_msgs/msg/LaserScan`；不启动建图、定位、bridge 或清洗，不发布安装 TF。
 - 默认话题 `/pavo2_scan`、坐标系 `pavo2s_frame`；现有 Cartographer、网关和清洗感知可继续订阅。
-- 包名变为 `f1_lidar_driver`，可执行文件和节点名保留 `pavo2_scan_node`。SDK 保留原始零距离标记供开阔水域建图使用；视场标记已适配全圆显示，详见 [来源记录](vendor/PROVENANCE.md)。
+- 包名变为 `f1_lidar_driver`，可执行文件和节点名保留 `pavo2_scan_node`。SDK 保留原始零距离标记，供 ROS 节点跳过被滤波器补值的无回波束；视场标记已适配全圆显示，详见 [来源记录](vendor/PROVENANCE.md)。
 - 距离/角度换算、无效回波置零、读取前取时间戳、Reliable/depth=10 QoS 和现有超时重连行为均保留。首次连接失败仍退出，自动服务继续采用原有启动等待与重试策略。
-- 建图专用话题 `/pavo2_scan/water` 以 SensorDataQoS 按订阅发布。设备原始零距离用 `+inf` 表示，滤波或量程剔除的点用 `NaN` 表示，正常回波以米计；角度序列不规则时跳过该帧。
+- 建图直接使用 `/pavo2_scan`。无回波束发布零距离，地图中没有其他有效射线覆盖的位置保持未知。
 - RViz 和视场标记是可选查看工具。`lidar_view.launch.py` 仅启动查看器，不额外启动驱动。默认视场为 -180° 至 +180°，轮廓显示为圆周；示意不裁剪扫描，也不代表所有方向均有有效回波。保留的 100 m 显示半径和软件量程上限不代表该设备的实测有效距离。
 
 ## PC / Nano 分别构建

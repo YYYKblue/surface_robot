@@ -27,8 +27,8 @@ def test_standalone_launch_owns_only_localization(reference_map, monkeypatch, pr
                                          localization_config='/field/localization.yaml')
     monkeypatch.setattr(module, 'Node', lambda **kwargs: kwargs)
     nodes = module.nodes(context)
-    assert [n['package'] for n in nodes] == ['tf2_ros', 'f1_localization', 'cartographer_ros', 'f1_localization']
-    cartographer, manager = nodes[1], nodes[-1]
+    assert [n['package'] for n in nodes] == ['tf2_ros', 'tf2_ros', 'f1_mapping_bringup', 'cartographer_ros', 'f1_localization']
+    cartographer, manager = nodes[2], nodes[-1]
     assert cartographer['executable'] == 'gnss_cartographer'
     assert cartographer['parameters'][-1]['start_trajectory'] is False
     assert manager['executable'] == 'localization_manager'
@@ -48,7 +48,7 @@ def test_standalone_launch_owns_only_localization(reference_map, monkeypatch, pr
     else:
         assert manager['remappings'] == []
     context.launch_configurations['publish_lidar_tf'] = 'false'
-    assert len(module.nodes(context)) == 3
+    assert len(module.nodes(context)) == 4
     context.launch_configurations['use_rtk'] = 'false'
     cartographer, _, manager = module.nodes(context)
     assert '-start_trajectory_with_default_topics=false' in cartographer['arguments']

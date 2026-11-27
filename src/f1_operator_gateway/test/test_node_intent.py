@@ -508,21 +508,19 @@ def test_map_callback_defers_all_grid_work_and_commits_revision_with_ready_resul
 
 def test_rtk_state_uses_independent_quality_freshness_and_correction_status():
     from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-    from f1_interfaces.msg import Heading, RtkStatus
+    from f1_interfaces.msg import RtkStatus
 
     node = stream_gateway()
-    status = RtkStatus(connected=True, fix_valid=True, fix_quality=1, heading_valid=True, heading_quality=4)
-    heading = Heading(valid=True, quality=4, heading_deg=83.6)
+    status = RtkStatus(connected=True, fix_valid=True, fix_quality=1)
     item = DiagnosticStatus(name="f1/rtk/ntrip", message="streaming")
     corrections = DiagnosticArray(status=[item])
-    for key, message in (("status", status), ("heading", heading), ("corrections", corrections)):
+    for key, message in (("status", status), ("corrections", corrections)):
         message.header.stamp.sec = 100
         node._rtk_sample(key, message)
-    assert node._rtk_view(time.monotonic()) == dict(fix="single", bow_heading_deg=83.6, corrections="streaming")
+    assert node._rtk_view(time.monotonic()) == dict(fix="single", corrections="streaming")
     item.level = DiagnosticStatus.WARN
     status.fix_quality = 4
-    heading.valid = False
-    assert node._rtk_view(time.monotonic()) == dict(fix="fixed", bow_heading_deg=None, corrections="delayed")
+    assert node._rtk_view(time.monotonic()) == dict(fix="fixed", corrections="delayed")
     item.message = "retrying"
     item.values = [KeyValue(key="error", value="caster response 401")]
     assert node._rtk_view(time.monotonic())["corrections"] == "auth_error"

@@ -9,7 +9,7 @@
 | Nano 登录 | `nvidia@192.168.1.188`，地址变化时替换 |
 | 系统 ROS | `/opt/ros/humble` |
 | 雷达驱动包 | `f1_lidar_driver` |
-| 独立 RTK 驱动 | `f1_rtk_driver`，由 `f1-rtk.service` 开机采集，按 CH340 标识及 GGA/HPR 自动识别 |
+| 独立 RTK 驱动 | `f1_rtk_driver`，由 `f1-rtk.service` 开机采集，按 CH340 标识和两条通过校验的 GGA 自动识别 |
 | 桥接功能包 | `f1_nano_bridge` |
 | 自定义接口包 | `f1_interfaces` |
 | 沿边清洗功能包 | `f1_pool_cleaning` |
@@ -23,7 +23,7 @@ PC 和 Nano 分别编译，不传 PC 的生成目录。部署状态以各项验�
 
 ## GNSS 辅助建图与定位
 
-独立建图定位按现有复制安装方式构建 `--base-paths src --packages-up-to f1_localization`。使用 App 受管模式则构建 `--packages-up-to f1_operator_gateway`，包含向两种模式传递 `use_rtk` 的网关更新。加载新工作空间，确认雷达和 RTK 驱动各运行一份，然后使用原有建图、保存、加载地图入口。[融合配置与验收](src/f1_mapping_bringup/README.md#单点位置与双天线航向融合)
+独立建图定位按现有复制安装方式构建 `--base-paths src --packages-up-to f1_localization`。使用 App 受管模式则构建 `--packages-up-to f1_operator_gateway`，包含向两种模式传递 `use_rtk` 的网关更新。加载新工作空间，确认雷达和 RTK 驱动各运行一份。新版本建图只融合 GGA 位置，无回波保持未知，加载地图后需在 App 或 RViz 指定船头朝向及位置。旧的开阔水域环境变量可以移除。[融合配置与验收](src/f1_mapping_bringup/README.md#rtk-位置融合)
 
 ### 2026-11-23 Nano 链路复核
 
@@ -93,9 +93,9 @@ sudo journalctl -u f1-rtk.service -b -n 20 --no-pager
 ros2 topic echo --once /f1/rtk/status
 ```
 
-服务使用 `port: auto`。串口缺席时状态为 `connected=false`，节点会自动重试。只有收到同一 GNSS 时刻的有效 GGA 和固定解 HPR 后，`/f1/rtk/base_fix` 才给出有效的船中心位置。手动调试时先暂停服务，结束后恢复服务。[RTK 话题和安装参数](src/f1_rtk_driver/README.md#数据约定)
+服务使用 `port: auto`。串口缺席时状态为 `connected=false`，节点会自动重试。收到有效 GGA 后，`/f1/rtk/fix` 给出 ANT1 位置。手动调试时先暂停服务，结束后恢复服务。[RTK 话题和安装参数](src/f1_rtk_driver/README.md#数据约定)
 
-RTK 默认 `port: auto`，可插在任一可用 USB 数据口。驱动只读候选 CH340 的 GGA 和 HPR，确认校验与报文结构后连接，拔插后重新识别。现场 H7 同为通用 CH340 时，设置 `/etc/under-control.env` 的 `UNDER_SERIAL_PORT=auto_ch340`。H7 跳过已占用和 1.5 秒监听期内主动输出数据的适配器。对静默候选只先使用既有发现/STOP 握手，运动许可仍由有效 H7 应答和原有控制流程决定。若使用其他型号的 H7 适配器，可指定其唯一 by-id。现场更新 H7 环境后只需重启 `under-control.service`。
+RTK 默认 `port: auto`，可插在任一可用 USB 数据口。驱动在候选 CH340 上被动监听，收到两条结构与校验均有效的 GGA 后连接，拔插后重新识别。现场 H7 同为通用 CH340 时，设置 `/etc/under-control.env` 的 `UNDER_SERIAL_PORT=auto_ch340`。H7 跳过已占用和 1.5 秒监听期内主动输出数据的适配器。对静默候选只先使用既有发现/STOP 握手，运动许可仍由有效 H7 应答和原有控制流程决定。若使用其他型号的 H7 适配器，可指定其唯一 by-id。现场更新 H7 环境后只需重启 `under-control.service`。
 
 **2026-11-21 部署记录。** 此前按物理口筛选时，RTK 接在另一插口，接收机持续输出但驱动显示离线。重新核对 USB 后确认三台外设分别为 UVC 摄像头、水面桥和 RTK，H7 当时未接。对 CH340 被动读取 2.5 秒得到 13 条 GGA 和 12 条 HPR，校验均通过。船体参数为安装角 +42°、主天线 x = −0.191 m、y = +0.213 m。
 

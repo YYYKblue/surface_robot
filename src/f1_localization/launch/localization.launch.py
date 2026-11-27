@@ -6,7 +6,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from f1_mapping_bringup.configuration import load_lidar_planar_transform, static_tf_arguments
+from f1_mapping_bringup.configuration import antenna_tf_arguments, load_lidar_planar_transform, static_tf_arguments
 
 
 def executable(directory, candidates):
@@ -53,7 +53,10 @@ def nodes(context):
             arguments=static_tf_arguments("pavo2s_frame", mounting)))
     scan_remap = [("scan", value("scan_topic"))]
     if use_rtk:
-        result.append(Node(package="f1_localization", executable="gnss_cartographer",
+        result.append(Node(package="tf2_ros", executable="static_transform_publisher",
+                 name="base_to_gnss_antenna", parameters=parameters,
+                 arguments=antenna_tf_arguments(value("gnss_config"))))
+        result.append(Node(package="f1_mapping_bringup", executable="gnss_cartographer",
             name="pool_localization", output="screen", remappings=scan_remap,
             parameters=[value("gnss_config"), *parameters, {
                 "configuration_directory": str(share / "config"), "configuration_basename": basename,
@@ -70,7 +73,7 @@ def nodes(context):
         name="cartographer_occupancy_grid_node", output="screen", parameters=parameters,
         arguments=["-resolution", value("occupancy_grid_resolution"),
                    "-publish_period_sec", value("occupancy_grid_publish_period_sec")]))
-    # The manager validates the manual or GNSS seed before starting a trajectory.
+    # The manager validates the operator seed before starting a trajectory.
     manager_parameters = [*parameters, {
         "map_frame": "map", "base_frame": "base_link",
         "configuration_directory": str(share / "config"),
@@ -119,7 +122,7 @@ def generate_launch_description():
         DeclareLaunchArgument("use_rtk", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("gnss_config", default_value=str(mapping / "config/gnss_fusion.yaml")),
         DeclareLaunchArgument("start_trajectory", default_value="false", choices=["true", "false"],
-                              description="Compatibility mode; default waits for a GNSS or operator initial pose"),
+                              description="Compatibility mode; default waits for an operator initial pose"),
         DeclareLaunchArgument("reference_trajectory_id", default_value="0"),
         DeclareLaunchArgument("localization_config", default_value="",
                               description="Optional extra LocalizationConfig YAML overrides"),

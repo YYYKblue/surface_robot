@@ -1,6 +1,10 @@
 /**:
   ros__parameters:
-    # Initial weights for single-point position and fixed dual-antenna heading.
+    # ANT1 relative to base_link, +x forward and +y to port.
+    antenna_x_m: -0.191
+    antenna_y_m: 0.213
     gnss_translation_weight: 0.5
-    gnss_rotation_weight: 8.0
     gnss_constraint_rate_hz: 2.0
+    # Both position tracks must span enough distance to register ENU to map.
+    gnss_alignment_rms_spread_m: 1.0
+    gnss_alignment_max_error_m: 0.45

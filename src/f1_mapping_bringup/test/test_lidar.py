@@ -145,10 +145,10 @@ def test_lidar_launch_publishes_planar_mounting_without_imu(tmp_path, monkeypatc
     assert all(node["package"] == "cartographer_ros" for node in nodes)
     context.launch_configurations["use_rtk"] = "true"
     context.launch_configurations["gnss_config"] = str(PACKAGE / "config/gnss_fusion.yaml")
-    slam, grid, gnss = module.lidar_nodes(context)
-    assert "rtk_mapping.lua" in slam["arguments"]
-    assert ("landmark", "/f1/rtk/landmarks") in slam["remappings"]
-    assert gnss["executable"] == "gnss_landmarks"
+    antenna, slam, gnss, grid = module.lidar_nodes(context)
+    assert slam["parameters"][-1]["configuration_basename"] == "rtk_mapping.lua"
+    assert slam["remappings"] == [("scan", "/pavo2_scan")]
+    assert gnss["executable"] == "gnss_positions"
 
 
 def test_missing_cartographer_executable_gives_actionable_error(tmp_path):

@@ -27,3 +27,12 @@ def static_tf_arguments(child, values):
     for flag, value in zip(("--x", "--y", "--z", "--roll", "--pitch", "--yaw"), values):
         arguments.extend((flag, str(value)))
     return arguments + ["--frame-id", "base_link", "--child-frame-id", child]
+
+
+def antenna_tf_arguments(config):
+    settings = yaml.safe_load(Path(config).read_text())["/**"]["ros__parameters"]
+    x, y = (settings.get(key, default) for key, default in
+            (("antenna_x_m", -.191), ("antenna_y_m", .213)))
+    if not all(type(v) in (float, int) and math.isfinite(v) for v in (x, y)):
+        raise ValueError("ANT1 mounting offsets must be finite metres")
+    return static_tf_arguments("gnss_ant1", (x, y, 0., 0., 0., 0.))

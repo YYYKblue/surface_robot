@@ -6,7 +6,7 @@
 
 人工暂停续跑、取消及地图删除／卸载的接口和使用边界见[功能说明](docs/TASK_PAUSE_AND_MAP_MANAGEMENT.md)。
 
-2026-11-23 更新 RTK 统一接口、20 Hz 配置及 GNSS 辅助建图定位。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
+2026-11-27 更新 RTK 位置辅助建图定位与无回波处理。目标环境为 Ubuntu 22.04 / ROS 2 Humble，机器人端运行于 ARM64 Nano，操作员端为无需安装 ROS 的 Qt App。
 
 F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主电机输出支持整数 0–100，Windows App 提供滑条、数值输入和快捷值，反馈区分设定值、固件报告值与目标 PWM；RC 原始通道独立用于诊断。旧固件协议会明确阻止控制。新标度 25% 为 PWM 偏移 100 μs，旧 25 档为 125 μs；自主清洗的纠偏、靠近和换边保留新 25% 输出，沿墙前进辅助由 App 0–100 设置映射为 0–50 输出，实际效果需实船验证。接口包、桥接、网关、依赖节点和 Windows App 应一起升级，见[协议与迁移](src/f1_nano_bridge/README.md#f103-v3-连续输出2026-11-11)。
 
@@ -21,7 +21,7 @@ F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主�
 | [`f1_interfaces`](src/f1_interfaces/README.md) | 统一执行器、控制状态、墙观测、目标边和 RTK 消息与服务 |
 | [`f1_nano_bridge`](src/f1_nano_bridge/README.md) | F103 串口协议、CTRL/ACK、控制租约、超时保护和 IMU 遥测 |
 | [`f1_lidar_driver`](src/f1_lidar_driver/README.md) | PAVO2 驱动与 SDK、雷达参数、独立启动及开机服务模板 |
-| [`f1_rtk_driver`](src/f1_rtk_driver/README.md) | 独立读取 WTRTK-982，发布船中心 `base_fix`、船头真北航向 `bow_heading` 及原始天线观测 |
+| [`f1_rtk_driver`](src/f1_rtk_driver/README.md) | 独立读取 WTRTK-982，发布主天线位置 `/f1/rtk/fix`、质量状态及串口原文 |
 | [`f1_mapping_bringup`](src/f1_mapping_bringup/README.md) | Cartographer 2D 雷达与 GNSS 辅助建图、静态雷达 TF 和扫描检查 |
 | [`f1_localization`](src/f1_localization/README.md) | 固定地图定位、初始位姿、轨迹管理和定位就绪门控 |
 | [`f1_pool_cleaning`](src/f1_pool_cleaning/README.md) | 墙感知、简单动作靠近、沿墙控制、矩形四边任务及覆盖记录 |
@@ -50,7 +50,7 @@ Qt App ←→ WebSocket :8765 ←→ 网关 → f1_nano_bridge ←→ F103
 
 同一 App 可同时操作水面 W/A/S/D 与水下箭头；两条连接和控制状态独立。水下 ←/→ 为左转/右转；顶部“两台手动停止”仅撤销两台手动输出，不取消水面自动任务。H7 不接入时 `under-control.service` 常驻等待，接入后自动发现并停止握手，重连不恢复旧运动。2026-11-12 已在 Nano 启用新服务并禁用旧 H7 桥，当时 H7 缺席，实机动作尚未验收，见[部署记录](docs/UNDER_CONTROL_NANO_DEPLOYMENT.md)。
 
-建图由雷达扫描匹配和可选的单点位置、双天线航向约束组成。清洗使用已有 `.pbstream` 冻结地图。有地理参考时可用新鲜 GNSS 观测初始化，也可通过 App 或 RViz 提供初始位姿。定位达到 `LOCALIZATION_READY` 后才可开始任务。建图与固定地图定位应择一运行，避免重复发布地图和 TF。
+建图用雷达匹配估计船头方向，RTK 仅提供主天线水平位置。无回波区域保持未知。清洗加载已有 `.pbstream` 后，通过 App 或 RViz 指定船中心和船头方向。定位达到 `LOCALIZATION_READY` 后才可开始任务。建图与固定地图定位应择一运行，避免重复发布地图和 TF。
 
 | 任务 | 启动入口 | 任务接口 | 示例地图 |
 |---|---|---|---|
@@ -106,7 +106,7 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 雷达由独立服务常驻运行；迁移后的服务使用本仓库 `f1_lidar_driver`，切换说明见[驱动部署](src/f1_lidar_driver/README.md#nano-由操作者切换现有开机服务)。没有服务实例时可单独执行 `ros2 launch f1_lidar_driver lidar.launch.py`，不要重复启动。
 
-Nano 通过 `pavo2-scan.service` 和 `f1-rtk.service` 开机采集，App 受管建图与固定地图定位默认接收有效 GNSS 约束。带地理参考的地图可用 GNSS 自动初始化，旧地图通过 App 或 RViz 手动初始化。[Nano 服务与串口检查](DEPLOY_NANO.md#独立-rtk-部署) · [融合与录包验收](src/f1_mapping_bringup/README.md#单点位置与双天线航向融合)
+Nano 通过 `pavo2-scan.service` 和 `f1-rtk.service` 开机采集，App 受管建图与固定地图定位默认接收有效 GNSS 约束。所有地图通过 App 或 RViz 设置初始位姿。[Nano 服务与串口检查](DEPLOY_NANO.md#独立-rtk-部署) · [融合与录包验收](src/f1_mapping_bringup/README.md#rtk-位置融合)
 
 确认驱动已发布 `/pavo2_scan` 后建图：
 

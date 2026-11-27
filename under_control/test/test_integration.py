@@ -80,7 +80,7 @@ def test_auto_ch340_skips_stream_without_transmitting_then_finds_h7(board, monke
         worker.start()
         deadline = time.monotonic() + 7
         while time.monotonic() < deadline and not worker.snapshot()["stop_confirmed"]:
-            os.write(master, b"$GNHPR,,,,,,,,*43\r\n")
+            os.write(master, b"$GNGGA,,,,,,0,00,,,,,,,*78\r\n")
             time.sleep(.03)
             if select.select([master], [], [], 0)[0]:
                 try:

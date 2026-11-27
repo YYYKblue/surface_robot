@@ -1,6 +1,6 @@
 # F1 统一接口包
 
-`f1_interfaces` 提供水面控制、清洗与定位共用的消息和服务。RTK 驱动通过本包发布航向、接收机状态和串口原文，通过标准 `sensor_msgs/msg/NavSatFix` 发布位置。[RTK 话题](../f1_rtk_driver/README.md#数据约定)
+`f1_interfaces` 提供水面控制、清洗与定位共用的消息和服务。RTK 驱动通过本包发布接收机状态和串口原文，通过标准 `sensor_msgs/msg/NavSatFix` 发布位置。[RTK 话题](../f1_rtk_driver/README.md#数据约定)
 
 | 类型 | 接口 | 用途 |
 |---|---|---|
@@ -8,8 +8,8 @@
 | msg | `ControlState` | 硬件桥控制状态 |
 | msg | `WallObservation` | 墙面与周边空间观测 |
 | msg | `EdgeTarget` | 固定地图位姿生成的目标边/左墙上下文 |
-| msg | `Heading` | 双天线基线或船头的真北航向、UTC 与定向质量 |
-| msg | `RtkStatus` | 接收机串口状态、定位与航向质量、有效性和观测年龄 |
+| msg | `Heading` | 供历史航向录包解码 |
+| msg | `RtkStatus` | 接收机串口状态、定位质量、有效性和观测年龄，保留历史航向字段 |
 | msg | `RawSentence` | 带 ROS 接收时间的单行串口原文 |
 | msg | `EffortPreview` | 旧脉冲控制预览接口；保留类型兼容，当前清洗包不发布 |
 | msg | `CleaningStatus` | 旧脉冲控制状态接口；保留类型兼容，当前清洗包不发布 |

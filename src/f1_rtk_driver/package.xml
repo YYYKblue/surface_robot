@@ -2,7 +2,7 @@
 <package format="3">
   <name>f1_rtk_driver</name>
   <version>0.1.0</version>
-  <description>Standalone WTRTK-982 GNSS position and dual-antenna heading driver.</description>
+  <description>Standalone WTRTK-982 GNSS position driver with optional NTRIP corrections.</description>
   <maintainer email="bboss@example.com">bboss</maintainer>
   <license>Proprietary</license>
   <buildtool_depend>ament_cmake</buildtool_depend>

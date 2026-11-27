@@ -2,7 +2,7 @@
 <package format="3">
   <name>f1_mapping_bringup</name>
   <version>0.1.0</version>
-  <description>PAVO2 Cartographer 2D mapping with optional GNSS position and heading constraints.</description>
+  <description>PAVO2 Cartographer 2D mapping with optional GNSS position constraints.</description>
   <maintainer email="bboss@example.com">bboss</maintainer>
   <license>TODO</license>
   <buildtool_depend>ament_cmake</buildtool_depend>

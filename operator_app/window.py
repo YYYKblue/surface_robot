@@ -573,13 +573,11 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         fix = {"fixed": "固定解", "float": "浮点解", "single": "单点", "differential": "差分定位",
                "none": "无解", "disconnected": "串口断开", "other": "其他解",
                "stale": "数据过期"}.get(rtk.get("fix"), "—")
-        angle = rtk.get("bow_heading_deg")
-        heading = f"{angle:05.1f}° · 固定" if isinstance(angle, (int, float)) and 0 <= angle < 360 else "—"
         corrections = {"streaming": "正常写入", "delayed": "写入或接收延迟", "disabled": "未启用",
                        "waiting_receiver": "等待接收机", "waiting_gga": "等待定位", "connecting": "连接中",
                        "connected": "等待差分流", "retrying": "重连中", "auth_error": "鉴权失败",
                        "config_error": "配置异常", "stale": "数据过期"}.get(rtk.get("corrections"), "—")
-        self.rtk_status.setText(f"RTK 定位：{fix}　 船头航向：{heading}　 千寻差分：{corrections}")
+        self.rtk_status.setText(f"RTK 定位：{fix}　 千寻差分：{corrections}")
         phase = task.get("phase", "")
         mode = "实际输出" if task.get("output_enabled") else "预览模式（不驱动硬件）"
         phase_label = ("故障停机（请先取消任务）" if phase == "PAUSED" and task.get("pause_kind") == "fault"

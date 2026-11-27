@@ -2,7 +2,7 @@
 <package format="3">
   <name>f1_localization</name>
   <version>0.1.0</version>
-  <description>Cartographer fixed-map localization with GNSS or operator initialization and readiness checks.</description>
+  <description>Cartographer fixed-map localization with operator initialization, optional GNSS position and readiness checks.</description>
   <maintainer email="bboss@example.com">bboss</maintainer>
   <license>Proprietary</license>
   <buildtool_depend>ament_cmake</buildtool_depend>

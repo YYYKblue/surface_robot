@@ -1,4 +1,4 @@
-"""WTRTK-982 GGA/HPR decoding. No ROS or serial dependencies."""
+"""WTRTK-982 position decoding. No ROS or serial dependencies."""
 
 from dataclasses import dataclass
 from functools import reduce
@@ -22,17 +22,6 @@ class Fix:
     @property
     def valid(self):
         return math.isfinite(self.latitude) and math.isfinite(self.longitude)
-
-
-@dataclass(frozen=True)
-class Heading:
-    utc: str
-    quality: int
-    degrees: float = math.nan
-
-    @property
-    def valid(self):
-        return math.isfinite(self.degrees)
 
 
 def number(field):
@@ -89,25 +78,20 @@ def quality_code(field):
 
 
 def parse_sentence(line):
-    """Return Fix/Heading, None for unrelated input, or ValueError for a bad target line."""
-    if not re.match(rb"^\$[A-Z]{2}(?:GGA|HPR),", line):
+    """Return a GGA fix, None for other logs, or ValueError for malformed GGA."""
+    if not re.match(rb"^\$[A-Z]{2}GGA,", line):
         return None
     payload, separator, checksum = line[1:].partition(b"*")
     if (not separator or not re.fullmatch(b"[0-9a-fA-F]{2}", checksum)
             or reduce(xor, payload, 0) != int(checksum, 16)):
         raise ValueError("NMEA checksum mismatch")
     fields = payload.decode("ascii").split(",")
-    if fields[0].endswith("GGA"):
-        return parse_gga(fields)
-    if len(fields) < 6:
-        raise ValueError("incomplete HPR")
-    # UM982 emits a complete HPR with empty measurement fields before acquiring a solution.
-    if len(fields) == 9 and not any(fields[2:]):
-        return Heading(fields[1], -1)
-    quality = quality_code(fields[5])
-    if quality != 4:
-        return Heading(fields[1], quality)
-    degrees = number(fields[2])
-    if not 0 <= degrees <= 360:
-        raise ValueError("heading out of range")
-    return Heading(fields[1], quality, degrees % 360)
+    return parse_gga(fields)
+
+
+def utc_nanoseconds(utc):
+    """NMEA time of day, independent of the number of trailing decimal zeros."""
+    if not re.fullmatch(r"(?:[01][0-9]|2[0-3])[0-5][0-9][0-5][0-9](?:\.[0-9]{1,9})?", utc):
+        return None
+    seconds = int(utc[:2]) * 3600 + int(utc[2:4]) * 60 + int(utc[4:6])
+    return seconds * 10**9 + int(utc[7:].ljust(9, "0"))

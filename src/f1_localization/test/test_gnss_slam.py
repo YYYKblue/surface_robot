@@ -14,18 +14,19 @@ import pytest
 import rclpy
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.duration import Duration
-from cartographer_ros_msgs.msg import LandmarkList, StatusCode
+from cartographer_ros_msgs.msg import StatusCode
 from cartographer_ros_msgs.srv import WriteState
-from f1_interfaces.msg import Heading, RawSentence
-from geometry_msgs.msg import PoseWithCovarianceStamped
+from f1_interfaces.msg import RawSentence
+from geometry_msgs.msg import PointStamped, PoseWithCovarianceStamped
 from nav_msgs.msg import OccupancyGrid
-from sensor_msgs.msg import LaserScan, NavSatFix
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Header, String
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener
 from visualization_msgs.msg import MarkerArray
 
 from f1_localization.gnss_reference import read_reference
+from f1_mapping_bringup.gnss_positions import PlanarPose
 
 
 @contextmanager
@@ -61,7 +62,7 @@ def room_scan(east, yaw):
                      scan_time=.05, time_increment=.05 / 360, ranges=ranges)
 
 
-def test_mapping_save_reload_gnss_seed_and_outages(tmp_path, monkeypatch):
+def test_mapping_save_reload_manual_seed_and_position_outages(tmp_path, monkeypatch):
     monkeypatch.setenv("ROS_DOMAIN_ID", "163")
     monkeypatch.setenv("ROS_LOCALHOST_ONLY", "1")
     monkeypatch.setenv("ROS_LOG_DIR", str(tmp_path / "ros_logs"))
@@ -69,15 +70,13 @@ def test_mapping_save_reload_gnss_seed_and_outages(tmp_path, monkeypatch):
     peer = rclpy.create_node("gnss_survey_test")
     try:
         raw = peer.create_publisher(RawSentence, "/f1/rtk/raw", 10)
-        center = peer.create_publisher(NavSatFix, "/f1/rtk/base_fix", 10)
-        bow = peer.create_publisher(Heading, "/f1/rtk/bow_heading", 10)
         scans = peer.create_publisher(LaserScan, "/pavo2_scan", qos_profile_sensor_data)
         writer = peer.create_client(WriteState, "/write_state")
         markers, constraints, states = [], [], []
         grids = []
         peer.create_subscription(OccupancyGrid, "/map", grids.append, 1)
         peer.create_subscription(MarkerArray, "/landmark_poses_list", markers.append, 10)
-        peer.create_subscription(LandmarkList, "/f1/rtk/landmarks", constraints.append, 10)
+        peer.create_subscription(PointStamped, "/f1/rtk/position_constraint", constraints.append, 10)
         peer.create_subscription(String, "/pool_cleaning/localization_status",
                                  lambda m: states.append(json.loads(m.data)), 10)
         survey = tmp_path / "survey.pbstream"
@@ -88,27 +87,28 @@ def test_mapping_save_reload_gnss_seed_and_outages(tmp_path, monkeypatch):
         surveying = True
 
         def feed():
-            nonlocal tick, yaw, scan
+            nonlocal tick, yaw, scan, east
             tick += 1
             now = peer.get_clock().now()
             stamp = now.to_msg()
             if surveying:
-                yaw = math.radians(tick)  # turn in place at 20 degrees/s while surveying
+                yaw = .35 * math.sin(tick / 35.)
+                east = 2.3 * math.sin(tick / 80.)
                 scan = room_scan(east, yaw)
             if send_lidar:
                 scan.header = Header(stamp=(now - Duration(seconds=.05)).to_msg(), frame_id="pavo2s_frame")
                 scans.publish(scan)
             if send_gnss:
                 utc = f"12{(tick // 1200) % 60:02}{(tick // 20) % 60:02}.{(tick % 20) * 5:02}"
-                longitude = 114. + east / 102523.
-                minutes = (longitude - 114) * 60
-                body = f"GNGGA,{utc},2300.000000,N,114{minutes:09.6f},E,1,12,1.1,0,M,0,M,,"
-                header = Header(stamp=stamp, frame_id="base_link")
+                # Known mounting and ENU transform; the GGA measures the rotating antenna.
+                x = east - .191*math.cos(yaw) - .213*math.sin(yaw)
+                y = -.191*math.sin(yaw) + .213*math.cos(yaw)
+                lon = 114.25 + x / 102523.
+                lat = 23.25 + y / 110750.
+                body = (f"GNGGA,{utc},23{(lat-23)*60:09.6f},N,114{(lon-114)*60:09.6f},E,"
+                        "1,12,1.1,0,M,0,M,,")
                 raw.publish(RawSentence(header=Header(stamp=stamp, frame_id="gnss_ant1"),
                                         sentence=f"${body}*{reduce(xor, body.encode()):02X}"))
-                bow.publish(Heading(header=header, utc=utc, valid=True, quality=4,
-                                    heading_deg=(90 - math.degrees(yaw)) % 360))
-                center.publish(NavSatFix(header=header, latitude=23., longitude=longitude, altitude=math.nan))
 
         peer.create_timer(.05, feed)
 
@@ -131,30 +131,37 @@ def test_mapping_save_reload_gnss_seed_and_outages(tmp_path, monkeypatch):
             until(future.done)
             assert future.result().status.code == StatusCode.OK
         origin, map_from_enu, _ = read_reference(survey, 0)
-        assert origin.latitude == pytest.approx(23.)
-        assert origin.longitude == pytest.approx(114.)
+        assert abs(origin.latitude - 23.25) < .0001
+        assert abs(origin.longitude - 114.25) < .0001
         subprocess.run(["ros2", "run", "cartographer_ros", "cartographer_pbstream_to_ros_map",
                         "-pbstream_filename", str(survey), "-map_filestem", str(survey.with_suffix("")),
                         "-resolution", "0.05"], check=True, timeout=15)
 
-        # Reload the map at a different position and compass heading without an operator seed.
+        # Reload the map at a different position and compass heading using a manual seed.
         surveying = False
         east, yaw = .7, math.pi / 2
         scan = room_scan(east, yaw)
         with launch(tmp_path, "f1_localization", "localization.launch.py", f"map:={survey}"):
             tf = Buffer()
             listener = TransformListener(tf, peer)
-            until(lambda: states and states[-1].get("ready"), 25)
-            assert states[-1]["initial_pose_source"] == "gnss"
-            expected = map_from_enu.compose(origin.vessel_pose(23., 114. + east / 102523., 0.))
+            pose_pub = peer.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
+            until(lambda: states and pose_pub.get_subscription_count() and len(states) >= 10)
+            assert not states[-1]["initial_pose_received"] and not states[-1]["ready"]
+            x, y = origin.project(23.25, 114.25 + east / 102523.)
+            expected = map_from_enu.compose(PlanarPose(x, y, yaw))
+            seed = PoseWithCovarianceStamped()
+            seed.header = Header(stamp=peer.get_clock().now().to_msg(), frame_id="map")
+            seed.pose.pose = expected.message()
+            pose_pub.publish(seed)
+            until(lambda: states[-1]["ready"], 25)
+            assert states[-1]["initial_pose_source"] == "rviz"
             actual = tf.lookup_transform("map", "base_link", rclpy.time.Time()).transform
             assert math.hypot(actual.translation.x - expected.x, actual.translation.y - expected.y) < .35
             actual_yaw = 2 * math.atan2(actual.rotation.z, actual.rotation.w)
             assert abs(math.remainder(actual_yaw - expected.yaw, math.tau)) < .15
             # Allow one fixed-map optimization while both inputs are available.
             count = len(constraints)
-            until(lambda: len(constraints) >= count + 5 and constraints[-1].landmarks[0].id == origin.id and
-                  constraints[-1].landmarks[0].tracking_from_landmark_transform.position.y > .4)
+            until(lambda: len(constraints) >= count + 5 and constraints[-1].header.frame_id == "map")
             send_gnss = False
             last_status = states[-1]["stamp_ns"]
             end = time.monotonic() + 1.2
@@ -175,8 +182,10 @@ def test_mapping_save_reload_gnss_seed_and_outages(tmp_path, monkeypatch):
             info = subprocess.run(["cartographer_pbstream", "--all_debug_strings", "info", str(snapshot)],
                                   capture_output=True, text=True, timeout=10, check=True)
             state_text = info.stderr + info.stdout
-            assert re.search(r"#fixed_frame_pose_data: [1-9]", state_text)
-            assert "fixed_frame_origin_in_map {" in state_text  # backend actually solved for the ENU transform
+            active_id = states[-1]["trajectory_id"]
+            assert re.search(rf"Serialized data: fixed_frame_pose_data \{{\s+trajectory_id: {active_id}\s+"
+                             r"fixed_frame_pose_data \{\s+timestamp: \d+\s+pose \{", state_text)
+            assert "fixed_frame_origin_in_map {" in state_text
 
             # Retiring the GNSS trajectory must leave the backend usable for the next manual seed.
             reset = peer.create_client(Trigger, "/pool_cleaning/relocalize")

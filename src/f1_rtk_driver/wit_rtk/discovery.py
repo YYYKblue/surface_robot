@@ -3,7 +3,7 @@
 import serial
 from serial.tools import list_ports
 
-from wit_rtk.nmea import Fix, Heading, parse_sentence
+from wit_rtk.nmea import parse_sentence
 
 
 class ReceiverDiscovery:
@@ -13,7 +13,7 @@ class ReceiverDiscovery:
         self.candidates = []
         self.handle = None
         self.next_scan = 0.0
-        self.reason = "Waiting for a CH340 with checksummed GGA and HPR"
+        self.reason = "Waiting for a CH340 with two checksummed GGA sentences"
 
     def close(self):
         if self.handle is not None:
@@ -37,7 +37,7 @@ class ReceiverDiscovery:
                 return None
             self.deadline = now + 1.5
             self.partial = b""
-            self.seen = set()
+            self.gga_count = 0
         try:
             lines = (self.partial + self.handle.read(4096)).split(b"\n")
         except (OSError, serial.SerialException):
@@ -50,8 +50,8 @@ class ReceiverDiscovery:
             except ValueError:
                 continue
             if sample is not None:
-                self.seen.add(type(sample))
-        if self.seen == {Fix, Heading}:
+                self.gga_count += 1
+        if self.gga_count >= 2:
             # Transfer the verified, still-locked descriptor to the ROS reader.
             handle, self.handle = self.handle, None
             self.candidates.clear()

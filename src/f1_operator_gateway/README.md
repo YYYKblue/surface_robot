@@ -45,15 +45,15 @@ Nano 的 `deploy/f1-operator.service` 在启动前通过 `wait-operator-clock.py
 - 开始建图检查连续扫描的帧名、时间戳、角度元数据和有效回波。进入建图后使用现有手动操船；不以固定地图定位就绪作为建图条件。
 - 清洗运行/操作结果未确认时拒绝切换；在模式切换、保存操作前停止手动输出并等待租约交接。
 - 只停止本管理器启动的进程组。旧进程退出后等待 DDS 清除旧地图/节点，发现外部地图发布者或已知冲突节点则拒绝启动。
-- 切换时清除旧地图、TF 缓存、任务轨迹和定位状态，按新地图及会话时间过滤迟到状态。带地理参考的地图可用 GNSS 初始化，旧地图需要人工提供位姿。`operator_system.launch.py` 和 `operator_bringup.launch.py` 均默认启用融合，传 `use_rtk:=false` 可做纯雷达对照。Nano 由独立的 `f1-rtk.service` 开机采集。
+- 切换时清除旧地图、TF 缓存、任务轨迹和定位状态，按新地图及会话时间过滤迟到状态。操作者在 App 或 RViz 提供本次定位的初始位姿。`operator_system.launch.py` 和 `operator_bringup.launch.py` 均默认启用融合，传 `use_rtk:=false` 可做纯雷达对照。Nano 由独立的 `f1-rtk.service` 开机采集。
 - 子模式任一进程退出会结束整组模式，网关报告错误；网关/bridge 退出时系统入口关闭。常驻网关不会因正常结束建图而退出。
 - 目录扫描、预览、几何推导、进程等待和栅格导出在后台工作线程执行；Cartographer WriteState 使用 ROS 异步服务，不阻塞手动控制超时检查。
 
 ### 地图文件与恢复
 
-网关从 `/f1/rtk/status`、`/f1/rtk/bow_heading` 和 `/f1/rtk/corrections` 取最新观测，通过 WebSocket 的 `telemetry.rtk` 提供定位解、船头角度和差分状态。航向无效时为 null。串口断开、数据过期及差分鉴权失败都有独立显示。
+网关从 `/f1/rtk/status` 和 `/f1/rtk/corrections` 取最新观测，通过 WebSocket 的 `telemetry.rtk` 提供定位解和差分状态。串口断开、数据过期及差分鉴权失败都有独立显示。
 
-开阔水域建图可给网关进程设置 `F1_MAPPING_BACKEND=open_water`。App 仍使用现有建图、保存、选图按钮。该模式的扫描健康检查订阅 `/pavo2_scan/water`，接受完整角度元数据下的新鲜无回波束，借此允许在湖心开始和保存地图。写入地图还需接收机固定位置和有效固定航向。部署时同时更新雷达、建图与网关三个包。[开阔水域参数及限制](../f1_mapping_bringup/README.md#湖心整圈无回波建图)
+App 使用现有建图、保存和选图按钮。网关检查普通扫描 `/pavo2_scan`，开始建图和保存时需要新鲜有效回波。无回波束不更新栅格。[建图观测规则](../f1_mapping_bringup/README.md#无回波区域)
 
 名称只接受中文/字母/数字/下划线/短横线（最多 80 字符），拒绝路径和 Windows 保留名称。空名称使用 Nano 配置时区的时间戳；重名自动加序号。保存先写 `maps/.snapshot-<id>/`，调用 `/write_state`（包含未完成子图），再运行 `cartographer_pbstream_to_ros_map` 导出相同快照。
 
@@ -100,7 +100,7 @@ ros2 launch f1_operator_gateway operator_bringup.launch.py \
 - 可指定 `rectangle_config`、`l_config`、`localization_config`、`bridge_config`、`scan_topic`；已有雷达 TF 时设 `publish_lidar_tf:=false`。
 - 需要现场实际输出时加入 `output_enabled:=true`。复用的 bridge 需自行配置对应串口、运动、方向和第五路许可。
 - 支持 `start_rviz:=true`，App 初始位姿发布不依赖 RViz 运行。
-- 类型选择只改变任务类型。换地图后会重新初始化定位，有地理参考且观测合格时可自动初始化，两种初始化方式都要重新等待定位稳定。
+- 类型选择只改变任务类型。换地图后会重新初始化定位，需重新指定初始位姿并等待雷达匹配稳定。
 
 监听默认 `127.0.0.1:8765`。跨机设 `bind_address:=0.0.0.0`，Windows 连接 Nano 实际 IP。当前仍用于可信局域网，没有新增 TLS 或登录认证。
 

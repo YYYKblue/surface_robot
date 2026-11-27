@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import fcntl
 import math
-import os
 import time
 import uuid
 
@@ -26,7 +25,6 @@ class RuntimeControl:
         for name, value in defaults.items():
             self.declare_parameter(name, value)
         self.runtime_enabled = bool(self.get_parameter("managed_runtime").value)
-        self.open_water_scan = self.runtime_enabled and os.environ.get("F1_MAPPING_BACKEND") == "open_water"
         self.runtime_pending = None
         self.runtime_process = None
         self.runtime_pool = None
@@ -83,8 +81,7 @@ class RuntimeControl:
             and abs(message.angle_min + (len(message.ranges)-1)*message.angle_increment - message.angle_max)
                 <= max(.0001, abs(message.angle_increment)*1.5)
             and stamp > previous and 0 <= age < 500_000_000
-            and any(message.range_min <= x <= message.range_max or (self.open_water_scan and x == math.inf)
-                    for x in message.ranges))
+            and any(x > 0 and message.range_min <= x <= message.range_max for x in message.ranges))
 
     def _runtime_scan_fresh(self):
         return self.runtime_scan_valid and time.monotonic() - self.runtime_scan_received < .5

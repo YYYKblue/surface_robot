@@ -1,5 +1,4 @@
-# HPR receipt time on the ROS clock. heading uses the antenna frame and
-# ANT1 -> ANT2 baseline; bow_heading uses the base frame and its forward axis.
+# Legacy type for recorded HPR observations.
 std_msgs/Header header
 # Receiver UTC time of day as hhmmss.ss; empty when unavailable.
 string utc

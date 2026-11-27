@@ -16,7 +16,7 @@ from diagnostic_msgs.msg import DiagnosticArray
 from rclpy.time import Time
 from sensor_msgs.msg import NavSatFix, NavSatStatus
 
-from f1_interfaces.msg import Heading, RawSentence, RtkStatus
+from f1_interfaces.msg import RawSentence, RtkStatus
 
 
 GGA = (b"$GNGGA,023541.00,2304.76261531,N,11415.24485118,E,"
@@ -24,11 +24,9 @@ GGA = (b"$GNGGA,023541.00,2304.76261531,N,11415.24485118,E,"
 HPR = b"$GNHPR,023541.00,101.6490,000.2235,000.0000,4,19,0.00,0999*54\r\n"
 
 
-def at_epoch(line, utc, quality=None):
+def at_epoch(line, utc):
     fields = line[1:line.index(b"*")].split(b",")
     fields[1] = utc
-    if quality is not None:
-        fields[5] = quality  # HPR solution code
     body = b",".join(fields)
     return b"$" + body + f"*{reduce(xor, body, 0):02X}\r\n".encode()
 
@@ -75,8 +73,7 @@ def launch_driver(tmp_path, monkeypatch, config_text=None):
         stack.callback(rclpy.try_shutdown)
         probe = rclpy.create_node("rtk_test_probe")
         stack.callback(probe.destroy_node)
-        types = {"fix": NavSatFix, "heading": Heading, "status": RtkStatus, "raw": RawSentence,
-                 "base_fix": NavSatFix, "bow_heading": Heading}
+        types = {"fix": NavSatFix, "status": RtkStatus, "raw": RawSentence}
         received = {name: [] for name in types}
         for name, kind in types.items():
             probe.create_subscription(kind, f"/f1/rtk/{name}", received[name].append, 100)
@@ -116,129 +113,59 @@ def launch_driver(tmp_path, monkeypatch, config_text=None):
 def test_installed_launch_pty_and_ros_topics(tmp_path, monkeypatch):
     config = ("/f1/rtk/rtk_driver:\n  ros__parameters:\n"
               "    stale_timeout_sec: 0.8\n    reconnect_sec: 0.2\n    status_rate_hz: 5.0\n"
-              "    antenna_frame: test_ant1\n    base_frame: test_base\n")
-    with launch_driver(tmp_path, monkeypatch, config) as (_, received, until, status_matches, connect):
+              "    antenna_frame: test_ant1\n")
+    with launch_driver(tmp_path, monkeypatch, config) as (probe, received, until, matches, connect):
         until(lambda: len(received["status"]) >= 7)
-        assert observed_hz(received["status"]) == pytest.approx(5.0, rel=0.15)
+        assert observed_hz(received["status"]) == pytest.approx(5.0, rel=.15)
         master = connect()
-        # A sentence can span reads; multiple sentences can arrive in one read.
         master.write(GGA[:20])
-        time.sleep(0.06)
+        time.sleep(.06)
         master.write(GGA[20:] + HPR)
-        until(lambda: status_matches(fix_valid=True, heading_valid=True)
-              and all(received.values()) and len(received["raw"]) == 2)
+        until(lambda: matches(fix_valid=True, heading_valid=False, heading_quality=-1)
+              and len(received["raw"]) == 2 and received["fix"])
         fix = received["fix"][-1]
-        heading = received["heading"][-1]
         assert fix.header.frame_id == "test_ant1" and fix.status.status == NavSatStatus.STATUS_FIX
         assert fix.altitude == pytest.approx(41.4595)
-        assert heading.valid and heading.quality == 4 and heading.heading_deg == pytest.approx(101.649)
-        assert heading.utc == "023541.00" and heading.header.stamp.sec > 0
-        bow = received["bow_heading"][-1]
-        center = received["base_fix"][-1]
-        assert bow.header.frame_id == center.header.frame_id == "test_base"
-        assert bow.header.stamp == heading.header.stamp and center.header.stamp == fix.header.stamp
-        assert bow.valid and bow.quality == 4 and bow.utc == heading.utc
-        assert bow.heading_deg == pytest.approx(59.649)
-        assert center.status == fix.status and math.isnan(center.altitude)
-        assert (center.latitude, center.longitude) == pytest.approx(
-            (23.079376133573, 114.254083512029), abs=1e-10, rel=0)
-        assert [msg.sentence for msg in received["raw"]] == [line.decode().strip() for line in (GGA, HPR)]
-        assert received["status"][-1].fix_quality == 1 and received["status"][-1].heading_quality == 4
-
-        # A corrupt HPR must reach raw capture without refreshing the heading.
-        bad = HPR.replace(b"*54", b"*55")
-        master.write(bad + b"x" * 1100 + b"\r\n")
-        until(lambda: status_matches(fix_valid=True, heading_valid=False, rejected_lines=2)
-              and not received["heading"][-1].valid and not received["bow_heading"][-1].valid
-              and received["base_fix"][-1].status.status == NavSatStatus.STATUS_NO_FIX,
-              lambda: master.write(GGA))
-        assert math.isnan(received["base_fix"][-1].longitude)
-        assert received["heading"][-1].quality == -1 and math.isnan(received["heading"][-1].heading_deg)
-        assert bad.decode().strip() in [msg.sentence for msg in received["raw"]]
-
-        until(lambda: status_matches(fix_valid=False, heading_valid=True)
-              and received["fix"][-1].status.status == NavSatStatus.STATUS_NO_FIX, lambda: master.write(HPR))
+        assert matches(heading_age_sec=-1.)
+        for topic in ("heading", "bow_heading", "base_fix"):
+            assert probe.count_publishers("/f1/rtk/" + topic) == 0
+        master.write(GGA.replace(b"*59", b"*00"))
+        until(lambda: matches(rejected_lines=1))
+        until(lambda: matches(fix_valid=False) and received["fix"][-1].status.status == -1)
         assert math.isnan(received["fix"][-1].latitude)
-
-        master.write(at_epoch(GGA, b"023542") + at_epoch(HPR, b"023542.000"))
-        until(lambda: status_matches(fix_valid=True, heading_valid=True)
-              and received["base_fix"][-1].status.status == NavSatStatus.STATUS_FIX)
-        # Leave a complete unpaired fix and part of the next line in the old session.
-        master.write(at_epoch(GGA, b"023543") + GGA[:20])
-        until(lambda: status_matches(fix_utc="023543"))
         master.close()
+        until(lambda: matches(connected=False, fix_quality=-1))
         (tmp_path / "receiver").unlink()
-        until(lambda: status_matches(connected=False, fix_valid=False, heading_valid=False,
-                                     fix_quality=-1, heading_quality=-1)
-              and not received["bow_heading"][-1].valid
-              and received["base_fix"][-1].status.status == NavSatStatus.STATUS_NO_FIX)
         second = connect()
-        until(lambda: status_matches(connected=True, fix_valid=False, heading_valid=False))
-        before = len(received["base_fix"])
-        second.write(at_epoch(HPR, b"023543.00") + at_epoch(GGA, b"023544.00"))
-        until(lambda: status_matches(fix_utc="023544.00", fix_valid=True, heading_valid=True))
-        second.write(at_epoch(HPR, b"023544"))
-        until(lambda: len(received["base_fix"]) > before)
-        assert len(received["base_fix"]) == before + 1
-        assert received["base_fix"][-1].header.stamp == received["fix"][-1].header.stamp
-
-        # Fresh but mismatched epochs must still expire the last aligned fix.
-        mismatch = at_epoch(HPR, b"023545.2") + at_epoch(GGA, b"023545.4")
-        until(lambda: status_matches(fix_valid=True, heading_valid=True)
-              and received["base_fix"][-1].status.status == NavSatStatus.STATUS_NO_FIX,
-              lambda: second.write(mismatch))
-        second.write(at_epoch(HPR, b"023546.0") + at_epoch(GGA, b"023546.00"))
-        until(lambda: received["base_fix"][-1].status.status == NavSatStatus.STATUS_FIX)
-        second.write(at_epoch(HPR, b"023546.2", quality=b"5"))
-        until(lambda: status_matches(fix_valid=True, heading_valid=False, heading_quality=5)
-              and received["base_fix"][-1].status.status == NavSatStatus.STATUS_NO_FIX
-              and not received["bow_heading"][-1].valid)
+        second.write(GGA)
+        until(lambda: matches(fix_valid=True, fix_quality=1))
 
 
 def test_twenty_hz_receiver_stream(tmp_path, monkeypatch):
-    with launch_driver(tmp_path, monkeypatch) as (probe, received, until, status_matches, connect):
+    with launch_driver(tmp_path, monkeypatch) as (probe, received, until, matches, connect):
         master = connect()
-        # Complete a warm-up epoch before counting messages on all six subscriptions.
-        master.write(GGA + HPR)
-        until(lambda: all(received.values()) and len(received["raw"]) == 2
-              and status_matches(fix_valid=True, heading_valid=True))
+        master.write(GGA)
+        until(lambda: matches(fix_valid=True) and all(received.values()))
         for messages in received.values():
             messages.clear()
-
         epochs = [f"1200{i // 20:02d}.{(i % 20) * 5:02d}" for i in range(200)]
-        expected_raw = []
         start = time.monotonic()
         for i, utc in enumerate(epochs):
-            deadline = start + i * 0.05
+            deadline = start + i * .05
             while (remaining := deadline - time.monotonic()) > 0:
                 rclpy.spin_once(probe, timeout_sec=remaining)
-            lines = [at_epoch(kind, utc.encode()) for kind in (GGA, HPR)]
-            master.write(b"".join(lines))
-            expected_raw.extend(line.decode().strip() for line in lines)
-
-        observations = ("fix", "heading", "bow_heading", "base_fix")
-        until(lambda: all(len(received[name]) >= len(epochs) for name in observations)
-              and len(received["raw"]) >= len(expected_raw) and status_matches(fix_utc=epochs[-1]))
-        assert [msg.sentence for msg in received["raw"]] == expected_raw
-        for name in ("heading", "bow_heading"):
-            assert [msg.utc for msg in received[name]] == epochs
-            assert all(msg.valid for msg in received[name])
-        fixes, centers = received["fix"], received["base_fix"]
-        assert len(fixes) == len(centers) == len(epochs)
-        assert all(msg.status.status == NavSatStatus.STATUS_FIX for msg in centers)
-        assert [msg.header.stamp for msg in centers] == [msg.header.stamp for msg in fixes]
-        assert observed_hz(fixes) == pytest.approx(20.0, rel=0.1)
-        assert observed_hz(received["status"]) == pytest.approx(20.0, rel=0.1)
-        assert status_matches(rejected_lines=0)
-
-        # Omit HPR at .00, then deliver the next heading before its matching fix.
-        master.write(at_epoch(GGA, b"120010.00") + at_epoch(HPR, b"120010.05")
-                     + at_epoch(GGA, b"120010.05"))
-        until(lambda: len(centers) > len(epochs) and len(fixes) == len(epochs) + 2
-              and status_matches(fix_utc="120010.05"))
-        assert len(centers) == len(epochs) + 1
-        assert centers[-1].status.status == NavSatStatus.STATUS_FIX
-        assert centers[-1].header.stamp == fixes[-1].header.stamp
+            # GGA only, then good and corrupt HPR alongside identical positions.
+            extra = b"" if i < 100 else (HPR if i % 2 else HPR.replace(b"*54", b"*00"))
+            master.write(at_epoch(GGA, utc.encode()) + extra)
+        until(lambda: len(received["fix"]) == len(epochs) and matches(fix_utc=epochs[-1]))
+        assert all(f.latitude == received["fix"][0].latitude and f.longitude == received["fix"][0].longitude
+                   and f.status.status == NavSatStatus.STATUS_FIX for f in received["fix"])
+        # The simulated receiver and the status timer run on steady clocks.
+        # A host wall-clock correction changes ROS header stamps during a run.
+        elapsed = time.monotonic() - start
+        assert (len(received["fix"]) - 1) / elapsed == pytest.approx(20, rel=.1)
+        assert len(received["status"]) / elapsed == pytest.approx(20, rel=.1)
+        assert matches(heading_valid=False, rejected_lines=0)
 
 
 def test_ntrip_writes_only_rtcm_while_publishing_twenty_hz(tmp_path, monkeypatch):
@@ -260,7 +187,7 @@ def test_ntrip_writes_only_rtcm_while_publishing_twenty_hz(tmp_path, monkeypatch
             wire = bytearray()
 
             def feed(utc):
-                master.write(at_epoch(GGA.replace(b",1,18,", b",4,18,"), utc) + at_epoch(HPR, utc))
+                master.write(at_epoch(GGA.replace(b",1,18,", b",4,18,"), utc))
                 try:
                     wire.extend(os.read(master.fileno(), 65536))
                 except BlockingIOError:
@@ -284,12 +211,11 @@ def test_ntrip_writes_only_rtcm_while_publishing_twenty_hz(tmp_path, monkeypatch
                           if m.sentence.startswith("$GNGGA,") and m.sentence.split(",")[1] in epochs}
                 return [m for m in received[name] if (m.header.stamp.sec, m.header.stamp.nanosec) in stamps]
 
-            until(lambda: len(measured("fix")) >= 100 and len(measured("base_fix")) >= 100
+            until(lambda: len(measured("fix")) >= 100
                   and diagnostics and diagnostics[-1].status[0].message == "streaming")
-            assert len(measured("fix")) == len(measured("base_fix")) == 100
-            assert [m.utc for m in received["heading"] if m.utc in epochs] == epochs
+            assert len(measured("fix")) == 100
             assert observed_hz(measured("fix")) == pytest.approx(20, rel=0.1)
-            assert matches(fix_quality=4, heading_quality=4, rejected_lines=0)
+            assert matches(fix_quality=4, heading_quality=-1, rejected_lines=0)
             assert wire and len(wire) % len(rtcm()) == 0
             assert bytes(wire) == rtcm() * (len(wire) // len(rtcm()))
             values = {entry.key: entry.value for entry in diagnostics[-1].status[0].values}
@@ -314,7 +240,7 @@ def test_bad_private_config_does_not_stop_acquisition(tmp_path, monkeypatch):
         diagnostics = []
         probe.create_subscription(DiagnosticArray, "/f1/rtk/corrections", diagnostics.append, 10)
         master = connect()
-        until(lambda: matches(fix_valid=True, heading_valid=True) and diagnostics,
+        until(lambda: matches(fix_valid=True, heading_valid=False) and diagnostics,
               lambda: master.write(GGA + HPR))
         assert diagnostics[-1].status[0].message == "config_error"
         assert "test-secret" not in (tmp_path / "launch.log").read_text()

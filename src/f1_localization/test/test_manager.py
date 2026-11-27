@@ -138,9 +138,9 @@ def test_independent_manager_initialization_ready_loss_and_relocalize(monkeypatc
         assert future.result().success
         wait_for(lambda: not active and manager._finish_future is None)
         assert finishes == [1] and not manager.gate.ready
-        # A real service reply is still in flight when a manual pose replaces a GNSS seed.
+        # A real service reply is still in flight when a manual pose replaces an earlier manual seed.
         wait_for(lambda: not manager._known_active_ids)
-        assert manager._accept_initial_pose(pose, 'gnss')
+        assert manager._accept_initial_pose(pose, 'service')
         first_start = manager._start_future
         assert first_start is not None
         manual = PoseWithCovarianceStamped()

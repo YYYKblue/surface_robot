@@ -14,7 +14,7 @@
 
 2026-10-31：启动改为 `start_policy=left_ray`：从已定位船体中心沿 +y 发射射线，选第一条命中的有限墙段；命中公共角点时选择与船头 +x 的规定清洗方向夹角较小的墙。锁定墙和船中心最近投影点后，关刷使用旋转、前进/后退和左右平移进入旧版合理起始范围，再交给原沿墙控制。没有路径搜索、栅格足迹或雷达碰撞门控；此阶段不绕障。保留定位、位姿新鲜度、控制租约和停止/取消。矩形顺时针清洗后仅补齐起始边前段；L 形只清洗本次剩余路线，到终点停，不返回、不补洗。
 
-定位管理器收到合格初始位姿后，通过 Cartographer `/start_trajectory` 创建固定地图定位轨迹。带地理参考的地图可使用有效 GNSS 自动初始化，也可由操作者在 App 或 RViz2 提交初始位姿。启动入口运行栅格地图节点发布 `/map`，管理器检查轨迹状态、`map → base_link` TF 新鲜度、地图边界、雷达有效率和扫描/地图重合，并在稳定窗口后发布 `/pool_cleaning/localization_status` 的 `LOCALIZATION_READY`。边选择、靠墙和入口调整、自动换边、四边编排和按边覆盖记录已接入当前包。实船清洁效果、地图误差和现场重复证据按开发验收文档归档。
+定位管理器收到合格初始位姿后，通过 Cartographer `/start_trajectory` 创建固定地图定位轨迹。操作者在 App 或 RViz2 提交船中心及其朝向。启动入口运行栅格地图节点发布 `/map`，管理器检查轨迹状态、`map → base_link` TF 新鲜度、地图边界、雷达有效率和扫描/地图重合，并在稳定窗口后发布 `/pool_cleaning/localization_status` 的 `LOCALIZATION_READY`。边选择、靠墙和入口调整、自动换边、四边编排和按边覆盖记录已接入当前包。实船清洁效果、地图误差和现场重复证据按开发验收文档归档。
 
 Windows App 现已支持任务类型选择、初始位姿发布、启动条件和完成结果。推荐使用[网关组合入口](../f1_operator_gateway/README.md)；自动任务状态新增 `task_type/map_id/stamp_ns/run_id/completed_at_ns/can_start/start_blockers`。定位接口可通过控制器 `localization_status_topic` 指向共享管理器。人工暂停后可显式 resume 续跑，故障停机需取消再重启；完成后可直接开始新任务。
 

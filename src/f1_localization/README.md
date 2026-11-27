@@ -19,16 +19,14 @@ ros2 launch f1_localization localization.launch.py \
 
 `map:=` 接受 `.pbstream` 或配套 `.yaml` 路径。纯定位需要 `.pbstream`，定位范围计算还需要 YAML 和栅格图；请一起同步同名 `.pbstream`、`.yaml`、`.pgm`，不能只复制状态文件。支持现有 `load_state_filename:=` 兼容参数。
 
-默认启用单点位置和双天线航向辅助定位。管理器从选定的 `.pbstream` 读取已优化的地理原点和地图朝向。设备位置落在地图范围内且观测有效时，自动提交一次船中心初始位姿，状态中的 `initial_pose_source` 为 `gnss`。
+加载地图后，通过 App 或 RViz 的 `2D Pose Estimate` 给出船中心和船头朝向。定位管理器将初始位姿换算到活动轨迹的跟踪原点。雷达扫描与冻结地图匹配，任务从 `map → base_link` 取得船体位姿。
 
-融合入口 `gnss_cartographer` 运行系统安装的 Cartographer ROS 节点库。定位期间把 `/f1/rtk/landmarks` 中的观测还原为 ENU 下的船中心位置和船头角，通过 `AddFixedFramePoseData` 交给当前轨迹的二维后端。Cartographer 同时估计该轨迹与卫星坐标系之间的变换，并继续对冻结地图做激光匹配。接收机中断时激光继续工作，较长观测缺口两端之间停止插值。活动定位轨迹仍按原配置只保留最近的三个子图。
+默认启用 RTK 位置辅助。含地理参考的地图可用已保存的变换把 GGA 投影到地图坐标。没有地理参考的旧地图在人工初始化后，也可通过运动中的雷达和天线轨迹建立配准。接收机中断时雷达继续匹配。所有地图都需通过轨迹状态、TF 和扫描新鲜度、范围、位姿跳变及扫描与地图的重合检查，稳定后才发布 `LOCALIZATION_READY`。纯雷达对照可传 `use_rtk:=false`。[GNSS 输入和保存步骤](../f1_mapping_bringup/README.md#rtk-位置融合)
 
-旧地图或尚未保存地理原点的地图仍由 App 或 RViz 的 `2D Pose Estimate` 初始化。随后本次定位轨迹可融合 GNSS 相对变化。人工重定位保留操作者接管流程。所有路径都要通过轨迹状态、TF/扫描新鲜度、范围、位姿跳变、有效扫描比例及扫描/地图重合检查，稳定后才发布 `LOCALIZATION_READY`。纯雷达对照可传 `use_rtk:=false`。硬件驱动单独运行，详见[GNSS 输入和保存步骤](../f1_mapping_bringup/README.md#单点位置与双天线航向融合)。
-
-可在加载前检查地图是否含地理参考。输出中的 `reference` 是参考轨迹首节点。出现 `f1_enu_v1:` 开头的第二行时，地图包含融合建图保存的原点位姿。
+可在加载前检查地理参考。第一行 `reference` 是参考轨迹首节点，第二行是原点经纬度及其地图变换。支持新地图的 `f1_gga_v2:` 和旧地图的 `f1_enu_v1:` 标记。
 
 ```bash
-ros2 run f1_localization read_gnss_reference /path/to/reference.pbstream 0 f1_enu_v1:
+ros2 run f1_localization read_gnss_reference /path/to/reference.pbstream 0
 ```
 
 ## 接口与清洗任务接入
@@ -98,7 +96,7 @@ launch 使用安装目录中的 Lua 配置；`localization_config:=...yaml` 只�
 - `localization_node.py`：ROS 接口、TF/扫描输入、Cartographer 轨迹生命周期。
 - `map_io.py`：共用地图文件解析、栅格读取、最大空闲连通域及范围计算。
 - `gnss_reference.py`、`src/read_gnss_reference.cpp` 读取地图的 ENU 地理参考。
-- `src/gnss_cartographer.cpp` 把有效 GNSS 位置和航向交给活动定位轨迹的后端。
+- 建图包的 `src/gnss_cartographer.cpp` 把有效 ANT1 平面位置交给活动定位轨迹的后端。
 - `config/localization.lua`、`localization.rviz`：纯雷达定位和显示配置。
 
 矩形四边、大 L 路线推导继续保留在 `f1_pool_cleaning/map_profile.py`，其底层地图读取来自本包。旧 `map_profile` 的公共地图辅助函数保留导入兼容；定位包不会反向导入清洗包。
@@ -127,7 +125,7 @@ colcon test --executor sequential --packages-select f1_localization \
 colcon test-result --test-result-base build/f1_localization --verbose
 ```
 
-测试包括定位门控、地图读取、launch 组装和使用模拟服务的定位管理器。另有 `gnss_slam` 使用合成扫描和 GNSS 观测驱动真实 Cartographer，验证写入地理参考、重载自动定位、后端产生固定位姿约束、传感器数据中断、人工重定位和正常退出。测试在隔离 ROS 域使用临时地图，实船定位精度需现场确认。
+测试包括定位门控、地图读取、launch 组装和使用模拟服务的定位管理器。另有 `gnss_slam` 使用合成扫描和 GNSS 观测驱动真实 Cartographer，验证写入地理参考、重载后人工初始化、后端产生位置约束、传感器数据中断、人工重定位和正常退出。测试在隔离 ROS 域使用临时地图，实船定位精度需现场确认。
 
 ### 本次拆包验证记录（2026-10-30）
 

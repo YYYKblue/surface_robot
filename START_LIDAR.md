@@ -18,7 +18,7 @@
 | 启动入口 | `lidar_mapping.launch.py` |
 | 栅格分辨率 | 默认 `0.05 m/格` |
 
-本节展示纯雷达对照模式。单点定位与双天线辅助建图使用[融合入口](src/f1_mapping_bringup/README.md)。
+本节展示纯雷达对照模式。RTK 位置辅助建图使用[融合入口](src/f1_mapping_bringup/README.md)。
 入口自动根据 `config/lidar_planar.yaml` 发布雷达安装 TF，平面参数为 x=-0.2143195 m、y=0、yaw=π。
 实际高度未知，`base_link` 在此定义为车体中心在雷达扫描平面的投影；TF 的 z/roll/pitch=0 是二维约定，不是实测值。
 原雷达与 IMU 联合入口及配置已删除，统一使用 `lidar_mapping.launch.py`。
@@ -28,7 +28,7 @@
 
 完成一次性部署后，可在 Windows App 的“建图与选图”页执行开始建图、命名保存、保存并结束、地图预览和加载。Nano 网关复用独立的 `pavo2-scan.service` 和 `f1-rtk.service`。App 默认启用 GNSS 辅助，本文以下独立终端流程使用 `use_rtk:=false` 做纯雷达对照。
 
-地图自动写入 Nano 工作空间 `maps/`。空名称使用时间戳，重名时追加序号。地图有地理参考且当前 GNSS 观测满足条件时可自动初始化，其他情况下在 App 或 RViz 设置初始位姿。[App 操作](operator_app/README.md#建图与选图) · [开机服务](DEPLOY_NANO.md#app-建图选图与开机服务)
+地图自动写入 Nano 工作空间 `maps/`。空名称使用时间戳，重名时追加序号。加载地图后，在 App 或 RViz 设置船中心和船头方向。[App 操作](operator_app/README.md#建图与选图) · [开机服务](DEPLOY_NANO.md#app-建图选图与开机服务)
 
 下面的手动终端流程保留用于独立建图和排查；不要与 App 受管模式重复启动。
 
