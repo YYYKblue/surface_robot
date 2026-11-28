@@ -200,3 +200,36 @@ def test_unload_clears_runtime_only_after_child_and_graph_exit(node):
     tick_until(node, lambda: node.runtime_pending is None)
     assert node.runtime['mode'] == 'idle' and not node.runtime['current_map']
     assert node.map_data is None and node.pose is None and not node.tasks
+
+
+def test_lake_snapshot_without_echo_keeps_track_on_export_retry(node, monkeypatch):
+    from operator_gateway.tracks import SurveyTrack
+    node.runtime.update(mode='mapping', phase='MAPPING')
+    node.runtime_scan_valid = False
+    node.survey_track = SurveyTrack()
+    for i in range(3):
+        node.survey_track.update(dict(x=float(i), y=0., yaw=.5, stamp=dict(sec=i+1, nanosec=0)), 'gnss_imu')
+    node.survey_track.update(None, 'unavailable')
+    node.survey_track.update(dict(x=9., y=1., yaw=.7, stamp=dict(sec=10, nanosec=0)), 'lidar')
+    now = node.get_clock().now().nanoseconds
+    node.survey_status = (now, {'source': 'gnss_imu'})
+    node._runtime_request('app', request('save', name='lake'))
+    tick_until(node, lambda: node.runtime_pending['stage'] == 'writing')
+    write, future = node.write_state_client.calls[0]
+    Path(write.filename).write_bytes(b'state')
+    future.set_result(SimpleNamespace(status=SimpleNamespace(code=0)))
+    def fail(*args):
+        raise RuntimeError("export interrupted")
+    monkeypatch.setattr('operator_gateway.runtime.export_map', fail)
+    tick_until(node, lambda: node.runtime_pending is None)
+    assert len(node.map_store.recovered()) == 1
+    monkeypatch.setattr('operator_gateway.runtime.export_map',
+                        lambda stem, *args: triplet(Path(stem).parent, Path(stem).name))
+    node._runtime_request('app', request('retry_export', name='lake'))
+    tick_until(node, lambda: node.runtime_pending is None)
+    import json
+    track = json.loads(node.map_store.path('lake', '.track.json').read_text())
+    assert track['samples'][-1] == [10_000_000_000, 9., 1., .7, 'lidar', 1]
+    assert node.map_store.preview('lake')['survey'] == [[[0., 0.], [1., 0.], [2., 0.]], [[9., 1.]]]
+    node.map_store.delete('lake')
+    assert not node.map_store.path('lake', '.track.json').exists()

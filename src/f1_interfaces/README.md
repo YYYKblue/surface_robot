@@ -8,6 +8,7 @@
 | msg | `ControlState` | 硬件桥控制状态 |
 | msg | `WallObservation` | 墙面与周边空间观测 |
 | msg | `EdgeTarget` | 固定地图位姿生成的目标边/左墙上下文 |
+| msg | `SurveyStatus` | 跨湖建图与定位的轨迹编号、地理配准、位置与航向有效性以及当前位姿来源 |
 | msg | `Wt102Sample` | WT102 串口接收时间、数据流编号、测量类型和 SI 值 |
 | msg | `Heading` | 供历史航向录包解码 |
 | msg | `RtkStatus` | 接收机串口状态、定位质量、有效性和观测年龄，保留历史航向字段 |

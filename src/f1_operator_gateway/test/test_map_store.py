@@ -124,3 +124,17 @@ def test_delete_rejects_symlinks_and_snapshot_path_escape(tmp_path):
     with pytest.raises(ValueError):
         store.delete('bad', '../outside')
     assert outside.read_bytes() == b'private'
+
+
+def test_unwritable_track_releases_reservation(tmp_path, monkeypatch):
+    store = MapStore(tmp_path)
+    original = Path.write_text
+    def fail(path, *args, **kwargs):
+        if path.name.endswith('.track.json'):
+            raise OSError('disk full')
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'write_text', fail)
+    with pytest.raises(OSError, match='disk full'):
+        store.reserve('survey', [(1, 0., 0., .1, 'lidar', 0)])
+    assert not list(store.root.iterdir())
+    assert store.reserve('survey')['name'] == 'survey'

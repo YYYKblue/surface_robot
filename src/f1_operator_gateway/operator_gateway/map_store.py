@@ -10,6 +10,8 @@ import uuid
 
 import yaml
 
+from .tracks import survey_segments
+
 
 class MapStore:
     def __init__(self, workspace, timezone="Asia/Shanghai"):
@@ -97,13 +99,15 @@ class MapStore:
         cells = np.full(pixels.shape, -1, dtype=np.int8)
         cells[probability < float(meta["free_thresh"])] = 0
         cells[probability > float(meta["occupied_thresh"])] = 100
-        return dict(frame_id="map", revision=name + ":" + str(self.path(name, ".pgm").stat().st_mtime_ns),
+        track_path = self.path(name, ".track.json")
+        track = json.loads(track_path.read_text()) if track_path.is_file() else {}
+        return dict(survey=survey_segments(track.get("samples", [])), frame_id="map", revision=name + ":" + str(self.path(name, ".pgm").stat().st_mtime_ns),
                     resolution=float(meta["resolution"]) * stride,
                     width=cells.shape[1], height=cells.shape[0],
                     origin=dict(zip(("x", "y", "yaw"), meta["origin"])),
                     data=np.flipud(cells).reshape(-1).tolist())
 
-    def reserve(self, requested):
+    def reserve(self, requested, track=()):
         base = self.name(requested) or datetime.now(self.timezone).strftime("%Y%m%d_%H%M%S")
         for index in range(10000):
             name = base if index == 0 else f"{base[:74]}_{index:02d}"
@@ -114,14 +118,28 @@ class MapStore:
             except FileExistsError:
                 continue
             os.close(fd)
-            if any((self.root / (name + s)).exists() for s in (".pbstream", ".yaml", ".pgm")):
+            if any((self.root / (name + s)).exists() for s in (".pbstream", ".yaml", ".pgm", ".track.json")):
                 marker.unlink()
                 continue
             directory = self.root / (".snapshot-" + uuid.uuid4().hex)
-            directory.mkdir()
-            transaction = dict(name=name, directory=str(directory), marker=str(marker),
-                               stem=str(directory / name))
-            (directory / "snapshot.json").write_text(json.dumps(transaction, ensure_ascii=False), encoding="utf-8")
+            try:
+                directory.mkdir()
+            except OSError:
+                marker.unlink()
+                raise
+            try:
+                transaction = dict(name=name, directory=str(directory), marker=str(marker),
+                                   stem=str(directory / name))
+                if track:
+                    track_path = directory / (name + ".track.json")
+                    track_path.write_text(json.dumps(dict(frame_id="map", fields=[
+                        "stamp_ns", "x", "y", "yaw_rad", "source", "segment"], samples=track),
+                        separators=(",", ":"), allow_nan=False), encoding="utf-8")
+                (directory / "snapshot.json").write_text(json.dumps(transaction, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                shutil.rmtree(directory)
+                marker.unlink()
+                raise
             return transaction
         raise ValueError("地图重名过多，请换一个名称")
 
@@ -137,6 +155,8 @@ class MapStore:
         staged.root, staged.timezone = directory, self.timezone
         staged.validate(name)
         destinations = [self.path(name, s) for s in (".pbstream", ".pgm", ".yaml")]
+        if (directory / (name + ".track.json")).is_file():
+            destinations.insert(-1, self.path(name, ".track.json"))
         if any(p.exists() for p in destinations):
             raise ValueError("目标地图已存在，未覆盖；快照保留在 " + str(directory))
         linked = []
@@ -176,7 +196,7 @@ class MapStore:
                 sources.append(marker)
         else:
             directory = None
-            sources = [self.path(name, suffix) for suffix in (".yaml", ".pgm", ".pbstream")]
+            sources = [self.path(name, suffix) for suffix in (".yaml", ".pgm", ".pbstream", ".track.json")]
             sources = [p for p in sources if p.exists()]
         if any(p.is_symlink() or not p.is_file() for p in sources):
             raise ValueError("删除对象必须是普通文件，不能含符号链接或目录")

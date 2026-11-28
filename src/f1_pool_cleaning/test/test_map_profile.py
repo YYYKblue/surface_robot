@@ -224,3 +224,14 @@ def test_successive_polygon_left_turns_are_not_mistaken_for_smooth_arcs(tmp_path
     # Intersections at shallow corners amplify pixel fitting error.
     assert actual == pytest.approx(expected, abs=.30)
     assert all(turn > 0 for turn in route.turns_rad)
+
+
+def test_shore_only_survey_has_no_task_geometry(tmp_path):
+    from f1_pool_cleaning.map_profile import profile
+    path = tmp_path / "shore.yaml"
+    path.write_text("image: shore.pgm\nresolution: .1\norigin: [0, 0, 0]\n"
+                    "negate: 0\nfree_thresh: .196\noccupied_thresh: .65\n")
+    path.with_suffix(".pgm").write_bytes(b"P5\n3 1\n255\n" + bytes((64, 128, 180)))
+    tasks = profile(path, allow_empty_water=True)
+    assert tasks.rectangle is tasks.route is None
+    assert 'area_patrol' in tasks.errors and tasks.free_area_m2 == 0.

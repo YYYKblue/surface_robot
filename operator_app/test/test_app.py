@@ -885,3 +885,25 @@ def test_water_tab_reports_range_disconnect_and_expiry(app):
         assert all(label.text() == "无实时遥测" for label in window.water_readings.values())
     finally:
         window.close()
+
+
+def test_survey_track_outside_raster_stays_visible_and_resets_by_session(app, monkeypatch):
+    monkeypatch.setattr(SocketWorker, "start", lambda self: None)
+    window = OperatorWindow("unused")
+    try:
+        window._message(dict(type="telemetry", runtime=dict(session_id="lake", mode="mapping")))
+        packet = mapping()
+        packet.update(runtime_session_id="lake")
+        window._message(packet)
+        segments = [[[0., 0.], [35., 0.]], [[40., 1.]]]
+        window._message(dict(type="tracks", runtime_session_id="lake", survey=segments))
+        assert window.canvas.survey == segments
+        point = window.canvas.map_to_screen(40., 1.)
+        assert window.canvas.rect().contains(point.toPoint())
+        assert len(window.canvas._screen_tracks()) == 2
+        window._message(dict(type="telemetry", runtime=dict(session_id="next", mode="idle")))
+        assert not window.canvas.survey
+        window._message(dict(type="tracks", runtime_session_id="lake", survey=segments))
+        assert not window.canvas.survey
+    finally:
+        window.close()

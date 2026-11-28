@@ -115,7 +115,8 @@ class MappingPanel:
             if action == "start":
                 enabled = enabled and mode != "mapping" and runtime.get("scan_fresh", False)
             elif action in ("save", "save_end"):
-                enabled = (enabled and mode == "mapping" and runtime.get("scan_fresh")
+                enabled = (enabled and mode == "mapping" and (runtime.get("scan_fresh")
+                           or (runtime.get("survey") or {}).get("source") == "gnss_imu")
                            and runtime.get("map_available") and runtime.get("pose_fresh"))
             elif action == "discard":
                 enabled = enabled and mode == "mapping"
@@ -138,6 +139,16 @@ class MappingPanel:
         else:
             text = PHASE_LABELS.get(runtime.get("phase"), "等待状态")
             text += " · 雷达：" + ("正常" if runtime.get("scan_fresh") else "无有效扫描")
+            survey = runtime.get("survey") or {}
+            if survey:
+                sources = {"lidar": "岸线扫描", "gnss_imu": "湖面 RTK＋IMU 推算",
+                           "new_shore": "按推算船位接入新岸线", "unavailable": "位姿不可用"}
+                text += " · " + sources.get(survey["source"], survey["source"])
+                text += "\n" + ("地理参考已建立" if survey["registered"] else "等待岸边移动配准")
+                if survey["registered"] and not survey["position_fresh"]:
+                    text += " · 等待有效 GGA"
+                if not survey["heading_valid"]:
+                    text += " · 等待连续航向参考"
             text += "\n" + runtime.get("message", "")
         self.mapping_status.setText(text)
         self.current_map_label.setText("当前使用地图：" + (runtime.get("current_map") or "无"))
@@ -176,10 +187,10 @@ class MappingPanel:
             self.preview_dialog.setWindowTitle("地图预览：" + packet.get("name", ""))
             self.preview_dialog.resize(850, 650)
             layout = QVBoxLayout(self.preview_dialog)
-            layout.addWidget(QLabel("仅预览保存的地图；不显示当前机器人位姿或轨迹。"))
+            layout.addWidget(QLabel("保存的地图与建图航迹" if packet["preview"].get("survey") else "保存的栅格地图"))
             canvas = MapCanvas()
             canvas.setToolTip("保存的栅格地图预览")
-            canvas.set_telemetry(dict(type="map", map=packet["preview"],
+            canvas.set_telemetry(dict(type="map", map=packet["preview"], survey=packet["preview"].get("survey", []),
                                       _map_image=packet.get("_map_image")))
             layout.addWidget(canvas)
             self.preview_dialog.show()
@@ -204,6 +215,7 @@ class MappingPanel:
             previous = self.runtime_session
             self._retire_runtime_session(previous)
             self.runtime_session = session
+            self.canvas.set_telemetry({"survey": self._survey_packet.get(session, [])})
             self._runtime_changed_at = packet.get("_received_monotonic", time.monotonic())
             # A map may finish decoding before or after its matching telemetry.
             # Preserve matching/future maps, but never retain the previous session's map.

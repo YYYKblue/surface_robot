@@ -10,6 +10,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ControlState.msg"
   "msg/WallObservation.msg"
   "msg/Wt102Sample.msg"
+  "msg/SurveyStatus.msg"
   "msg/EffortPreview.msg"
   "msg/CleaningStatus.msg"
   "msg/EdgeTarget.msg"

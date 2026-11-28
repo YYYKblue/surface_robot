@@ -18,7 +18,7 @@ from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
 from tf2_ros import Buffer, TransformListener
 
-from f1_interfaces.msg import ActuatorCommand, ControlState, RtkStatus, WaterQualityReading
+from f1_interfaces.msg import ActuatorCommand, ControlState, RtkStatus, SurveyStatus, WaterQualityReading
 from f1_interfaces.srv import AcquireControl, ReleaseControl
 
 from .protocol import ManualInput, decode
@@ -56,6 +56,7 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self._init_runtime()
+        self.create_subscription(SurveyStatus, "/f1/survey/status", self._survey_update, 1)
         self.control_state = {}
         self.diagnostic_history = DiagnosticHistory(self._diagnostic_event)
         self.telemetry_sequence = 0
@@ -158,6 +159,9 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         for event in self.hub.poll():
             self._handle_event(event)
         self._read_pose()
+        if getattr(self, "runtime_enabled", False) and self.runtime_accept_map:
+            survey = self._survey_view()
+            self.survey_track.update(self.pose, survey.get("source"), survey.get("trajectory_id"))
         self._task_tick()
         self._runtime_tick()
         self._publish_map()
@@ -408,7 +412,7 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         self.manual_releases.append(self.release_client.call_async(ReleaseControl.Request(token=token)))
 
     def _read_pose(self):
-        if self.runtime_enabled and not self.runtime_accept_map:
+        if (self.runtime_enabled and not self.runtime_accept_map) or self._survey_view().get("source") == "unavailable":
             self.pose = None
             return
         try:
@@ -438,12 +442,15 @@ class OperatorGateway(RuntimeControl, TaskControl, Node):
         if (plan.get("plan_id") and plan["plan_id"] == task.get("plan_id")
                 and plan.get("map_id") == task.get("map_id")):
             tasks["area_patrol"]["patrol_plan"] = plan
-        return dict(type="tracks", session_id=self.diagnostic_history.session, tasks=tasks)
+        packet = dict(type="tracks", session_id=self.diagnostic_history.session, tasks=tasks)
+        if getattr(self, "runtime_enabled", False) and self.runtime["mode"] in ("mapping", "localization"):
+            packet.update(runtime_session_id=self.runtime["session_id"], survey=self.survey_track.display())
+        return packet
 
     def _publish_tracks(self):
         packet = self._tracks_packet()
-        if packet["tasks"] != self._last_tracks:
-            self._last_tracks = packet["tasks"]
+        if packet != self._last_tracks:
+            self._last_tracks = packet
             self.hub.broadcast(packet)
 
     def _water_sample(self, message):

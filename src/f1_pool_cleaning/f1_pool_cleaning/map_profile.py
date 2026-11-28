@@ -115,7 +115,7 @@ class MapProfile:
 
     map_yaml: Path
     resolution_m: float
-    free_bounds: tuple  # (x_min, y_min, x_max, y_max) of the largest free region
+    free_bounds: tuple | None  # (x_min, y_min, x_max, y_max) of the largest free region
     free_area_m2: float
     rectangle: RectangleProfile | None = None
     route: RouteProfile | None = None
@@ -254,14 +254,17 @@ def route_profile(occupancy=None, path=None, chain_index=0):
                               for chain, _ in chains))
 
 
-def profile(path):
+def profile(path, *, allow_empty_water=False):
     """Load one map once and derive every geometry that it supports.
 
     Faults are collected in :attr:`MapProfile.errors` so a launch can report
     what the selected map offers and what it is missing, instead of failing on
     the first check.
     """
-    occupancy = load_occupancy(path)
+    occupancy = load_occupancy(path, allow_empty_water=allow_empty_water)
+    if not occupancy.region.any():
+        errors = {key: "地图尚无达到自由阈值的水域" for key in ("rectangle", "route", "area_patrol")}
+        return MapProfile(resolve_map_files(path)[0], occupancy.resolution_m, None, 0., errors=errors)
     errors = {}
     rectangle = route = None
     try:

@@ -23,6 +23,16 @@ ros2 launch f1_localization localization.launch.py \
 
 默认启用 RTK 位置辅助。含地理参考的地图可用已保存的变换把 GGA 投影到地图坐标。没有地理参考的旧地图在人工初始化后，也可通过运动中的雷达和天线轨迹建立配准。接收机中断时雷达继续匹配。所有地图都需通过轨迹状态、TF 和扫描新鲜度、范围、位姿跳变及扫描与地图的重合检查，稳定后才发布 `LOCALIZATION_READY`。纯雷达对照可传 `use_rtk:=false`。[GNSS 输入和保存步骤](../f1_mapping_bringup/README.md#rtk-位置融合)
 
+在有地理参考的湖区地图上，可执行下列命令，启动后在 App 或 RViz 给出船体中心与船首方向。
+
+```bash
+ros2 launch f1_localization localization.launch.py map:=/绝对路径/湖区.pbstream use_wt102_heading:=true
+ros2 topic echo /f1/survey/status
+```
+
+在全无回波的位置也可从人工初始航向开始推算。恢复扫描后，管理器对照已保存的固定栅格检查重合度。仅有 RTK＋IMU 估计时，清洗任务的 `localization_ready` 为假。可在已知位置重新提交初始位姿，开始新的积分段。已另行启动串口驱动时加 `start_wt102_driver:=false`。
+
+
 可在加载前检查地理参考。第一行 `reference` 是参考轨迹首节点，第二行是原点经纬度及其地图变换。支持新地图的 `f1_gga_v2:` 和旧地图的 `f1_enu_v1:` 标记。
 
 ```bash

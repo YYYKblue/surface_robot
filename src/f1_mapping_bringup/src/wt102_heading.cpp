@@ -14,7 +14,7 @@ const auto kHistory = cc::FromSeconds(2.);
 
 thread_local const HeadingHistory* wt102_heading = nullptr;
 
-void HeadingHistory::Clear() { samples_.clear(); }
+void HeadingHistory::Clear() { samples_.clear(); ++segment_; }
 
 void HeadingHistory::Add(Time stamp, uint64_t stream, double rate) {
   if (!std::isfinite(rate)) {
@@ -46,6 +46,17 @@ double HeadingHistory::AngleAt(Time time) const {
   const double dt = cc::ToSeconds(time - prev.stamp);
   const double fraction = dt / cc::ToSeconds(next->stamp - prev.stamp);
   return prev.angle + dt * (prev.rate + .5 * fraction * (next->rate - prev.rate));
+}
+
+std::optional<HeadingHistory::Time> HeadingHistory::Latest() const {
+  if (samples_.empty()) return std::nullopt;
+  return samples_.back().stamp;
+}
+
+std::optional<HeadingHistory::Integral> HeadingHistory::At(Time stamp) const {
+  if (samples_.size() < 2 || stamp < samples_.front().stamp ||
+      stamp > samples_.back().stamp + kMaxHold) return std::nullopt;
+  return Integral{segment_, AngleAt(stamp)};
 }
 
 std::optional<double> HeadingHistory::Delta(Time start, Time end) const {

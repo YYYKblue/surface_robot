@@ -17,7 +17,7 @@ def nodes(context):
         arguments = {key: value(key) for key in ("scan_topic", "publish_lidar_tf", "use_rtk", "resolution", "use_wt102_heading", "wt102_port")}
     else:
         package, filename = "f1_operator_gateway", "operator_bringup.launch.py"
-        arguments = {key: value(key) for key in ("map", "scan_topic", "publish_lidar_tf", "use_rtk", "output_enabled")}
+        arguments = {key: value(key) for key in ("map", "scan_topic", "publish_lidar_tf", "use_rtk", "use_wt102_heading", "wt102_port", "output_enabled")}
         arguments.update(start_bridge="false", start_gateway="false")
         for key in ("rectangle_config", "l_config", "patrol_config", "localization_config"):
             if value(key):

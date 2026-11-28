@@ -13,6 +13,9 @@ namespace f1_mapping {
 class HeadingHistory {
  public:
   using Time = cartographer::common::Time;
+  struct Integral { uint64_t segment; double angle; };
+  std::optional<Integral> At(Time stamp) const;
+  std::optional<Time> Latest() const;
   void Clear();
   void Add(Time stamp, uint64_t stream, double rate);
   std::optional<double> Delta(Time start, Time end) const;
@@ -25,7 +28,7 @@ class HeadingHistory {
   };
   double AngleAt(Time time) const;
   std::deque<Sample> samples_;
-  uint64_t stream_ = 0;
+  uint64_t stream_ = 0, segment_ = 0;
 };
 
 // This executable spins a single ROS executor. Rate and scan callbacks as

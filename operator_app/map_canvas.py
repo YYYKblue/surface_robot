@@ -19,6 +19,8 @@ class MapCanvas(QWidget):
         super().__init__(parent)
         self.setMinimumSize(680, 500)
         self.telemetry = {}
+        self.survey = []
+        self._survey_bounds = None
         self.task_overlay = {}
         self.overlay_live = False
         self.map_image = None
@@ -61,6 +63,10 @@ class MapCanvas(QWidget):
             self.telemetry.pop("map", None)
             self.candidate = self.drag_start = None
             self.map_changed.emit()
+        if "survey" in packet:
+            self.survey = packet["survey"]
+            self._survey_bounds = None
+            self._track_cache_key = None
         # Do not retain legacy scan/expected data in the display.
         if "pose" in packet:
             self.telemetry["pose"] = packet["pose"]
@@ -87,14 +93,14 @@ class MapCanvas(QWidget):
         task = self.task_overlay
         frame = (self.telemetry.get("map") or {}).get("frame_id")
         actual = task.get("actual_track") or {}
-        if (actual.get("frame_id") == frame and actual.get("map_id") == task.get("map_id")
+        if (actual.get("segments") and actual.get("frame_id") == frame and actual.get("map_id") == task.get("map_id")
                 and actual.get("run_id") == task.get("run_id")):
             return [(segment, "#00877e", False) for segment in actual.get("segments", [])]
-        return []
+        return [(segment, "#00877e", False) for segment in self.survey]
 
     def _screen_tracks(self):
         actual = self.task_overlay.get("actual_track")
-        key = (id(actual), self.map_revision, self.width(), self.height(),
+        key = (id(actual), self._geometry(), self.map_revision, self.width(), self.height(),
                self.task_overlay.get("map_id"), self.task_overlay.get("run_id"))
         if key != self._track_cache_key:
             polylines = []
@@ -135,8 +141,23 @@ class MapCanvas(QWidget):
         if width <= 0 or height <= 0:
             return None
         area = self.rect().adjusted(28, 28, -28, -28)
-        scale = min(area.width()/width, area.height()/height)
-        return scale, area.center().x()-width*scale/2, area.center().y()+height*scale/2, width, height
+        left, bottom, right, top = 0., 0., width, height
+        if self.survey:
+            origin = mapping.get("origin", {})
+            x, y, yaw = origin.get("x", 0.), origin.get("y", 0.), origin.get("yaw", 0.)
+            c, s = math.cos(yaw), math.sin(yaw)
+            key = (id(self.survey), x, y, yaw)
+            if self._survey_bounds is None or self._survey_bounds[0] != key:
+                points = [(c*(px-x)+s*(py-y), -s*(px-x)+c*(py-y))
+                          for segment in self.survey for px, py in segment]
+                self._survey_bounds = (key, (min(p[0] for p in points), min(p[1] for p in points),
+                                              max(p[0] for p in points), max(p[1] for p in points))
+                                       if points else (0., 0., 0., 0.))
+            lx, ly, hx, hy = self._survey_bounds[1]
+            left, bottom, right, top = min(left, lx), min(bottom, ly), max(right, hx), max(top, hy)
+        scale = min(area.width()/(right-left), area.height()/(top-bottom))
+        return (scale, area.center().x()-(left+right)*scale/2,
+                area.center().y()+(bottom+top)*scale/2, width, height)
 
     def map_to_screen(self, x, y):
         geometry = self._geometry()
@@ -225,7 +246,7 @@ class MapCanvas(QWidget):
         geometry = self._geometry()
         if geometry and self.map_image is not None:
             scale, ox, oy, width, height = geometry
-            scaled_key = (self.map_image.cacheKey(), round(width*scale), round(height*scale))
+            scaled_key = (self.map_image.cacheKey(), max(1, round(width*scale)), max(1, round(height*scale)))
             if scaled_key != self._scaled_key:
                 self._scaled_image = self.map_image.scaled(scaled_key[1], scaled_key[2],
                                                           Qt.IgnoreAspectRatio, Qt.FastTransformation)
@@ -234,7 +255,7 @@ class MapCanvas(QWidget):
             painter.setBrush(Qt.NoBrush)
             plan = self.task_overlay.get("patrol_plan")
             if plan and plan.get("frame_id") == "map":
-                key = (id(plan), scaled_key, self.width(), self.height(), self.map_revision)
+                key = (id(plan), scaled_key, geometry, self.width(), self.height(), self.map_revision)
                 if key != getattr(self, "_plan_key", None):
                     self._plan_line = QPolygonF([self.map_to_screen(*point) for point in plan["points"]])
                     self._plan_key = key

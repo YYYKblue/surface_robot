@@ -4,7 +4,7 @@
 #include "cartographer/mapping/pose_extrapolator.h"
 #include "cartographer/transform/transform.h"
 #include "gtest/gtest.h"
-#include "wt102_heading.h"
+#include "lake_pose.h"
 
 namespace {
 namespace cc = cartographer::common;
@@ -55,5 +55,28 @@ TEST(Wt102, ActualCartographerPredictionUsesLastMatchedPoseAndFallsBack) {
   auto fallback = aided.ExtrapolatePose(at(90));
   f1_mapping::wt102_heading = nullptr;
   EXPECT_NEAR(ct::GetYaw(fallback), ct::GetYaw(plain.ExtrapolatePose(at(90))), 1e-8);
+}
+
+TEST(Wt102, LongSegmentHasConstantHistoryAndDoesNotBridgeReconnect) {
+  f1_mapping::HeadingHistory rates;
+  f1_mapping::LakePose lake(rates);
+  rates.Add(at(0), 1, .01);
+  rates.Add(at(10), 1, .01);
+  lake.Start(0, at(10), false);
+  lake.Scan(at(10), ct::Embed3D(ct::Rigid2d({0., 0.}, .3)));
+  for (int t = 20; t <= 1800010; t += 10) rates.Add(at(t), 1, .01);
+  lake.Fix(at(1800010), {3., 400.}, 1.);
+  auto pose = lake.Estimate(at(1800010));
+  ASSERT_TRUE(pose);
+  EXPECT_NEAR(std::remainder(ct::GetYaw(*pose) - 18.3, 2*M_PI), 0., 1e-8);
+  EXPECT_DOUBLE_EQ(pose->translation().y(), 400.);
+  EXPECT_FALSE(rates.Delta(at(10), at(1800010)));
+  rates.Add(at(1800020), 2, .01);
+  rates.Add(at(1800030), 2, .01);
+  EXPECT_FALSE(lake.Estimate(at(1800030)));
+  lake.Scan(at(1800030), ct::Rigid3d::Identity());
+  EXPECT_TRUE(lake.Estimate(at(1800030)));
+  lake.Start(1, at(1800030), true);
+  EXPECT_FALSE(lake.Estimate(at(1800030)));
 }
 }  // namespace

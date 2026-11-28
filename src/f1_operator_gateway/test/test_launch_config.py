@@ -32,7 +32,7 @@ def inspect_launch(monkeypatch, tmp_path):
         else original_share(name)))
     monkeypatch.setenv("ROS_LOG_DIR", str(tmp_path / "ros_logs"))
     from f1_pool_cleaning import map_profile
-    monkeypatch.setattr(map_profile, "profile", lambda _: SimpleNamespace(
+    monkeypatch.setattr(map_profile, "profile", lambda _, **options: SimpleNamespace(
         rectangle=object(), route=object(), errors={}))
 
     def inspect(managed=True, **overrides):

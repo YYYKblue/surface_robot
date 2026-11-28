@@ -65,11 +65,18 @@ ros2 launch f1_mapping_bringup lidar_mapping.launch.py use_wt102_heading:=true
 ros2 bag record -o wt102_survey /pavo2_scan /f1/rtk/raw /f1/wt102/sample /tf_static
 ```
 
-`use_wt102_heading` 默认关闭。若 UART 已由独立采集节点打开，建图时加 `start_wt102_driver:=false`。串口可通过 `wt102_port:=/dev/ttyTHS1` 指定。固定地图定位继续使用现有启动流程。App 受管建图在启动 `operator_system.launch.py` 时传同一个 `use_wt102_heading:=true`。
+`use_wt102_heading` 默认关闭。若 UART 已由独立采集节点打开，建图时加 `start_wt102_driver:=false`。串口可通过 `wt102_port:=/dev/ttyTHS1` 指定。固定地图定位通过同一个开关启用，默认等待操作者设置初始位姿。App 受管建图在启动 `operator_system.launch.py` 时传同一个 `use_wt102_heading:=true`。
 
-二维前端以上一次雷达匹配位姿为起点，按测量时间积分机体 Z 角速度，用于扫描内点的姿态外推及下一次扫描匹配。预测需要同一数据流内的连续样本，间隔超过 50 ms 切断积分，末次测量最多外推 20 ms，历史窗口 2 s。失去覆盖时自动使用 Cartographer 原有角速度预测，恢复后从新的匹配位姿起算。原生 IMU 开关保持关闭。水平安装时绕 Z 的转角与传感器在船上的平移位置无关。横摇或纵摇会影响此近似。模块相对上电角度用于录包对照。静置测得的 Z 角速度均值可填入 `gnss_fusion.yaml` 的 `wt102_bias_rad_s`，默认 0 rad/s。
+**从岸边驶向开阔水面**
 
-本包为建图可执行文件编入 ROS 2 Cartographer 2.0.9004 的外推器源文件，使用系统静态库中的其他组件。该文件保留上游许可证。其他 Cartographer 版本可构建原始模式，启用 WT102 时会报告版本要求。[上游源码](https://github.com/ros2/cartographer/blob/1489fc933b6e0b1da936ca08af462abe559dd02e/cartographer/mapping/pose_extrapolator.cc)
+1. 在岸边有稳定回波的位置启动，缓慢沿岸移动几米。等 App 显示“地理参考已建立”，并确认 GGA 和连续航向可用。也可执行 `ros2 topic echo /f1/survey/status`，检查 `registered`、`position_fresh` 和 `heading_valid`。未配准时，岸边扫描仍可建图。
+2. 超过 0.35 s 没有新的有效扫描匹配时，`source=gnss_imu` 表示船位来自最新合格 GGA，航向来自最近一次雷达位姿与连续 WT102 Z 角速度积分。天线到船中心使用已有安装偏移。默认 GGA 输出最高 2 Hz，位置最多沿用 1 s。湖心保持未知，App 在独立图层上画航迹。受管建图可在湖心保存已观测的岸线。
+3. 回波恢复时，前端用同一船位和航向投影真实回波。有附近岸线时进行扫描匹配，新岸线从估计位置开始写入。首次落点带有 GNSS 和积分误差。相隔较远的岸段会切换局部子图，以限制 Nano 上单个子图的尺寸。
+4. GGA 过期或航向积分不可用且无回波时，状态为 `unavailable`，航迹在这里分段。GGA 恢复且航向连续时可接着定位。WT102 重连、样本时间倒退或间隔超过 50 ms 会切断积分。丢失航向后，需要有可识别的岸线重新匹配，固定地图也可重新给定初始位姿。WT102 不能独立确定真北，船有横漂时仍按船体转动更新航向。
+
+WT102 对扫描间的短时外推使用 2 s 样本缓存，末端最多外推 20 ms。湖心保留同一连续数据流内的累计角与岸边参考，航段可以超过缓存长度。水平安装时，船体横摇、纵摇和陀螺零偏会影响航向。可把静置测得的 Z 角速度均值填入 `gnss_fusion.yaml` 的 `wt102_bias_rad_s`，单位 rad/s。只启用 WT102、关闭 RTK 时，仅使用短时角度预测。
+
+本包在 ROS 2 Cartographer 2.0.9004 的静态库上编译匹配版本的外推器、二维前端和子图插入代码。对应上游文件和内部头文件保留 Apache 2.0 许可证。其他 Cartographer 版本可运行标准模式。[上游源码](https://github.com/ros2/cartographer/tree/1489fc933b6e0b1da936ca08af462abe559dd02e/cartographer/mapping)
 
 同一录包分别启用和关闭 `use_wt102_heading`，每次重新启动建图，播放相同的三个输入话题。使用仿真时钟时不会启动串口驱动。安装 TF 由建图入口发布。
 
@@ -95,5 +102,4 @@ Lua 中的 `imu_sampling_ratio` 是上游配置解析器必读字段，
 ## 验证边界
 
 本机可进行配置包构建、启动参数检查和现有离线测试。
-完整 SLAM 需要目标机的 `cartographer_ros`、真实扫描和 TF；
-配置包构建成功不能代替 Lua 加载、闭环效果或实机精度验收。
+`f1_localization/test/test_lake_crossing.py` 使用合成 GGA、WT102 与雷达扫描运行完整建图、导出和固定地图重载。实船精度须用现场实测航向与岸线验证。

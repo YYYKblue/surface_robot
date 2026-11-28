@@ -48,7 +48,7 @@ Nano 的 `deploy/f1-operator.service` 在启动前通过 `wait-operator-clock.py
 - 开始建图检查连续扫描的帧名、时间戳、角度元数据和有效回波。进入建图后使用现有手动操船；不以固定地图定位就绪作为建图条件。
 - 清洗运行/操作结果未确认时拒绝切换；在模式切换、保存操作前停止手动输出并等待租约交接。
 - 只停止本管理器启动的进程组。旧进程退出后等待 DDS 清除旧地图/节点，发现外部地图发布者或已知冲突节点则拒绝启动。
-- 切换时清除旧地图、TF 缓存、任务轨迹和定位状态，按新地图及会话时间过滤迟到状态。操作者在 App 或 RViz 提供本次定位的初始位姿。`operator_system.launch.py` 和 `operator_bringup.launch.py` 均默认启用融合，传 `use_rtk:=false` 可做纯雷达对照。Nano 由独立的 `f1-rtk.service` 开机采集。受管建图使用 WT102 时，在 `operator_system.launch.py` 传 `use_wt102_heading:=true`，可选 `wt102_port:=/dev/ttyTHS1`。参数只作用于建图子进程。[WT102 建图与回放](../f1_mapping_bringup/README.md#wt102-航向辅助)
+- 切换时清除旧地图、TF 缓存、任务轨迹和定位状态，按新地图及会话时间过滤迟到状态。操作者在 App 或 RViz 提供本次定位的初始位姿。`operator_system.launch.py` 和 `operator_bringup.launch.py` 均默认启用融合，传 `use_rtk:=false` 可做纯雷达对照。Nano 由独立的 `f1-rtk.service` 开机采集。受管建图使用 WT102 时，在 `operator_system.launch.py` 传 `use_wt102_heading:=true`，可选 `wt102_port:=/dev/ttyTHS1`。建图和选图定位都会继承该参数。App 单独显示地理参考、传感器状态和位姿来源；湖心推算有效时可保存岸线地图。保存的同名 `.track.json` 记录船中心地图坐标、航向、时间戳、来源和分段编号，预览和实时航迹按段绘制。[WT102 建图与回放](../f1_mapping_bringup/README.md#wt102-航向辅助)
 - 子模式任一进程退出会结束整组模式，网关报告错误；网关/bridge 退出时系统入口关闭。常驻网关不会因正常结束建图而退出。
 - 目录扫描、预览、几何推导、进程等待和栅格导出在后台工作线程执行；Cartographer WriteState 使用 ROS 异步服务，不阻塞手动控制超时检查。
 

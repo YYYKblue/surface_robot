@@ -17,8 +17,8 @@
 #include "cartographer/mapping/pose_extrapolator.h"
 
 // Based on ros2/cartographer 2.0.9004, commit 1489fc933b6e0b1da936ca08af462abe559dd02e.
-// Local change: optionally replace the planar angular increment in ExtrapolatePose.
-#include "wt102_heading.h"
+// Extend planar prediction and reset velocity across unobserved crossings.
+#include "lake_pose.h"
 
 #include <algorithm>
 
@@ -80,6 +80,14 @@ void PoseExtrapolator::AddPose(const common::Time time,
         absl::make_unique<ImuTracker>(gravity_time_constant_, tracker_start);
   }
   if (f1_mapping::wt102_heading != nullptr) cached_extrapolated_pose_.time = common::Time::min();
+  if (f1_mapping::lake_pose && !timed_pose_queue_.empty() &&
+      time - timed_pose_queue_.back().time > common::FromSeconds(.35)) {
+    // The displacement across an unobserved crossing is not the velocity
+    // at the newly reached shore. Learn velocity from its next two scans.
+    timed_pose_queue_.clear();
+    linear_velocity_from_poses_.setZero();
+    angular_velocity_from_poses_.setZero();
+  }
   timed_pose_queue_.push_back(TimedPose{time, pose});
   while (timed_pose_queue_.size() > 2 &&
          timed_pose_queue_[1].time <= time - pose_queue_duration_) {
@@ -140,17 +148,23 @@ transform::Rigid3d PoseExtrapolator::ExtrapolatePose(const common::Time time) {
   const TimedPose& newest_timed_pose = timed_pose_queue_.back();
   CHECK_GE(time, newest_timed_pose.time);
   if (cached_extrapolated_pose_.time != time) {
-    const Eigen::Vector3d translation =
+    Eigen::Vector3d translation =
         ExtrapolateTranslation(time) + newest_timed_pose.pose.translation();
     // Advance the stock tracker even on assisted scans so fallback can proceed
-    // immediately. Translation and the last scan-matched pose remain upstream's.
+    // immediately when scans resume.
     Eigen::Quaterniond increment =
         ExtrapolateRotation(time, extrapolation_imu_tracker_.get());
     if (f1_mapping::wt102_heading != nullptr) {
       const auto yaw = f1_mapping::wt102_heading->Delta(newest_timed_pose.time, time);
       if (yaw) increment = Eigen::AngleAxisd(*yaw, Eigen::Vector3d::UnitZ());
     }
-    const Eigen::Quaterniond rotation = newest_timed_pose.pose.rotation() * increment;
+    Eigen::Quaterniond rotation = newest_timed_pose.pose.rotation() * increment;
+    if (f1_mapping::lake_pose && f1_mapping::lake_pose->NeedsPrior(time)) {
+      const auto prior = f1_mapping::lake_pose->Estimate(time);
+      const auto seed = prior ? *prior : f1_mapping::lake_pose->SearchSeed(time);
+      translation = seed.translation();
+      rotation = seed.rotation();
+    }
     cached_extrapolated_pose_ =
         TimedPose{time, transform::Rigid3d{translation, rotation}};
   }

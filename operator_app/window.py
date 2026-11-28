@@ -58,6 +58,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self._map_received_at = 0.
         self._runtime_changed_at = 0.
         self._retired_runtime_sessions = []
+        self._survey_packet = {}
         self.client_id = None
         self.capabilities = set()
         self.drive_output = {}
@@ -908,11 +909,12 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self._tracks.clear()
         self.last_patrol_spacing = None
         self._retired_runtime_sessions.clear()
+        self._survey_packet.clear()
         self._runtime_changed_at = 0.
         self.telemetry = {}
         self._control_identity = None
         self.canvas.set_task_overlay({}, live=False)
-        self.canvas.set_telemetry({"pose": None})
+        self.canvas.set_telemetry({"pose": None, "survey": []})
         self._clear_manual()
         return True
 
@@ -943,7 +945,7 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         self._map_received_at = received
         if not self._map_matches_runtime():
             self.canvas.set_task_overlay({}, live=False)
-            self.canvas.set_telemetry({"pose": None})
+            self.canvas.set_telemetry({"pose": None, "survey": []})
         return True
 
     def _attach_tracks(self, packet, *, record_embedded=True):
@@ -1028,6 +1030,12 @@ class OperatorWindow(DiagnosticPanel, MappingPanel, QMainWindow):
         if packet.get("type") == "tracks":
             if not self._accept_gateway_session(packet.get("session_id")):
                 return
+            if ("survey" in packet and packet.get("runtime_session_id")
+                    and packet["runtime_session_id"] not in self._retired_runtime_sessions):
+                session = packet["runtime_session_id"]
+                self._survey_packet = {session: packet["survey"]}
+                if session == self.runtime_session and self._map_matches_runtime():
+                    self.canvas.set_telemetry({"survey": packet["survey"]})
             for kind, track in packet.get("tasks", {}).items():
                 if kind in ("rectangle", "l", "area_patrol") and isinstance(track, dict):
                     self._tracks[kind] = track

@@ -344,13 +344,13 @@ def json_status(status):
     return json.dumps(status, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
 
 
-def bounds_overrides(path):
+def bounds_overrides(path, occupancy=None):
     """Coarse pose gate covering the mapped free water.
 
     This replaces the hand-written rectangle in the localization config.  It is
     a containment check only, not a drivable-area or obstacle map; scan/map
     overlap and pose freshness remain the real evidence.
     """
-    x_min, y_min, x_max, y_max = free_bounds(load_occupancy(path))
+    x_min, y_min, x_max, y_max = free_bounds(occupancy or load_occupancy(path))
     return dict(origin_x_m=x_min, origin_y_m=y_min, axis_yaw_rad=0.0,
                 length_m=x_max - x_min, width_m=y_max - y_min)

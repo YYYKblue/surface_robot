@@ -12,7 +12,7 @@ import uuid
 
 from .map_store import MapStore
 from .managed_process import ManagedProcess, export_map
-from .tracks import TaskTrack
+from .tracks import SurveyTrack, TaskTrack
 
 READ_ACTIONS = {"list", "preview"}
 
@@ -25,6 +25,8 @@ class RuntimeControl:
         for name, value in defaults.items():
             self.declare_parameter(name, value)
         self.runtime_enabled = bool(self.get_parameter("managed_runtime").value)
+        self.survey_status = None
+        self.survey_track = SurveyTrack()
         self.runtime_pending = None
         self.runtime_process = None
         self.runtime_pool = None
@@ -83,6 +85,18 @@ class RuntimeControl:
             and stamp > previous and 0 <= age < 500_000_000
             and any(x > 0 and message.range_min <= x <= message.range_max for x in message.ranges))
 
+    def _survey_update(self, msg):
+        stamp = msg.header.stamp.sec * 10**9 + msg.header.stamp.nanosec
+        if stamp >= self.runtime_epoch_ns:
+            self.survey_status = (stamp, dict(source=msg.source, trajectory_id=msg.trajectory_id, registered=msg.registered,
+                                              position_fresh=msg.position_fresh, heading_valid=msg.heading_valid))
+
+    def _survey_view(self):
+        status = getattr(self, "survey_status", None)
+        if status and 0 <= self.get_clock().now().nanoseconds - status[0] < 500_000_000:
+            return status[1]
+        return {}
+
     def _runtime_scan_fresh(self):
         return self.runtime_scan_valid and time.monotonic() - self.runtime_scan_received < .5
 
@@ -93,6 +107,8 @@ class RuntimeControl:
         self.map_revision += 1
         if hasattr(self, "map_stream"):
             self.map_stream.reset()
+        self.survey_status = None
+        self.survey_track = SurveyTrack()
         self._last_tracks = None
         self.patrol_plan = {}
         self.tf_buffer.clear()
@@ -157,7 +173,8 @@ class RuntimeControl:
                     raise ValueError("放弃建图需要明确确认")
                 if action in ("save", "save_end"):
                     MapStore.name(packet.get("name", ""))
-                    if not self.map_data or not self.pose or not self._runtime_scan_fresh():
+                    observation = self._runtime_scan_fresh() or self._survey_view().get("source") == "gnss_imu"
+                    if not self.map_data or not self.pose or not observation:
                         raise ValueError("当前地图、位姿或雷达未就绪，暂不能保存新快照")
                 self._stop_manual("mapping_" + action)
             self.runtime_pending = dict(client=client, packet=packet, stage="handover",
@@ -192,8 +209,13 @@ class RuntimeControl:
             def prepare():
                 from f1_pool_cleaning.map_profile import profile
                 self.map_store.validate(packet["name"])
-                derived = profile(str(self.map_store.path(packet["name"])))
-                kinds, errors = ["area_patrol"], {}
+                lake = self.get_parameter("use_wt102_heading").value and self.get_parameter("use_rtk").value
+                derived = profile(str(self.map_store.path(packet["name"])), allow_empty_water=lake)
+                kinds, errors = [], {}
+                if "area_patrol" in derived.errors:
+                    errors["area_patrol"] = derived.errors["area_patrol"]
+                else:
+                    kinds.append("area_patrol")
                 for kind, geometry, key in (("rectangle", derived.rectangle, "rectangle"), ("l", derived.route, "route")):
                     if geometry is not None:
                         kinds.append(kind)
@@ -207,7 +229,9 @@ class RuntimeControl:
             self._runtime_stop("discarded")
         elif action in ("save", "save_end"):
             self.runtime.update(phase="SAVING", message="准备保存快照")
-            self._runtime_work(lambda: self.map_store.reserve(packet.get("name", "")), "reserved")
+            track = getattr(self, "survey_track", None)
+            samples = list(track.samples) if track else []
+            self._runtime_work(lambda: self.map_store.reserve(packet.get("name", ""), samples), "reserved")
         elif action == "retry_export":
             def recovered():
                 candidates = [t for t in self.map_store.recovered() if t["name"] == packet["name"]]
@@ -245,7 +269,7 @@ class RuntimeControl:
             if value != "":
                 arguments.append(f"{key}:={str(value).lower() if isinstance(value, bool) else value}")
         arguments.append("resolution:=" + str(self.get_parameter("mapping_resolution").value))
-        if mapping and self.get_parameter("use_wt102_heading").value:
+        if self.get_parameter("use_wt102_heading").value:
             arguments.extend(["use_wt102_heading:=true", "wt102_port:=" + self.get_parameter("wt102_port").value])
         if not mapping:
             arguments.append("map:=" + str(self.map_store.path(packet["name"])))
@@ -421,7 +445,7 @@ class RuntimeControl:
         if not getattr(self, "runtime_enabled", False):
             return {}
         value = dict(self.runtime, busy=self._runtime_busy(), scan_fresh=self._runtime_scan_fresh(),
-                     map_available=self.map_data is not None, pose_fresh=self.pose is not None,
+                     survey=self._survey_view(), map_available=self.map_data is not None, pose_fresh=self.pose is not None,
                      maps_directory=str(self.map_store.root))
         value["target_map"] = value["current_map"]
         if value["mode"] != "localization" or value["phase"] in ("STARTING", "STOPPING", "ERROR"):

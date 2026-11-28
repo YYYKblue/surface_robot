@@ -44,6 +44,7 @@ def nodes(context):
     parameters = [{"use_sim_time": value("use_sim_time") == "true"}]
     localization_config = value("localization_config")
     use_rtk = value("use_rtk") == "true"
+    heading = value("use_wt102_heading") == "true"
     basename = "rtk_localization.lua" if use_rtk else "localization.lua"
     result = []
     if value("publish_lidar_tf") == "true":
@@ -56,10 +57,15 @@ def nodes(context):
         result.append(Node(package="tf2_ros", executable="static_transform_publisher",
                  name="base_to_gnss_antenna", parameters=parameters,
                  arguments=antenna_tf_arguments(value("gnss_config"))))
+    if heading and value("use_sim_time") != "true" and value("start_wt102_driver") == "true":
+        result.append(Node(package="f1_wt102_driver", executable="wt102_uart", output="screen",
+                           parameters=[{"port": value("wt102_port")}]))
+    if use_rtk or heading:
         result.append(Node(package="f1_mapping_bringup", executable="gnss_cartographer",
             name="pool_localization", output="screen", remappings=scan_remap,
             parameters=[value("gnss_config"), *parameters, {
                 "configuration_directory": str(share / "config"), "configuration_basename": basename,
+                "use_rtk": use_rtk, "use_wt102_heading": heading,
                 "gnss_state_file": str(state), "start_trajectory": value("start_trajectory") == "true"}]))
     else:
         result.append(Node(package="cartographer_ros", executable="cartographer_node",
@@ -72,7 +78,8 @@ def nodes(context):
     result.append(Node(package="cartographer_ros", executable=occupancy_grid,
         name="cartographer_occupancy_grid_node", output="screen", parameters=parameters,
         arguments=["-resolution", value("occupancy_grid_resolution"),
-                   "-publish_period_sec", value("occupancy_grid_publish_period_sec")]))
+                   "-publish_period_sec", value("occupancy_grid_publish_period_sec"),
+                   *(["-include_unfrozen_submaps=false"] if use_rtk and heading else [])]))
     # The manager validates the operator seed before starting a trajectory.
     manager_parameters = [*parameters, {
         "map_frame": "map", "base_frame": "base_link",
@@ -89,7 +96,7 @@ def nodes(context):
     if use_rtk:
         manager_parameters.append(value("gnss_config"))
     # Keep the manager on the loaded map and the same fused trajectory options.
-    fusion_parameters = {"use_rtk": use_rtk, "gnss_state_file": str(state)}
+    fusion_parameters = {"use_rtk": use_rtk, "use_lake_pose": use_rtk and heading, "gnss_state_file": str(state)}
     if use_rtk:
         fusion_parameters.update(configuration_directory=str(share / "config"), configuration_basename=basename)
     manager_parameters.append(fusion_parameters)
@@ -120,6 +127,9 @@ def generate_launch_description():
         DeclareLaunchArgument("load_state_filename", default_value="",
                               description="Direct .pbstream override; prefer map:="),
         DeclareLaunchArgument("use_rtk", default_value="true", choices=["true", "false"]),
+        DeclareLaunchArgument("use_wt102_heading", default_value="false", choices=["true", "false"]),
+        DeclareLaunchArgument("wt102_port", default_value="/dev/ttyTHS1"),
+        DeclareLaunchArgument("start_wt102_driver", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("gnss_config", default_value=str(mapping / "config/gnss_fusion.yaml")),
         DeclareLaunchArgument("start_trajectory", default_value="false", choices=["true", "false"],
                               description="Compatibility mode; default waits for an operator initial pose"),

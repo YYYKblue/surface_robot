@@ -75,3 +75,11 @@ def test_copied_map_uses_sibling_image_and_rejects_unsupported_origin(reference_
     reference_map.write_text(content.replace('origin: [0, 0, 0]', 'origin: [0, 0, 0.2]'))
     with pytest.raises(MapProfileError, match='rotated map origins'):
         load_occupancy(reference_map)
+
+
+def test_survey_map_without_free_water_can_load_without_offering_tasks(reference_map):
+    reference_map.with_suffix('.pgm').write_bytes(b'P5\n3 1\n255\n' + bytes((64, 128, 180)))
+    with pytest.raises(MapProfileError, match='no free region'):
+        load_occupancy(reference_map)
+    grid = load_occupancy(reference_map, allow_empty_water=True)
+    assert not grid.free.any() and not grid.region.any() and grid.occupied.any()

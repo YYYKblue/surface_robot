@@ -28,13 +28,14 @@ def nodes(context):
         if not path.is_file():
             raise ValueError(f"{argument} parameter file does not exist or is not a file: {path}")
         return str(path)
-    derived = profile(value("map"))
+    derived = profile(value("map"), allow_empty_water=value("use_wt102_heading") == "true" and value("use_rtk") == "true")
     unavailable = {}
     result = []
     if value("start_localization") == "true":
         result.append(include("f1_localization", "localization.launch.py", {
             "map": value("map"), "cleaning_prefix": "f1_localization",
             "scan_topic": value("scan_topic"), "start_rviz": value("start_rviz"),
+            "wt102_port": value("wt102_port"), "use_wt102_heading": value("use_wt102_heading"),
             "localization_config": value("localization_config"), "use_rtk": value("use_rtk"),
             "publish_lidar_tf": value("publish_lidar_tf"),
         }))
@@ -57,9 +58,12 @@ def nodes(context):
             "scan_topic": value("scan_topic"), "output_enabled": value("output_enabled"),
             "localization_status_topic": "/f1_localization/localization_status",
         }))
-    result.append(Node(package="f1_area_patrol", executable="area_patrol", output="screen",
-        parameters=[controller_config("patrol_config", "f1_area_patrol", "area_patrol.yaml"),
-                    {"map": value("map"), "output_enabled": value("output_enabled") == "true"}]))
+    if "area_patrol" in derived.errors:
+        unavailable["area_patrol"] = derived.errors["area_patrol"]
+    else:
+        result.append(Node(package="f1_area_patrol", executable="area_patrol", output="screen",
+            parameters=[controller_config("patrol_config", "f1_area_patrol", "area_patrol.yaml"),
+                        {"map": value("map"), "output_enabled": value("output_enabled") == "true"}]))
     if value("start_gateway") == "true":
         result.append(Node(package="f1_operator_gateway", executable="f1_operator_gateway", output="screen",
             parameters=[dict(bind_address=value("bind_address"), port=int(value("port")),
@@ -80,6 +84,8 @@ def generate_launch_description():
         DeclareLaunchArgument("start_gateway", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("start_localization", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("use_rtk", default_value="true", choices=["true", "false"]),
+        DeclareLaunchArgument("use_wt102_heading", default_value="false", choices=["true", "false"]),
+        DeclareLaunchArgument("wt102_port", default_value="/dev/ttyTHS1"),
         DeclareLaunchArgument("publish_lidar_tf", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("start_rviz", default_value="false", choices=["true", "false"]),
         DeclareLaunchArgument("scan_topic", default_value="/pavo2_scan"),

@@ -99,6 +99,10 @@ class LocalizationManager(Node):
         self._transform_exception = TransformException
         steady = Clock(clock_type=ClockType.STEADY_TIME)
         self.timer = self.create_timer(.05, self._tick, clock=steady)
+        self.survey = None
+        if self.use_lake_pose:
+            from f1_interfaces.msg import SurveyStatus
+            self.create_subscription(SurveyStatus, "/f1/survey/status", self._survey_status, 1)
         self.gnss_reference = None
         if self.get_parameter("use_rtk").value:
             from f1_mapping_bringup.gnss_positions import GnssPositions
@@ -121,6 +125,8 @@ class LocalizationManager(Node):
         # The pose gate's bounds describe one specific map, so they have no
         # defaults: ``map:=`` fills them, and a launch without either fails
         # validation instead of applying another map's rectangle.
+        self.use_lake_pose = self.declare_parameter("use_lake_pose", False, ParameterDescriptor(read_only=True)).value
+        self.no_free_water = False
         derived = self._map_geometry()
         for field in dataclasses.fields(LocalizationConfig):
             default = derived.get(field.name, math.nan if field.default is dataclasses.MISSING
@@ -136,6 +142,16 @@ class LocalizationManager(Node):
         self.antenna_x = self.declare_parameter("antenna_x_m", -.191).value
         self.antenna_y = self.declare_parameter("antenna_y_m", .213).value
 
+    def _survey_status(self, message):
+        self.survey = message
+
+    def _survey_source(self, now):
+        msg = self.survey
+        if (msg and msg.trajectory_id == self.trajectory_id
+                and 0 <= now - stamp_ns(msg.header.stamp) < 500_000_000):
+            return msg.source
+        return "unavailable"
+
     def _gnss_position(self, xy, frame):
         if (not self.gate.initial_pose_received or not self._trajectory_active()
                 or self.gate.state == "PAUSED" or self._finish_future or self._pending_pose):
@@ -145,7 +161,7 @@ class LocalizationManager(Node):
             return xy, frame
         from f1_mapping_bringup.gnss_positions import PlanarPose
         antenna = map_from_enu.compose(PlanarPose(*xy, 0.))
-        return ((antenna.x, antenna.y), "map") if self.gate.within_map_bounds(antenna) else None
+        return ((antenna.x, antenna.y), "map") if self.use_lake_pose or self.gate.within_map_bounds(antenna) else None
 
     def _map_geometry(self):
         path = self.get_parameter("map").value if self.has_parameter("map") else ""
@@ -154,6 +170,14 @@ class LocalizationManager(Node):
         from .map_io import MapProfileError
         from .localization import bounds_overrides
         try:
+            if self.use_lake_pose:
+                from .map_io import load_occupancy
+                grid = load_occupancy(path, allow_empty_water=True)
+                self.no_free_water = not grid.region.any()
+                if self.no_free_water:
+                    return dict(origin_x_m=grid.origin_x_m, origin_y_m=grid.origin_y_m, axis_yaw_rad=0.,
+                                length_m=grid.width*grid.resolution_m, width_m=grid.height*grid.resolution_m)
+                return bounds_overrides(path, grid)
             return bounds_overrides(path)
         except MapProfileError as exc:
             raise ValueError(f"map {path} cannot bound the pose gate: {exc}") from exc
@@ -486,7 +510,15 @@ class LocalizationManager(Node):
         self._pose_received = time.monotonic()
 
     def _trajectory_active(self):
-        return self.trajectory_id is not None and int(self.trajectory_id) in self._known_active_ids
+        if self.trajectory_id is None:
+            return False
+        if self.trajectory_id in self._known_active_ids:
+            return True
+        # StartTrajectory can succeed before any scan node exists in the graph.
+        # The frontend owns the actual trajectory lifetime in this interval.
+        return (self.use_lake_pose and self.trajectory_id not in self._known_trajectory_states
+                and self.survey is not None and self.survey.trajectory_id == self.trajectory_id
+                and 0 <= self._now_ns() - stamp_ns(self.survey.header.stamp) < 500_000_000)
 
     def _tick(self):
         now_ns = self._now_ns()
@@ -509,7 +541,12 @@ class LocalizationManager(Node):
             # as finished/frozen/deleted.  A state response received just
             # before StartTrajectory can legitimately omit the new id.
             self.gate.mark_paused("localization trajectory is no longer active")
-        self.gate.update(now_ns, active, self._pose, self._last_scan)
+        scan, pose = self._last_scan, self._pose
+        if self.use_lake_pose and self._survey_source(now_ns) != "lidar":
+            scan = pose = None
+        self.gate.update(now_ns, active, pose, scan)
+        if self.no_free_water and self.gate.initial_pose_received and self.gate.state != "PAUSED":
+            self._set_gate_reason("map has no confirmed free water for autonomous tasks")
         self._publish_status(now_ns)
 
     def _publish_status(self, now_ns):
@@ -525,6 +562,8 @@ class LocalizationManager(Node):
                            scan_overlap_reason=self._scan_overlap_reason,
                            last_trajectory_error=self._last_trajectory_error,
                            stamp_ns=now_ns))
+        if self.use_lake_pose:
+            status["pose_source"] = self._survey_source(now_ns)
         self._last_status = status
         self.status_pub.publish(String(data=json_status(status)))
         ready = Bool(data=bool(self.gate.ready))

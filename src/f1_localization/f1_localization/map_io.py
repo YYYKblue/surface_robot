@@ -108,7 +108,7 @@ class Occupancy:
         return "free" if self.free[row, column] else "unknown"
 
 
-def load_occupancy(path):
+def load_occupancy(path, *, allow_empty_water=False):
     """Read the map image as free/occupied masks in map coordinates."""
     import cv2
     import numpy as np
@@ -138,10 +138,13 @@ def load_occupancy(path):
     occupied = (probability > float(meta["occupied_thresh"])).astype(np.uint8)
 
     count, labels, stats, _ = cv2.connectedComponentsWithStats(free, 8)
-    if count < 2:
+    if count > 1:
+        index = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+        region = (labels == index).astype(np.uint8)
+    elif allow_empty_water:
+        region = free
+    else:
         raise MapProfileError("map has no free region")
-    index = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-    region = (labels == index).astype(np.uint8)
     height, width = pixels.shape
     return Occupancy(resolution, origin[0], origin[1], width, height,
                      free, occupied, region)
