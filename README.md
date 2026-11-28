@@ -22,6 +22,7 @@ F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主�
 | [`f1_nano_bridge`](src/f1_nano_bridge/README.md) | F103 串口协议、CTRL/ACK、控制租约、超时保护和 IMU 遥测 |
 | [`f1_lidar_driver`](src/f1_lidar_driver/README.md) | PAVO2 驱动与 SDK、雷达参数、独立启动及开机服务模板 |
 | [`f1_rtk_driver`](src/f1_rtk_driver/README.md) | 独立读取 WTRTK-982，发布主天线位置 `/f1/rtk/fix`、质量状态及串口原文 |
+| [`f1_wt102_driver`](src/f1_wt102_driver/README.md) | Nano 板载 UART 采集 WT102 相对航向和 Z 轴角速度 |
 | [`f1_mapping_bringup`](src/f1_mapping_bringup/README.md) | Cartographer 2D 雷达与 GNSS 辅助建图、静态雷达 TF 和扫描检查 |
 | [`f1_localization`](src/f1_localization/README.md) | 固定地图定位、初始位姿、轨迹管理和定位就绪门控 |
 | [`f1_pool_cleaning`](src/f1_pool_cleaning/README.md) | 墙感知、简单动作靠近、沿墙控制、矩形四边任务及覆盖记录 |
@@ -33,7 +34,7 @@ F103 控制链现对接仓库内 `under/F103firmware` 的协议 v3：手动主�
 | `maps/` | 地图三件套直接存放于此；被 Git 忽略，克隆仓库不包含；日常同步保留 Nano 地图，首次部署或明确更新地图时单独传输 |
 | `docs/`、`tools/` | 开发验收、历史试验记录和离线路线示意工具 |
 
-仓库共有九个 ROS 功能包，另有独立的 `under_control/` Python 服务。PAVO2 驱动与 SDK 已迁入 `f1_lidar_driver`；本地固件源码位于 `under/F103firmware` 与 `under/H7firmware`。`under/` 和地图目录被 Git 忽略，重新克隆后需另行准备；本页测试使用当前 PC 本地固件副本。Nano 双机部署同步 `src/`、`under_control/`、文档和工具，不需要 Windows App 或固件工程，命令见 [Nano 部署指南](DEPLOY_NANO.md#3-pc把源码和文档传到-nano)。Nano 编译与旧雷达服务迁移流程见[驱动说明](src/f1_lidar_driver/README.md)。旧 ZMQ 网关和旧 UI 协议已移除。
+仓库共有十一个 ROS 功能包，另有独立的 `under_control/` Python 服务。PAVO2 驱动与 SDK 已迁入 `f1_lidar_driver`；本地固件源码位于 `under/F103firmware` 与 `under/H7firmware`。`under/` 和地图目录被 Git 忽略，重新克隆后需另行准备；本页测试使用当前 PC 本地固件副本。Nano 双机部署同步 `src/`、`under_control/`、文档和工具，不需要 Windows App 或固件工程，命令见 [Nano 部署指南](DEPLOY_NANO.md#3-pc把源码和文档传到-nano)。Nano 编译与旧雷达服务迁移流程见[驱动说明](src/f1_lidar_driver/README.md)。旧 ZMQ 网关和旧 UI 协议已移除。
 
 ## 数据与控制链路
 
@@ -92,7 +93,7 @@ source install/local_setup.bash
 colcon list --names-only
 ```
 
-按需构建可使用 `--packages-up-to f1_l_cleaning f1_operator_gateway`，当前依赖关系下会覆盖十个包。网关为完整部署声明了雷达驱动、bridge、定位及清洗包的运行依赖，`--packages-up-to f1_operator_gateway` 会一并构建这些依赖。独立 RTK 采集使用 `--packages-up-to f1_rtk_driver` 构建统一接口与驱动两个包。
+按需构建可使用 `--packages-up-to f1_l_cleaning f1_operator_gateway`，当前依赖关系下会覆盖十一个包。网关为完整部署声明了雷达驱动、bridge、定位及清洗包的运行依赖，`--packages-up-to f1_operator_gateway` 会一并构建这些依赖。独立 RTK 采集使用 `--packages-up-to f1_rtk_driver` 构建统一接口与驱动两个包。
 
 ## 启动入口
 

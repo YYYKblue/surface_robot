@@ -21,6 +21,12 @@ PC 和 Nano 分别编译，不传 PC 的生成目录。部署状态以各项验�
 
 **2026-11-16 清洗速度已部署到指定 Nano。** `f1_interfaces`、`f1_pool_cleaning`、`f1_l_cleaning`、`f1_operator_gateway` 四包构建成功，Nano 隔离测试 267 项通过，operator 已恢复待机并确认 `cleaning_speed_v1`。按用户要求未备份原代码，地图和 YAML 未覆盖，Windows 只更新源码、不打包 exe。部署时 F103 串口缺失、雷达无新鲜数据，所以结果仅证明软件部署及接口链路；详见[当次验证快照](docs/pool_cleaning/DEVELOPMENT_AND_ACCEPTANCE.md#2026-11-16-nano-部署验证)。下文首次安装和其他设备升级步骤不需要在这台 Nano 上重复执行。
 
+## WT102 板载 UART 部署记录（2026-11-28）
+
+Nano 在 `/dev/ttyTHS1` 使用 115200、8N1。实物 ROS 连续采样 16.003 秒，相对角和 Z 角速度各 3201 条，约 200 Hz，时间戳单调递增。独立原始串口采样 8.003 秒，收到 52,801 字节，0x51、0x52、0x53 各 1600 帧，完整帧校验错误为零。受管建图入口的隔离验证中，`cartographer_node` 已订阅 `/f1/wt102/sample`，8.016 秒内每类 1603 条，UART 内核 framing error 计数在端口打开的整个采样窗口内均为 5279。板端驱动与建图共 47 项测试通过。
+
+此机在 `/etc/systemd/system/f1-operator.service.d/wt102-heading.conf` 设置 `Environment=F1_USE_WT102_HEADING=true`，由 `start-operator.sh` 传给建图入口。操作端服务重启后处于 IDLE，已确认 `use_wt102_heading=true`、`wt102_port=/dev/ttyTHS1`、`use_rtk=true`。WT102 驱动由建图会话管理，待机时释放串口。需要回到雷达＋GGA 时，将这项环境变量设为 `false`，在空闲时重新加载 systemd 配置并重启 `f1-operator.service`。当次现场无新鲜雷达扫描，实船已知转角和地图效果待测。[接线](src/f1_wt102_driver/README.md) · [航向融合](src/f1_mapping_bringup/README.md#wt102-航向辅助)
+
 ## GNSS 辅助建图与定位
 
 独立建图定位按现有复制安装方式构建 `--base-paths src --packages-up-to f1_localization`。使用 App 受管模式则构建 `--packages-up-to f1_operator_gateway`，包含向两种模式传递 `use_rtk` 的网关更新。加载新工作空间，确认雷达和 RTK 驱动各运行一份。新版本建图只融合 GGA 位置，无回波保持未知，加载地图后需在 App 或 RViz 指定船头朝向及位置。旧的开阔水域环境变量可以移除。[融合配置与验收](src/f1_mapping_bringup/README.md#rtk-位置融合)
@@ -328,7 +334,7 @@ ros2 launch f1_pool_cleaning pool_bringup.launch.py --show-args
 ros2 launch f1_l_cleaning l_bringup.launch.py --show-args
 ```
 
-`f1_nano_bridge` 前缀应为 `/home/nvidia/surface_ws/install/f1_nano_bridge`，其可执行程序应只有 `f1_bridge`；`f1_operator_gateway` 应提供 `f1_operator_gateway`，`f1_l_cleaning` 应提供 `l_controller`。IMU 随原生串口桥发布，无独立接入节点。Cartographer 应有 `cartographer_node` 及 `cartographer_occupancy_grid_node` 或 `occupancy_grid_node`。`--show-args` 只检查启动入口，不启动硬件。
+`f1_nano_bridge` 前缀应为 `/home/nvidia/surface_ws/install/f1_nano_bridge`，其可执行程序应只有 `f1_bridge`；`f1_operator_gateway` 应提供 `f1_operator_gateway`，`f1_l_cleaning` 应提供 `l_controller`。F103 的 IMU 遥测随串口桥发布。WT102 由独立的 `f1_wt102_driver/wt102_uart` 读取，按需用于建图。Cartographer 应有 `cartographer_node` 及 `cartographer_occupancy_grid_node` 或 `occupancy_grid_node`。`--show-args` 只检查启动入口，不启动硬件。
 
 已有 operator 服务且本节检查通过后，执行：
 

@@ -56,9 +56,33 @@ ros2 bag record -o lidar_gga /pavo2_scan /f1/rtk/raw /f1/rtk/fix /f1/rtk/status 
 
 第一条命令检查已筛选的位置，第二条可查看完成配准的地理原点标记。正常保存地图会将地理参考和轨迹存入同一份 `.pbstream`，栅格由子图导出。重放时播放扫描和原始 GGA，使用 `use_sim_time:=true` 和 rosbag 的 `--clock`。纯雷达对照可传 `use_rtk:=false`。[固定地图定位](../f1_localization/README.md)
 
+## WT102 航向辅助
+
+先加载工作空间，确保 PAVO2 雷达和 RTK 驱动运行。启用后默认打开板载 UART 并接收 WT102 的 Z 轴角速度。GGA 仍只约束天线水平位置。下列命令用于独立建图和录制输入，分两个终端执行。
+
+```bash
+ros2 launch f1_mapping_bringup lidar_mapping.launch.py use_wt102_heading:=true
+ros2 bag record -o wt102_survey /pavo2_scan /f1/rtk/raw /f1/wt102/sample /tf_static
+```
+
+`use_wt102_heading` 默认关闭。若 UART 已由独立采集节点打开，建图时加 `start_wt102_driver:=false`。串口可通过 `wt102_port:=/dev/ttyTHS1` 指定。固定地图定位继续使用现有启动流程。App 受管建图在启动 `operator_system.launch.py` 时传同一个 `use_wt102_heading:=true`。
+
+二维前端以上一次雷达匹配位姿为起点，按测量时间积分机体 Z 角速度，用于扫描内点的姿态外推及下一次扫描匹配。预测需要同一数据流内的连续样本，间隔超过 50 ms 切断积分，末次测量最多外推 20 ms，历史窗口 2 s。失去覆盖时自动使用 Cartographer 原有角速度预测，恢复后从新的匹配位姿起算。原生 IMU 开关保持关闭。水平安装时绕 Z 的转角与传感器在船上的平移位置无关。横摇或纵摇会影响此近似。模块相对上电角度用于录包对照。静置测得的 Z 角速度均值可填入 `gnss_fusion.yaml` 的 `wt102_bias_rad_s`，默认 0 rad/s。
+
+本包为建图可执行文件编入 ROS 2 Cartographer 2.0.9004 的外推器源文件，使用系统静态库中的其他组件。该文件保留上游许可证。其他 Cartographer 版本可构建原始模式，启用 WT102 时会报告版本要求。[上游源码](https://github.com/ros2/cartographer/blob/1489fc933b6e0b1da936ca08af462abe559dd02e/cartographer/mapping/pose_extrapolator.cc)
+
+同一录包分别启用和关闭 `use_wt102_heading`，每次重新启动建图，播放相同的三个输入话题。使用仿真时钟时不会启动串口驱动。安装 TF 由建图入口发布。
+
+```bash
+ros2 launch f1_mapping_bringup lidar_mapping.launch.py use_sim_time:=true use_wt102_heading:=true
+ros2 bag play wt102_survey --clock 100 --topics /pavo2_scan /f1/rtk/raw /f1/wt102/sample
+```
+
+对比同一已知转角、回到起点时的朝向，以及往返岸线的重影宽度。现场接线、单独串口采集和测量类型见[WT102 驱动](../f1_wt102_driver/README.md)。
+
 ## 更新旧安装
 
-本次已删除雷达与 IMU 联合入口、联合 Lua、联合传感器外参和对应加载代码。
+旧版全量 IMU 联合入口和对应外参已经移除，当前 WT102 航向辅助通过标准建图入口启用。
 从旧版本更新时，源码同步必须传播删除；仅用 `scp -r` 覆盖会留下旧文件。
 使用 [部署说明](README_LIDAR.md) 中限定在本包目录内的 `rsync --delete`，
 并在构建前清理本包的旧 `build/`、`install/` 子目录。

@@ -21,7 +21,7 @@ class RuntimeControl:
     def _init_runtime(self):
         defaults = dict(managed_runtime=False, workspace_root="", map_timezone="Asia/Shanghai",
                         scan_topic="/pavo2_scan", output_enabled=False, publish_lidar_tf=True, use_rtk=True,
-                        mapping_resolution=.05, rectangle_config="", l_config="", patrol_config="", localization_config="")
+                        use_wt102_heading=False, wt102_port="/dev/ttyTHS1", mapping_resolution=.05, rectangle_config="", l_config="", patrol_config="", localization_config="")
         for name, value in defaults.items():
             self.declare_parameter(name, value)
         self.runtime_enabled = bool(self.get_parameter("managed_runtime").value)
@@ -245,6 +245,8 @@ class RuntimeControl:
             if value != "":
                 arguments.append(f"{key}:={str(value).lower() if isinstance(value, bool) else value}")
         arguments.append("resolution:=" + str(self.get_parameter("mapping_resolution").value))
+        if mapping and self.get_parameter("use_wt102_heading").value:
+            arguments.extend(["use_wt102_heading:=true", "wt102_port:=" + self.get_parameter("wt102_port").value])
         if not mapping:
             arguments.append("map:=" + str(self.map_store.path(packet["name"])))
         self.runtime_accept_map = True

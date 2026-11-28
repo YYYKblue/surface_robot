@@ -15,6 +15,8 @@
 #include "cartographer_ros/ros_log_sink.h"
 #include "cartographer_ros/time_conversion.h"
 #include "geometry_msgs/msg/point_stamped.hpp"
+#include "f1_interfaces/msg/wt102_sample.hpp"
+#include "wt102_heading.h"
 
 namespace cm = cartographer::mapping;
 namespace ct = cartographer::transform;
@@ -148,11 +150,39 @@ int main(int argc, char** argv) {
   const double tolerance = ros->declare_parameter("gnss_alignment_max_error_m", .45);
   for (double v : {weight, rate, spread, tolerance})
     if (!std::isfinite(v) || v <= 0.) throw std::invalid_argument("Invalid GNSS position configuration");
-  if (trajectory.tracking_frame != "gnss_ant1" || trajectory.use_landmarks || trajectory.use_nav_sat)
+  const bool use_gnss = ros->declare_parameter("use_rtk", true);
+  const bool use_heading = ros->declare_parameter("use_wt102_heading", false);
+  if (use_gnss && (trajectory.tracking_frame != "gnss_ant1" || trajectory.use_landmarks || trajectory.use_nav_sat))
     throw std::invalid_argument("Position-only fusion requires independent ANT1 tracking");
   auto* optimizer = options.map_builder_options.mutable_pose_graph_options()->mutable_optimization_problem_options();
   optimizer->set_fixed_frame_pose_translation_weight(weight);
   optimizer->set_fixed_frame_pose_rotation_weight(0.);
+  f1_mapping::HeadingHistory heading;
+  using Sample = f1_interfaces::msg::Wt102Sample;
+  rclcpp::Subscription<Sample>::SharedPtr heading_sub;
+  if (use_heading) {
+    if (!F1_WT102_SUPPORTED)
+      throw std::invalid_argument("WT102 prediction requires the static ROS Humble cartographer 2.0.9004 library");
+    const auto& local = trajectory.trajectory_builder_options.trajectory_builder_2d_options();
+    if (!options.map_builder_options.use_trajectory_builder_2d() || local.use_imu_data() ||
+        trajectory.use_odometry || !state.empty() || !start) {
+      throw std::invalid_argument("WT102 prediction requires a live planar mapping trajectory");
+    }
+    const double bias = ros->declare_parameter("wt102_bias_rad_s", 0.);
+    if (!std::isfinite(bias)) throw std::invalid_argument("Invalid WT102 Z bias");
+    f1_mapping::wt102_heading = &heading;
+    heading_sub = ros->create_subscription<Sample>("/f1/wt102/sample", rclcpp::SensorDataQoS().keep_last(100),
+        [&heading, bias, ros](Sample::ConstSharedPtr sample) {
+          if (sample->kind != Sample::YAW_RATE || sample->header.frame_id != "wt102_link") return;
+          const auto& header_stamp = sample->header.stamp;
+          if (header_stamp.sec < 0 || header_stamp.nanosec >= 1000000000u ||
+              (header_stamp.sec == 0 && header_stamp.nanosec == 0)) return;
+          const rclcpp::Time stamp(header_stamp);
+          const auto age = (ros->now() - stamp).seconds();
+          if (age < -.1 || age > .2) return;
+          heading.Add(cartographer_ros::FromRos(stamp), sample->stream_id, sample->value - bias);
+        });
+  }
   auto builder = cm::CreateMapBuilder(options.map_builder_options);
   auto buffer = std::make_shared<tf2_ros::Buffer>(ros->get_clock(), tf2::durationFromSec(10.), ros);
   tf2_ros::TransformListener listener(*buffer);
@@ -163,7 +193,8 @@ int main(int argc, char** argv) {
   // Give TF time to bracket each sample. Never use the latest pose in place
   // of a missing transform at the measurement time.
   std::deque<Point::ConstSharedPtr> pending;
-  auto sub = ros->create_subscription<Point>("/f1/rtk/position_constraint", 10,
+  rclcpp::Subscription<Point>::SharedPtr sub;
+  if (use_gnss) sub = ros->create_subscription<Point>("/f1/rtk/position_constraint", 10,
       [&pending](Point::ConstSharedPtr msg) {
         pending.push_back(msg);
         if (pending.size() > 32) pending.pop_front();

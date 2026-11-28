@@ -9,6 +9,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ActuatorCommand.msg"
   "msg/ControlState.msg"
   "msg/WallObservation.msg"
+  "msg/Wt102Sample.msg"
   "msg/EffortPreview.msg"
   "msg/CleaningStatus.msg"
   "msg/EdgeTarget.msg"

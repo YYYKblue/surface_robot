@@ -30,6 +30,7 @@ def lidar_nodes(context):
         raise ValueError("scan_topic must be an absolute ROS topic name")
     config_dir, basename = value("configuration_directory"), value("configuration_basename")
     use_rtk = value("use_rtk") == "true"
+    use_heading = value("use_wt102_heading") == "true"
     if not basename:
         basename = "rtk_mapping.lua" if use_rtk else "pavo2_2d.lua"
     if Path(basename).name != basename or not (Path(config_dir) / basename).is_file():
@@ -48,23 +49,27 @@ def lidar_nodes(context):
             name="base_to_lidar_planar", output="screen", parameters=parameters,
             arguments=static_tf_arguments("pavo2s_frame", mounting),
         ))
-    if use_rtk:
+    if use_rtk or use_heading:
         fusion = [value("gnss_config"), *parameters]
-        nodes.extend([
-            Node(package="tf2_ros", executable="static_transform_publisher",
-                 name="base_to_gnss_antenna", parameters=parameters,
-                 arguments=antenna_tf_arguments(value("gnss_config"))),
-            Node(package="f1_mapping_bringup", executable="gnss_cartographer", name="cartographer_node",
-                 output="screen", remappings=[("scan", value("scan_topic"))],
-                 parameters=[*fusion, {"configuration_directory": config_dir,
-                                       "configuration_basename": basename}]),
-            Node(package="f1_mapping_bringup", executable="gnss_positions", output="screen", parameters=fusion),
-        ])
+    if use_heading and value("use_sim_time") != "true" and value("start_wt102_driver") == "true":
+        nodes.append(Node(package="f1_wt102_driver", executable="wt102_uart", output="screen",
+                          parameters=[{"port": value("wt102_port")}]))
+    if use_rtk:
+        nodes.append(Node(package="tf2_ros", executable="static_transform_publisher",
+                          name="base_to_gnss_antenna", parameters=parameters,
+                          arguments=antenna_tf_arguments(value("gnss_config"))))
+    if use_rtk or use_heading:
+        nodes.append(Node(package="f1_mapping_bringup", executable="gnss_cartographer", name="cartographer_node",
+                          output="screen", remappings=[("scan", value("scan_topic"))], parameters=[*fusion, {
+                              "configuration_directory": config_dir, "configuration_basename": basename,
+                              "use_wt102_heading": use_heading, "use_rtk": use_rtk}]))
     else:
         nodes.append(Node(package="cartographer_ros", executable=slam, name="cartographer_node",
                           output="screen", parameters=parameters,
                           arguments=["-configuration_directory", config_dir, "-configuration_basename", basename],
                           remappings=[("scan", value("scan_topic"))]))
+    if use_rtk:
+        nodes.append(Node(package="f1_mapping_bringup", executable="gnss_positions", output="screen", parameters=fusion))
     nodes.append(Node(package="cartographer_ros", executable=grid, name="cartographer_occupancy_grid_node",
                       output="screen", parameters=parameters,
                       arguments=["-resolution", str(resolution), "-publish_period_sec", "1.0"]))
@@ -83,6 +88,10 @@ def generate_launch_description():
         DeclareLaunchArgument("configuration_basename", default_value="",
                               description="Optional custom Lua; fused configurations track gnss_ant1"),
         DeclareLaunchArgument("use_rtk", default_value="true", choices=["true", "false"]),
+        DeclareLaunchArgument("use_wt102_heading", default_value="false", choices=["true", "false"]),
+        DeclareLaunchArgument("start_wt102_driver", default_value="true", choices=["true", "false"],
+                              description="Start UART reader for live mapping; disabled with use_sim_time"),
+        DeclareLaunchArgument("wt102_port", default_value="/dev/ttyTHS1"),
         DeclareLaunchArgument("gnss_config", default_value=f"{share}/config/gnss_fusion.yaml"),
         DeclareLaunchArgument("lidar_extrinsics_file", default_value=f"{share}/config/lidar_planar.yaml"),
         DeclareLaunchArgument("publish_lidar_tf", default_value="true", choices=["true", "false"],

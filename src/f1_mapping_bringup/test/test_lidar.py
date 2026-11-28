@@ -124,7 +124,8 @@ def test_lidar_launch_publishes_planar_mounting_without_imu(tmp_path, monkeypatc
     context = LaunchContext()
     context.launch_configurations.update(
         resolution="0.05", scan_topic="/pavo2_scan", configuration_directory=str(PACKAGE / "config"),
-        configuration_basename="", use_rtk="false", use_sim_time="false", use_rviz="false",
+        configuration_basename="", use_rtk="false", use_wt102_heading="false", use_sim_time="false", use_rviz="false",
+        gnss_config=str(PACKAGE / "config/gnss_fusion.yaml"), wt102_port="/dev/ttyTHS1", start_wt102_driver="true",
         publish_lidar_tf="true", lidar_extrinsics_file=str(PACKAGE / "config/lidar_planar.yaml"),
     )
     nodes = module.lidar_nodes(context)
@@ -149,6 +150,17 @@ def test_lidar_launch_publishes_planar_mounting_without_imu(tmp_path, monkeypatc
     assert slam["parameters"][-1]["configuration_basename"] == "rtk_mapping.lua"
     assert slam["remappings"] == [("scan", "/pavo2_scan")]
     assert gnss["executable"] == "gnss_positions"
+
+    # Heading-only mapping opens the specified UART and uses the patched
+    # frontend without adding a GNSS input or blocking on missing IMU frames.
+    context.launch_configurations.update(use_wt102_heading="true", use_rtk="false", use_sim_time="false")
+    nodes = module.lidar_nodes(context)
+    assert any(n["executable"] == "wt102_uart" and n["parameters"] == [{"port": "/dev/ttyTHS1"}] for n in nodes)
+    slam = next(n for n in nodes if n["executable"] == "gnss_cartographer")
+    assert slam["parameters"][-1]["use_wt102_heading"] and not slam["parameters"][-1]["use_rtk"]
+    assert all(n["executable"] != "gnss_positions" for n in nodes)
+    context.launch_configurations.update(use_sim_time="true")
+    assert all(n["executable"] != "wt102_uart" for n in module.lidar_nodes(context))
 
 
 def test_missing_cartographer_executable_gives_actionable_error(tmp_path):

@@ -8,3 +8,5 @@
     # Both position tracks must span enough distance to register ENU to map.
     gnss_alignment_rms_spread_m: 1.0
     gnss_alignment_max_error_m: 0.45
+    # Mean stationary WT102 +Z rate in rad/s, subtracted in the mapping frontend.
+    wt102_bias_rad_s: 0.0

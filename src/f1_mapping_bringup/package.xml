@@ -15,7 +15,8 @@
   <depend>nav_msgs</depend>
   <depend>rclcpp</depend>
   <depend>cartographer_ros_msgs</depend>
-  <exec_depend>f1_interfaces</exec_depend>
+  <depend>f1_interfaces</depend>
+  <exec_depend>f1_wt102_driver</exec_depend>
   <exec_depend>f1_rtk_driver</exec_depend>
   <depend>geometry_msgs</depend>
   <exec_depend>f1_lidar_driver</exec_depend>
@@ -25,6 +26,10 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>
   <depend>sensor_msgs</depend>
+  <test_depend>rosgraph_msgs</test_depend>
+  <test_depend>std_msgs</test_depend>
+  <test_depend>builtin_interfaces</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

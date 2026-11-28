@@ -6,4 +6,5 @@ source "$F1_WORKSPACE/install/local_setup.bash"
 set -u
 exec ros2 launch f1_operator_gateway operator_system.launch.py \
   "workspace_root:=$F1_WORKSPACE" bind_address:=0.0.0.0 \
-  "output_enabled:=${F1_OUTPUT_ENABLED:-false}"
+  "output_enabled:=${F1_OUTPUT_ENABLED:-false}" \
+  "use_wt102_heading:=${F1_USE_WT102_HEADING:-false}"
